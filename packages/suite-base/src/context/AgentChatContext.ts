@@ -1,0 +1,55 @@
+// SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
+// SPDX-License-Identifier: MPL-2.0
+
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at http://mozilla.org/MPL/2.0/
+
+import { createContext } from "react";
+import { type StoreApi, useStore } from "zustand";
+
+import { useGuaranteedContext } from "@lichtblick/hooks";
+import type { ChatMessage, LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
+
+export type AgentChatStatus =
+  | "idle"
+  | "connecting"
+  | "streaming"
+  | "waiting-for-catalog"
+  | "error";
+
+export type AgentChatState = {
+  sessionId?: string;
+  messages: ChatMessage[];
+  status: AgentChatStatus;
+  waitingRequest?: {
+    requestId: string;
+    urls: readonly string[];
+  };
+  pendingProposal?: LayoutProposal;
+  pendingProposalMessageId?: string;
+  pendingProposalRequestId?: string;
+  error?: string;
+  actions: {
+    sendMessage: (text: string) => Promise<void>;
+    confirmToolRun: (
+      toolRunId: string,
+      options: {
+        approve: boolean;
+      },
+    ) => Promise<void>;
+    applyProposal: () => Promise<void>;
+    dismissProposal: () => void;
+    notifyCatalogReady: (requestId: string) => void;
+    cancelWaiting: () => void;
+    reset: () => void;
+  };
+};
+
+export const AgentChatContext = createContext<StoreApi<AgentChatState> | undefined>(undefined);
+AgentChatContext.displayName = "AgentChatContext";
+
+export function useAgentChat<T>(selector: (state: AgentChatState) => T): T {
+  const context = useGuaranteedContext(AgentChatContext, "AgentChatContext");
+  return useStore(context, selector);
+}
