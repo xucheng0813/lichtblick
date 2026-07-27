@@ -7,6 +7,8 @@
 
 export enum AppSetting {
   // General
+  AGENT_BACKEND_URL = "agent.backendUrl",
+  AGENT_ENABLED = "agent.enabled",
   COLOR_SCHEME = "colorScheme",
   TIMEZONE = "timezone",
   TIME_FORMAT = "time.format",
