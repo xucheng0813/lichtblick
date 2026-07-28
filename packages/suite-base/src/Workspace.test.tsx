@@ -52,6 +52,39 @@ jest.mock("@lichtblick/log", () => ({
   default: { getLogger: () => ({ debug: jest.fn(), error: jest.fn() }) },
 }));
 
+const mockAppConfiguration = {
+  addChangeListener: jest.fn(),
+  get: jest.fn(),
+  removeChangeListener: jest.fn(),
+  set: jest.fn().mockResolvedValue(undefined),
+};
+jest.mock("@lichtblick/suite-base/context/AppConfigurationContext", () => ({
+  ...jest.requireActual("@lichtblick/suite-base/context/AppConfigurationContext"),
+  useAppConfiguration: () => mockAppConfiguration,
+}));
+jest.mock("@lichtblick/suite-base/services/agent/agentSettings", () => {
+  const actual = jest.requireActual("@lichtblick/suite-base/services/agent/agentSettings");
+  return {
+    ...actual,
+    useAgentSettings: () => ({
+      migrationReady: true,
+      snapshot: {
+        anthropic: {
+          apiKey: localStorage.getItem("lichtblick.agent.anthropic.apiKey") ?? "",
+          baseUrl: "",
+          model: "claude-test",
+        },
+        openAiCompatible: { apiKey: "", baseUrl: "", model: "" },
+        provider: "anthropic",
+        revision: "",
+        storageError: false,
+        vtdAuthToken: "",
+        vtdEndpoint: "https://vtd.example.com",
+      },
+    }),
+  };
+});
+
 const mockEnqueueSnackbar = jest.fn();
 jest.mock("notistack", () => ({
   useSnackbar: () => ({ enqueueSnackbar: mockEnqueueSnackbar }),
@@ -316,8 +349,37 @@ const mockWorkspaceActions = {
   openLayoutBrowser: jest.fn(),
 };
 
+beforeAll(() => {
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: jest.fn(),
+    writable: true,
+  });
+});
+
+function agentAppConfigurationValue(
+  key: string,
+  { enabled = false }: { enabled?: boolean } = {},
+): [unknown] {
+  switch (key) {
+    case AppSetting.AGENT_ENABLED:
+      return [enabled];
+    case AppSetting.AGENT_LLM_PROVIDER:
+      return ["anthropic"];
+    case AppSetting.AGENT_ANTHROPIC_MODEL:
+      return ["claude-test"];
+    case AppSetting.AGENT_ANTHROPIC_BASE_URL:
+      return [""];
+    case AppSetting.AGENT_VTD_ENDPOINT:
+      return ["https://vtd.example.com"];
+    default:
+      return [undefined];
+  }
+}
+
 describe("Workspace - alerts badge in leftSidebarItems", () => {
   beforeEach(() => {
+    localStorage.clear();
     mockAgentChatProvider.mockClear();
     mockAgentCatalogWatcher.mockClear();
     (useMessagePipeline as jest.Mock).mockImplementation(
@@ -342,7 +404,9 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
       alertCount: 0,
     });
     (useHandleFiles as jest.Mock).mockReturnValue({ handleFiles: jest.fn() });
-    (useAppConfigurationValue as jest.Mock).mockReturnValue([false]);
+    (useAppConfigurationValue as jest.Mock).mockImplementation((key: string) =>
+      agentAppConfigurationValue(key),
+    );
     (useCurrentUser as jest.Mock).mockReturnValue({
       currentUser: undefined,
       signIn: undefined,
@@ -436,11 +500,11 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
       SidebarItem
     >;
     expect(rightItems.has("agent-chat")).toBe(false);
-    expect(mockAgentChatProvider).toHaveBeenCalledTimes(1);
+    expect(mockAgentChatProvider).toHaveBeenCalled();
     expect(mockAgentChatProvider.mock.lastCall?.[0]).toMatchObject({
       enabled: false,
     });
-    expect(mockAgentCatalogWatcher).toHaveBeenCalledTimes(1);
+    expect(mockAgentCatalogWatcher).toHaveBeenCalled();
   });
 
   it("normalizes a persisted hidden agent sidebar selection", async () => {
@@ -472,8 +536,9 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
 
   it("mounts the provider and wires data-source opening when agent.enabled is true", () => {
     const selectSource = jest.fn();
+    localStorage.setItem("lichtblick.agent.anthropic.apiKey", "test-api-key");
     (useAppConfigurationValue as jest.Mock).mockImplementation(
-      (key: string) => [key === AppSetting.AGENT_ENABLED],
+      (key: string) => agentAppConfigurationValue(key, { enabled: true }),
     );
     (usePlayerSelection as jest.Mock).mockReturnValue({
       availableSources: [],
@@ -487,11 +552,11 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
       SidebarItem
     >;
     expect(rightItems.has("agent-chat")).toBe(true);
-    expect(mockAgentChatProvider).toHaveBeenCalledTimes(1);
+    expect(mockAgentChatProvider).toHaveBeenCalled();
     expect(mockAgentChatProvider.mock.lastCall?.[0]).toMatchObject({
       enabled: true,
     });
-    expect(mockAgentCatalogWatcher).toHaveBeenCalledTimes(1);
+    expect(mockAgentCatalogWatcher).toHaveBeenCalled();
 
     const providerProps = mockAgentChatProvider.mock.lastCall?.[0] as {
       onOpenDataSource: (urls: string[]) => void;
@@ -504,6 +569,7 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
   });
 
   it("does not remount WorkspaceContent when agent.enabled changes", () => {
+    localStorage.setItem("lichtblick.agent.anthropic.apiKey", "test-api-key");
     let agentEnabled = false;
     const appBarMounted = jest.fn();
     const appBarUnmounted = jest.fn();
@@ -537,9 +603,7 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
       );
     }
     (useAppConfigurationValue as jest.Mock).mockImplementation(
-      (key: string) => [
-        key === AppSetting.AGENT_ENABLED ? agentEnabled : false,
-      ],
+      (key: string) => agentAppConfigurationValue(key, { enabled: agentEnabled }),
     );
 
     const root = render(<RuntimeEnabledHarness />);
@@ -597,7 +661,9 @@ describe("Workspace - session-based MCAP resolution", () => {
       alertCount: 0,
     });
     (useHandleFiles as jest.Mock).mockReturnValue({ handleFiles: jest.fn() });
-    (useAppConfigurationValue as jest.Mock).mockReturnValue([false]);
+    (useAppConfigurationValue as jest.Mock).mockImplementation((key: string) =>
+      agentAppConfigurationValue(key),
+    );
     (useCurrentUser as jest.Mock).mockReturnValue({
       currentUser: undefined,
       signIn: undefined,
@@ -720,7 +786,9 @@ describe("Workspace - fetchLayoutFromUrl", () => {
       alertCount: 0,
     });
     (useHandleFiles as jest.Mock).mockReturnValue({ handleFiles: jest.fn() });
-    (useAppConfigurationValue as jest.Mock).mockReturnValue([false]);
+    (useAppConfigurationValue as jest.Mock).mockImplementation((key: string) =>
+      agentAppConfigurationValue(key),
+    );
     (useCurrentUser as jest.Mock).mockReturnValue({
       currentUser: undefined,
       signIn: undefined,

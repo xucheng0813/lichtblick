@@ -23,7 +23,15 @@ import {
   ForwardedMenuEvent,
   ForwardedWindowEvent,
   NativeMenuBridge,
+  SecureCredentialGetResult,
+  SecureCredentialKey,
+  SecureCredentialSetManyEntry,
+  SecureCredentialSetManyResult,
+  SecureCredentialSetResult,
   Storage,
+  VtdInvokeCommand,
+  VtdInvokeCommandParams,
+  VtdInvokeResult,
 } from "../common/types";
 import { LICHTBLICK_PRODUCT_NAME, LICHTBLICK_PRODUCT_VERSION } from "../common/webpackDefines";
 
@@ -134,6 +142,40 @@ export function main(): void {
     },
     async getCLIFlags(): Promise<CLIFlags> {
       return await (ipcRenderer.invoke("getCLIFlags") as Promise<CLIFlags>);
+    },
+    async invokeVtd<Command extends VtdInvokeCommand>(
+      command: Command,
+      params: VtdInvokeCommandParams[Command],
+      requestId: string,
+    ): Promise<VtdInvokeResult> {
+      return await ipcRenderer.invoke("vtd:invoke", {
+        command,
+        params,
+        requestId,
+      });
+    },
+    async cancelVtd(requestId: string): Promise<void> {
+      await ipcRenderer.invoke("vtd:cancel", requestId);
+    },
+    // Trust boundary: installed extensions run as full-privilege code in this same renderer realm
+    // and are intentionally trusted at the same level as built-in application code. These APIs
+    // protect credentials at rest; they are not an isolation boundary against installed extensions.
+    async getSecureCredential(key: SecureCredentialKey): Promise<SecureCredentialGetResult> {
+      return await ipcRenderer.invoke("secureCredentials:get", key);
+    },
+    async setSecureCredential(
+      key: SecureCredentialKey,
+      value: string,
+    ): Promise<SecureCredentialSetResult> {
+      return await ipcRenderer.invoke("secureCredentials:set", key, value);
+    },
+    async setManySecureCredentials(
+      entries: SecureCredentialSetManyEntry[],
+    ): Promise<SecureCredentialSetManyResult> {
+      return await ipcRenderer.invoke("secureCredentials:setMany", entries);
+    },
+    async deleteSecureCredential(key: SecureCredentialKey): Promise<void> {
+      await ipcRenderer.invoke("secureCredentials:delete", key);
     },
     getDeepLinks(): string[] {
       return deepLinks;

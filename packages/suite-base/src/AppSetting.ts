@@ -7,8 +7,24 @@
 
 export enum AppSetting {
   // General
+  /** @deprecated Local Agent configuration replaces the remote Agent backend. */
   AGENT_BACKEND_URL = "agent.backendUrl",
   AGENT_ENABLED = "agent.enabled",
+  AGENT_LLM_PROVIDER = "agent.llmProvider",
+  /** @deprecated Use the provider-specific Agent model settings. */
+  AGENT_LLM_BASE_URL = "agent.llmBaseUrl",
+  /** @deprecated Use the provider-specific Agent model settings. */
+  AGENT_LLM_MODEL = "agent.llmModel",
+  AGENT_ANTHROPIC_BASE_URL = "agent.anthropic.baseUrl",
+  AGENT_ANTHROPIC_MODEL = "agent.anthropic.model",
+  AGENT_OPENAI_BASE_URL = "agent.openai.baseUrl",
+  AGENT_OPENAI_MODEL = "agent.openai.model",
+  AGENT_VTD_ENDPOINT = "agent.vtdEndpoint",
+  /**
+   * Marker for migrating accidentally persisted VTD credentials. Current code stores this value
+   * in the private Agent credential store, never in AppConfiguration.
+   */
+  AGENT_VTD_AUTH_TOKEN = "agent.vtdAuthToken",
   COLOR_SCHEME = "colorScheme",
   TIMEZONE = "timezone",
   TIME_FORMAT = "time.format",

@@ -5,14 +5,17 @@
 // License, v2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
-import { app, BrowserWindow, ipcMain, Menu, nativeTheme, session } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, safeStorage, session } from "electron";
 
 import Logger from "@lichtblick/log";
 import { AppSetting } from "@lichtblick/suite-base/src/AppSetting";
 import { initI18n, sharedI18nObject as i18n } from "@lichtblick/suite-base/src/i18n";
 
+import { registerSecureCredentialsIpcHandlers } from "./SecureCredentialsIpcHandlers";
+import SecureCredentialsService from "./SecureCredentialsService";
 import StudioAppUpdater from "./StudioAppUpdater";
 import StudioWindow from "./StudioWindow";
+import { registerVtdIpcHandlers } from "./VtdIpcHandlers";
 import { createNewWindow } from "./createNewWindow";
 import { isFileToOpen } from "./fileUtils";
 import getDevModeIcon from "./getDevModeIcon";
@@ -222,6 +225,17 @@ export async function main(): Promise<void> {
   ipcMain.handle("getHomePath", () => app.getPath("home"));
 
   ipcMain.handle("getCLIFlags", () => parsedCLIFlags);
+
+  registerVtdIpcHandlers({ app, ipcMain });
+  registerSecureCredentialsIpcHandlers({
+    ipcMain,
+    isAllowedSender: (sender) =>
+      StudioWindow.fromWebContentsId(sender.id)?.getBrowserWindow().webContents === sender,
+    service: new SecureCredentialsService({
+      safeStorage,
+      userDataPath: app.getPath("userData"),
+    }),
+  });
 
   // Must be called before app.ready event
   registerRosPackageProtocolSchemes();

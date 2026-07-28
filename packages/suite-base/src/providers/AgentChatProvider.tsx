@@ -8,10 +8,7 @@
 import {
   type MutableRefObject,
   type PropsWithChildren,
-  useContext,
-  useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -19,15 +16,11 @@ import { v4 as uuidv4 } from "uuid";
 import { createStore, type StoreApi } from "zustand";
 
 import Logger from "@lichtblick/log";
-import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import {
   AgentChatContext,
   type AgentChatState,
 } from "@lichtblick/suite-base/context/AgentChatContext";
-import AppConfigurationContext, {
-  type AppConfigurationValue,
-} from "@lichtblick/suite-base/context/AppConfigurationContext";
-import AgentClient, {
+import {
   AgentStreamProtocolError,
   AgentStreamSizeLimitError,
 } from "@lichtblick/suite-base/services/agent/AgentClient";
@@ -43,7 +36,6 @@ import type {
 
 const log = Logger.getLogger(__filename);
 
-const DEFAULT_AGENT_BACKEND_URL = "/api";
 const WAITING_FOR_CATALOG_TIMEOUT_MS = 120_000;
 const REQUEST_WATCHDOG_TIMEOUT_MS = 180_000;
 const SUBSCRIPTION_RETRY_BASE_MS = 250;
@@ -52,7 +44,6 @@ const MAX_TERMINAL_REQUEST_IDS = 1_024;
 const AGENT_CHAT_DISABLED_ERROR = "Agent chat is disabled";
 
 type AgentChatProviderProps = PropsWithChildren<{
-  baseUrl?: string;
   client?: IAgentClient;
   enabled?: boolean;
   onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
@@ -1139,47 +1130,14 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
 }
 
 export default function AgentChatProvider({
-  baseUrl,
   children,
-  client: injectedClient,
+  client,
   enabled = true,
   onApplyProposal,
   onOpenDataSource,
 }: AgentChatProviderProps): React.JSX.Element {
-  const appConfiguration = useContext(AppConfigurationContext);
-  const [, setConfiguredBaseUrl] = useState<AppConfigurationValue>(() =>
-    appConfiguration?.get(AppSetting.AGENT_BACKEND_URL),
-  );
   const callbackRefs = useRef<CallbackRefs>({});
   const [runtime] = useState(() => createAgentChatRuntime(callbackRefs));
-  const configuredBaseUrl = appConfiguration?.get(AppSetting.AGENT_BACKEND_URL);
-
-  useEffect(() => {
-    if (appConfiguration == undefined) {
-      setConfiguredBaseUrl(undefined);
-      return;
-    }
-    const handleChange = (value: AppConfigurationValue) => {
-      setConfiguredBaseUrl(value);
-    };
-    setConfiguredBaseUrl(appConfiguration.get(AppSetting.AGENT_BACKEND_URL));
-    appConfiguration.addChangeListener(AppSetting.AGENT_BACKEND_URL, handleChange);
-    return () => {
-      appConfiguration.removeChangeListener(AppSetting.AGENT_BACKEND_URL, handleChange);
-    };
-  }, [appConfiguration]);
-
-  const resolvedBaseUrl =
-    typeof configuredBaseUrl === "string" && configuredBaseUrl.length > 0
-      ? configuredBaseUrl
-      : (baseUrl ?? DEFAULT_AGENT_BACKEND_URL);
-  const client = useMemo<IAgentClient | undefined>(
-    () =>
-      !enabled
-        ? undefined
-        : (injectedClient ?? new AgentClient(resolvedBaseUrl)),
-    [enabled, injectedClient, resolvedBaseUrl],
-  );
 
   useLayoutEffect(() => {
     callbackRefs.current = { onApplyProposal, onOpenDataSource };
