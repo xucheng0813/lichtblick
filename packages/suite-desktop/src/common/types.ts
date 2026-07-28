@@ -84,6 +84,102 @@ export type LoadedExtension = {
   raw: string;
 };
 
+export type VtdInvokeCommand =
+  | "list"
+  | "detail"
+  | "topics"
+  | "url"
+  | "slice-store"
+  | "slice-get"
+  | "trigger";
+
+export type VtdInvokeCommandParams = {
+  list: {
+    botSn?: string;
+    botName?: string;
+    triggerType?: string;
+    start?: string;
+    end?: string;
+    at?: string;
+    page?: number;
+    pageSize?: number;
+  };
+  detail: { id: string };
+  topics: { id: string };
+  url: { id: string };
+  "slice-store": {
+    id: string;
+    topics?: string[];
+    startNs?: string;
+    endNs?: string;
+  };
+  "slice-get": { sliceId: string };
+  trigger: { triggerId: string };
+};
+
+export type VtdInvokeRequest = {
+  [Command in VtdInvokeCommand]: {
+    command: Command;
+    params: VtdInvokeCommandParams[Command];
+    requestId: string;
+  };
+}[VtdInvokeCommand];
+
+export const VTD_INVOKE_ERROR_CODES = [
+  "invalid-request",
+  "unsupported-command",
+  "duplicate-request",
+  "concurrency-limit",
+  "cancelled",
+  "timeout",
+  "not-found",
+  "permission-denied",
+  "output-limit",
+  "stream",
+  "exit",
+  "invalid-json",
+  "process",
+] as const;
+
+export type VtdInvokeErrorCode = (typeof VTD_INVOKE_ERROR_CODES)[number];
+
+export type VtdInvokeResult =
+  | { ok: true; value: unknown }
+  | { ok: false; code: VtdInvokeErrorCode; message: string };
+
+export const SECURE_CREDENTIAL_KEYS = ["agent.llmApiKey", "agent.vtdAuthToken"] as const;
+
+export type SecureCredentialKey = (typeof SECURE_CREDENTIAL_KEYS)[number];
+
+export type SecureCredentialGetResult =
+  | {
+      ok: true;
+      value: string | undefined;
+      code?: "insecure-backend";
+    }
+  | { ok: false; code: "backend-unavailable" };
+
+export type SecureCredentialSetResult =
+  | { ok: true }
+  | { ok: false; code: "backend-unavailable" | "insecure-backend" };
+
+export type SecureCredentialSetManyEntry = {
+  expectedRevision?: string;
+  key: SecureCredentialKey;
+  value: string;
+};
+
+export type SecureCredentialSetManyResult =
+  | { ok: true }
+  | {
+      ok: false;
+      code: "backend-unavailable" | "insecure-backend" | "invalid-request" | "revision-conflict";
+    };
+
+export function isSecureCredentialKey(value: unknown): value is SecureCredentialKey {
+  return typeof value === "string" && (SECURE_CREDENTIAL_KEYS as readonly string[]).includes(value);
+}
+
 interface Desktop {
   /** https://www.electronjs.org/docs/tutorial/represented-file */
   setRepresentedFilename(path: string | undefined): Promise<void>;
@@ -120,6 +216,24 @@ interface Desktop {
 
   // Get CLI flags passed when the app was launched
   getCLIFlags: () => Promise<CLIFlags>;
+
+  // Invoke a whitelisted vtd CLI command in the Electron main process.
+  invokeVtd: <Command extends VtdInvokeCommand>(
+    command: Command,
+    params: VtdInvokeCommandParams[Command],
+    requestId: string,
+  ) => Promise<VtdInvokeResult>;
+  cancelVtd: (requestId: string) => Promise<void>;
+
+  getSecureCredential: (key: SecureCredentialKey) => Promise<SecureCredentialGetResult>;
+  setSecureCredential: (
+    key: SecureCredentialKey,
+    value: string,
+  ) => Promise<SecureCredentialSetResult>;
+  setManySecureCredentials: (
+    entries: SecureCredentialSetManyEntry[],
+  ) => Promise<SecureCredentialSetManyResult>;
+  deleteSecureCredential: (key: SecureCredentialKey) => Promise<void>;
 
   /** Handle a double-click on the custom title bar */
   handleTitleBarDoubleClick(): void;

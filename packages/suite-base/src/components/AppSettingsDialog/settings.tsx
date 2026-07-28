@@ -11,7 +11,9 @@ import DarkModeIcon from "@mui/icons-material/DarkMode";
 import QuestionAnswerOutlinedIcon from "@mui/icons-material/QuestionAnswerOutlined";
 import WebIcon from "@mui/icons-material/Web";
 import {
+  Alert,
   Autocomplete,
+  Button,
   Checkbox,
   Divider,
   FormControl,
@@ -26,7 +28,7 @@ import {
   ToggleButtonGroupProps,
 } from "@mui/material";
 import moment from "moment-timezone";
-import { MouseEvent, useCallback, useEffect, useMemo, useRef } from "react";
+import { MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { makeStyles } from "tss-react/mui";
 
@@ -34,10 +36,24 @@ import { filterMap } from "@lichtblick/den/collection";
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import OsContextSingleton from "@lichtblick/suite-base/OsContextSingleton";
 import Stack from "@lichtblick/suite-base/components/Stack";
+import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { useAppTimeFormat } from "@lichtblick/suite-base/hooks";
 import { useAppConfigurationValue } from "@lichtblick/suite-base/hooks/useAppConfigurationValue";
 import { Language } from "@lichtblick/suite-base/i18n";
 import { reportError } from "@lichtblick/suite-base/reportError";
+import {
+  AgentCredentialsBackendUnavailableError,
+  AgentPlaintextCredentialLockUnavailableError,
+  AgentConfigurationErrors,
+  AgentLlmProvider,
+  AgentSettingsConflictError,
+  AgentSettingsDraft,
+  commitAgentSettings,
+  createAgentSettingsDraft,
+  selectAgentConfiguration,
+  useAgentSettings,
+  validateAgentConfiguration,
+} from "@lichtblick/suite-base/services/agent/agentSettings";
 import { LaunchPreferenceValue } from "@lichtblick/suite-base/types/LaunchPreferenceValue";
 import { TimeDisplayMethod } from "@lichtblick/suite-base/types/panels";
 import { formatTime } from "@lichtblick/suite-base/util/formatTime";
@@ -431,4 +447,284 @@ export function LanguageSettings(): React.ReactElement {
       </Select>
     </Stack>
   );
+}
+
+export type AgentSettingsCommitHandler = () => Promise<boolean>;
+
+type AgentSettingsFormProps = {
+  desktop: boolean;
+  onCommitHandlerChange?: (handler: AgentSettingsCommitHandler | undefined) => void;
+};
+
+function AgentSettingsForm({
+  desktop,
+  onCommitHandlerChange,
+}: AgentSettingsFormProps): React.ReactElement {
+  const { t } = useTranslation("appSettings");
+  const appConfiguration = useAppConfiguration();
+  const {
+    credentialBackendUnavailable,
+    migrationError,
+    migrationReady,
+    snapshot,
+  } = useAgentSettings(appConfiguration, { desktop });
+  const [draft, setDraft] = useState<AgentSettingsDraft>(() => createAgentSettingsDraft(snapshot));
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [plaintextLockUnavailable, setPlaintextLockUnavailable] =
+    useState(false);
+  const [revisionConflict, setRevisionConflict] = useState(false);
+  const commitInFlightRef = useRef<Promise<boolean>>();
+
+  useEffect(() => {
+    if (!migrationReady) {
+      return;
+    }
+    if (draft.revision !== snapshot.revision && commitInFlightRef.current == undefined) {
+      if (dirty) {
+        setRevisionConflict(true);
+      }
+      setDirty(false);
+      setDraft(createAgentSettingsDraft(snapshot));
+    } else if (!dirty) {
+      setDraft(createAgentSettingsDraft(snapshot));
+    }
+  }, [dirty, draft.revision, migrationReady, snapshot]);
+
+  const formReady = migrationReady && draft.revision === snapshot.revision;
+
+  const providerSettings =
+    draft.provider === "anthropic" ? draft.anthropic : draft.openAiCompatible;
+  const selectedConfiguration = selectAgentConfiguration(
+    {
+      ...draft,
+      credentialResaveRequired: snapshot.credentialResaveRequired,
+      credentialStorage: snapshot.credentialStorage,
+      revision: snapshot.revision,
+      storageError: snapshot.storageError,
+    },
+    { desktop },
+  );
+  const errors = validateAgentConfiguration(selectedConfiguration);
+
+  const updateProviderSettings = useCallback((update: Partial<AgentSettingsDraft["anthropic"]>) => {
+    setDirty(true);
+    setRevisionConflict(false);
+    setDraft((current) => {
+      const key = current.provider === "anthropic" ? "anthropic" : "openAiCompatible";
+      return {
+        ...current,
+        [key]: { ...current[key], ...update },
+      };
+    });
+  }, []);
+
+  const commit = useCallback(async (): Promise<boolean> => {
+    if (commitInFlightRef.current != undefined) {
+      return await commitInFlightRef.current;
+    }
+    if (!dirty && !snapshot.credentialResaveRequired) {
+      return true;
+    }
+    if (!formReady) {
+      return false;
+    }
+    const pending = (async () => {
+      setSaving(true);
+      setSaveFailed(false);
+      setPlaintextLockUnavailable(false);
+      try {
+        await commitAgentSettings(appConfiguration, draft, { desktop });
+        setDirty(false);
+        return true;
+      } catch (error) {
+        if (error instanceof AgentSettingsConflictError) {
+          setRevisionConflict(true);
+          setDirty(false);
+        } else if (
+          error instanceof AgentCredentialsBackendUnavailableError
+        ) {
+          setSaveFailed(false);
+        } else if (
+          error instanceof AgentPlaintextCredentialLockUnavailableError
+        ) {
+          setPlaintextLockUnavailable(true);
+          setSaveFailed(false);
+        } else {
+          setSaveFailed(true);
+          reportError(error);
+        }
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    })();
+    commitInFlightRef.current = pending;
+    try {
+      return await pending;
+    } finally {
+      if (commitInFlightRef.current === pending) {
+        commitInFlightRef.current = undefined;
+      }
+    }
+  }, [appConfiguration, desktop, dirty, draft, formReady, snapshot.credentialResaveRequired]);
+
+  useEffect(() => {
+    onCommitHandlerChange?.(commit);
+    return () => {
+      onCommitHandlerChange?.(undefined);
+    };
+  }, [commit, onCommitHandlerChange]);
+
+  const helperText = (error: AgentConfigurationErrors[keyof AgentConfigurationErrors]) => {
+    if (error === "required") {
+      return t("agentFieldRequired");
+    }
+    if (error === "invalidUrl") {
+      return t("agentInvalidUrl");
+    }
+    if (error === "invalidToken") {
+      return t("agentInvalidToken");
+    }
+    return undefined;
+  };
+
+  return (
+    <Stack gap={2}>
+      <Alert severity={Object.keys(errors).length === 0 ? "success" : "info"}>
+        {Object.keys(errors).length === 0 ? t("agentConfigured") : t("agentNotConfigured")}
+      </Alert>
+      {(credentialBackendUnavailable ||
+        migrationError instanceof AgentCredentialsBackendUnavailableError) && (
+        <Alert severity="warning">{t("agentCredentialBackendUnavailable")}</Alert>
+      )}
+      {(snapshot.storageError ||
+        (migrationError != undefined &&
+          !(migrationError instanceof AgentCredentialsBackendUnavailableError)) ||
+        saveFailed) && <Alert severity="error">{t("agentSettingsStorageError")}</Alert>}
+      {!migrationReady && migrationError == undefined && (
+        <Alert severity="info">{t("agentSettingsLoading")}</Alert>
+      )}
+      {revisionConflict && <Alert severity="warning">{t("agentSettingsRevisionConflict")}</Alert>}
+      {plaintextLockUnavailable && (
+        <Alert severity="warning">{t("agentPlaintextLockUnavailable")}</Alert>
+      )}
+      <FormControl fullWidth>
+        <FormLabel id="agent-llm-provider-label">{t("agentLlmProvider")}:</FormLabel>
+        <Select<AgentLlmProvider>
+          disabled={saving || !formReady}
+          inputProps={{ "aria-label": t("agentLlmProvider") }}
+          value={draft.provider}
+          onChange={(event) => {
+            setDirty(true);
+            setRevisionConflict(false);
+            setSaveFailed(false);
+            setDraft((current) => ({ ...current, provider: event.target.value }));
+          }}
+        >
+          <MenuItem value="anthropic">{t("agentProviderAnthropic")}</MenuItem>
+          <MenuItem value="openai-compatible">{t("agentProviderOpenAICompatible")}</MenuItem>
+        </Select>
+      </FormControl>
+      <TextField
+        disabled={saving || !formReady}
+        fullWidth
+        label={t("agentLlmModel")}
+        value={providerSettings.model}
+        error={errors.model != undefined}
+        helperText={helperText(errors.model)}
+        onChange={(event) => {
+          updateProviderSettings({ model: event.target.value });
+        }}
+      />
+      <TextField
+        disabled={saving || !formReady}
+        fullWidth
+        type="password"
+        autoComplete="off"
+        label={t("agentLlmApiKey")}
+        value={providerSettings.apiKey}
+        error={errors.apiKey != undefined}
+        helperText={helperText(errors.apiKey)}
+        onChange={(event) => {
+          updateProviderSettings({ apiKey: event.target.value });
+        }}
+      />
+      <Alert severity={desktop && snapshot.credentialStorage === "secure" ? "info" : "warning"}>
+        {desktop && snapshot.credentialStorage === "secure"
+          ? t("agentDesktopCredentialStorageInfo")
+          : desktop && snapshot.credentialResaveRequired
+            ? t("agentDesktopLegacyPlaintextCredentialStorageWarning")
+            : desktop
+              ? t("agentDesktopPlaintextCredentialStorageWarning")
+              : t("agentWebCredentialStorageWarning")}
+      </Alert>
+      <TextField
+        disabled={saving || !formReady}
+        fullWidth
+        type="url"
+        label={t("agentLlmBaseUrl")}
+        value={providerSettings.baseUrl}
+        error={errors.baseUrl != undefined}
+        helperText={helperText(errors.baseUrl)}
+        onChange={(event) => {
+          updateProviderSettings({ baseUrl: event.target.value });
+        }}
+      />
+      {!desktop && (
+        <>
+          <TextField
+            disabled={saving || !formReady}
+            fullWidth
+            type="url"
+            label={t("agentVtdEndpoint")}
+            value={draft.vtdEndpoint}
+            error={errors.vtdEndpoint != undefined}
+            helperText={helperText(errors.vtdEndpoint)}
+            onChange={(event) => {
+              setDirty(true);
+              setRevisionConflict(false);
+              setDraft((current) => ({ ...current, vtdEndpoint: event.target.value }));
+            }}
+          />
+          <TextField
+            disabled={saving || !formReady}
+            fullWidth
+            type="password"
+            autoComplete="off"
+            label={t("agentVtdAuthToken")}
+            value={draft.vtdAuthToken}
+            error={errors.vtdAuthToken != undefined}
+            helperText={helperText(errors.vtdAuthToken)}
+            onChange={(event) => {
+              setDirty(true);
+              setRevisionConflict(false);
+              setDraft((current) => ({
+                ...current,
+                vtdAuthToken: event.target.value,
+              }));
+            }}
+          />
+        </>
+      )}
+      <Button
+        disabled={(!dirty && !snapshot.credentialResaveRequired) || saving || !formReady}
+        onClick={() => void commit()}
+        variant="contained"
+      >
+        {saving ? t("agentSaving") : t("agentSave")}
+      </Button>
+    </Stack>
+  );
+}
+
+export function AgentSettings({
+  isDesktop,
+  onCommitHandlerChange,
+}: {
+  isDesktop: boolean;
+  onCommitHandlerChange?: (handler: AgentSettingsCommitHandler | undefined) => void;
+}): React.ReactElement {
+  return <AgentSettingsForm desktop={isDesktop} onCommitHandlerChange={onCommitHandlerChange} />;
 }

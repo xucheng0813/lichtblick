@@ -68,6 +68,7 @@ import { TopicList } from "@lichtblick/suite-base/components/TopicList";
 import VariablesList from "@lichtblick/suite-base/components/VariablesList";
 import { WorkspaceDialogs } from "@lichtblick/suite-base/components/WorkspaceDialogs";
 import { AllowedFileExtensions } from "@lichtblick/suite-base/constants/allowedFileExtensions";
+import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { useAppContext } from "@lichtblick/suite-base/context/AppContext";
 import {
   LayoutState,
@@ -104,6 +105,12 @@ import { PlayerPresence } from "@lichtblick/suite-base/players/types";
 import AgentChatProvider from "@lichtblick/suite-base/providers/AgentChatProvider";
 import { PanelStateContextProvider } from "@lichtblick/suite-base/providers/PanelStateContextProvider";
 import WorkspaceContextProvider from "@lichtblick/suite-base/providers/WorkspaceContextProvider";
+import {
+  selectAgentConfiguration,
+  useAgentSettings,
+} from "@lichtblick/suite-base/services/agent/agentSettings";
+import { useLocalAgentClient } from "@lichtblick/suite-base/services/agent/localAgentClient";
+import type { LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
 import { useAgentWorkspaceTools } from "@lichtblick/suite-base/services/agent/workspaceTools";
 import ICONS from "@lichtblick/suite-base/theme/icons";
 import {
@@ -866,28 +873,69 @@ function WorkspaceContent({
   );
 }
 
-function AgentWorkspaceIntegration({
-  agentEnabled,
-  children,
-}: {
+type AgentWorkspaceIntegrationProps = {
   agentEnabled: boolean;
   children: React.ReactNode;
+};
+
+function ConfiguredAgentWorkspaceIntegration({
+  agentEnabled,
+  children,
+  desktop,
+}: AgentWorkspaceIntegrationProps & {
+  desktop: boolean;
 }): React.JSX.Element {
   const workspaceTools = useAgentWorkspaceTools();
+  const workspaceToolsRef = useRef(workspaceTools);
+  useLayoutEffect(() => {
+    workspaceToolsRef.current = workspaceTools;
+  }, [workspaceTools]);
+  const getCatalog = useCallback(() => workspaceToolsRef.current.getCatalog(), []);
+  const onApplyProposal = useCallback(async (proposal: LayoutProposal) => {
+    await workspaceToolsRef.current.applyLayout(proposal.name, proposal.data);
+  }, []);
+  const onOpenDataSource = useCallback((urls: string[]) => {
+    workspaceToolsRef.current.openDataSource(urls);
+  }, []);
+
+  const appConfiguration = useAppConfiguration();
+  const { migrationReady, snapshot } = useAgentSettings(appConfiguration, { desktop });
+  const configuration = selectAgentConfiguration(snapshot, { desktop });
+  const agentClient = useLocalAgentClient(
+    configuration,
+    {
+      enabled: agentEnabled && migrationReady && !snapshot.storageError,
+      getCatalog,
+    },
+  );
+  const configuredAgentEnabled = agentEnabled && agentClient != undefined;
 
   return (
     <AgentChatProvider
-      enabled={agentEnabled}
-      onApplyProposal={async (proposal) => {
-        await workspaceTools.applyLayout(proposal.name, proposal.data);
-      }}
-      onOpenDataSource={(urls: string[]) => {
-        workspaceTools.openDataSource(urls);
-      }}
+      client={agentClient}
+      enabled={configuredAgentEnabled}
+      onApplyProposal={onApplyProposal}
+      onOpenDataSource={onOpenDataSource}
     >
       <AgentCatalogWatcher />
       {children}
     </AgentChatProvider>
+  );
+}
+
+function WebAgentWorkspaceIntegration(
+  props: AgentWorkspaceIntegrationProps,
+): React.JSX.Element {
+  return <ConfiguredAgentWorkspaceIntegration {...props} desktop={false} />;
+}
+
+export function AgentWorkspaceIntegration(
+  props: AgentWorkspaceIntegrationProps,
+): React.JSX.Element {
+  return isDesktopApp() ? (
+    <ConfiguredAgentWorkspaceIntegration {...props} desktop={true} />
+  ) : (
+    <WebAgentWorkspaceIntegration {...props} />
   );
 }
 
