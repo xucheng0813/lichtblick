@@ -11,7 +11,11 @@ import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAppConfiguration";
 
-import { resolveVizServerConfigured, resolveWorkspace } from "./vizServerParams";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspace,
+  resolveWorkspaceBestEffort,
+} from "./vizServerParams";
 
 jest.mock("@lichtblick/suite-base/constants/config", () => ({
   APP_CONFIG: {
@@ -23,6 +27,9 @@ describe("vizServerParams", () => {
   beforeEach(() => {
     globalThis.history.replaceState({}, "", "/");
     setHttpBaseUrl(undefined);
+    resolveWorkspace(
+      makeMockAppConfiguration([[AppSetting.VIZ_SERVER_WORKSPACE, ""]]),
+    );
   });
 
   it("prefers the workspace query parameter over the app setting", () => {
@@ -47,6 +54,18 @@ describe("vizServerParams", () => {
     const configuration = makeMockAppConfiguration([[AppSetting.VIZ_SERVER_WORKSPACE, ""]]);
 
     expect(resolveWorkspace(configuration)).toBeUndefined();
+  });
+
+  it("best-effort resolution prefers the URL and otherwise uses the cached setting snapshot", () => {
+    const configuration = makeMockAppConfiguration([
+      [AppSetting.VIZ_SERVER_WORKSPACE, "configured-workspace"],
+    ]);
+    resolveWorkspace(configuration);
+
+    expect(resolveWorkspaceBestEffort()).toBe("configured-workspace");
+
+    globalThis.history.replaceState({}, "", "/?workspace=query-workspace");
+    expect(resolveWorkspaceBestEffort()).toBe("query-workspace");
   });
 
   it("requires both workspace and base URL to be configured", () => {

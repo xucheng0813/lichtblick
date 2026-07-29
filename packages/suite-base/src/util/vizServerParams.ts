@@ -9,18 +9,45 @@ import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import { IAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { getHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 
+let configuredWorkspaceSnapshot: string | undefined;
+
+function resolveQueryWorkspace(): string | undefined {
+  const workspace = new URL(globalThis.location.href).searchParams.get("workspace");
+  return workspace == undefined || workspace === "" ? undefined : workspace;
+}
+
 export function resolveWorkspace(
   appConfiguration: IAppConfiguration | undefined,
 ): string | undefined {
-  const queryWorkspace = new URL(globalThis.location.href).searchParams.get("workspace");
+  const queryWorkspace = resolveQueryWorkspace();
+  const configuredWorkspace = appConfiguration?.get(AppSetting.VIZ_SERVER_WORKSPACE);
+  const normalizedConfiguredWorkspace =
+    typeof configuredWorkspace === "string" && configuredWorkspace !== ""
+      ? configuredWorkspace
+      : undefined;
+
+  if (appConfiguration != undefined) {
+    // Module-level Agent configuration selection cannot receive AppConfiguration. Keep the most
+    // recently resolved setting as a best-effort snapshot; application roots call this function
+    // before rendering the Agent workspace.
+    configuredWorkspaceSnapshot = normalizedConfiguredWorkspace;
+  }
+
   if (queryWorkspace) {
     return queryWorkspace;
   }
 
-  const configuredWorkspace = appConfiguration?.get(AppSetting.VIZ_SERVER_WORKSPACE);
-  return typeof configuredWorkspace === "string" && configuredWorkspace !== ""
-    ? configuredWorkspace
-    : undefined;
+  return normalizedConfiguredWorkspace;
+}
+
+/**
+ * Resolves workspace without an AppConfiguration handle.
+ *
+ * URL state remains authoritative. The setting fallback is the last snapshot captured by
+ * resolveWorkspace(appConfiguration), which application roots invoke during startup.
+ */
+export function resolveWorkspaceBestEffort(): string | undefined {
+  return resolveQueryWorkspace() ?? configuredWorkspaceSnapshot;
 }
 
 export function resolveVizServerConfigured(workspace: string | undefined): workspace is string {
