@@ -9,6 +9,7 @@ import "@testing-library/jest-dom";
 import { IdbLayoutStorage } from "@lichtblick/suite-base/IdbLayoutStorage";
 import { LayoutsAPI } from "@lichtblick/suite-base/api/layouts/LayoutsAPI";
 import { SharedRootContext } from "@lichtblick/suite-base/context/SharedRootContext";
+import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 
 import { StudioApp } from "./StudioApp";
 
@@ -131,6 +132,8 @@ describe("StudioApp", () => {
   };
 
   beforeEach(() => {
+    setHttpBaseUrl("https://api.example.com");
+
     // Clear console.error mock to avoid setupTestFramework.ts throwing
     if (typeof (console.error as any).mockClear === "function") {
       (console.error as any).mockClear();

@@ -9,7 +9,6 @@ import { useMemo, useState } from "react";
 
 import {
   AppBarProps,
-  AppSetting,
   IExtensionLoader,
   FoxgloveWebSocketDataSourceFactory,
   IDataSourceFactory,
@@ -24,8 +23,13 @@ import {
   SharedRoot,
   UlogLocalDataSourceFactory,
 } from "@lichtblick/suite-base";
-import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
+import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import { AppParametersInput } from "@lichtblick/suite-base/context/AppParametersContext";
+import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspace,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 import LocalStorageAppConfiguration from "./services/LocalStorageAppConfiguration";
 
@@ -37,24 +41,25 @@ export function WebRoot(props: {
   AppBarComponent?: (props: AppBarProps) => React.JSX.Element;
   children: React.JSX.Element;
 }): React.JSX.Element {
-  const appConfiguration = useMemo(
-    () =>
-      new LocalStorageAppConfiguration({
-        defaults: {
-          [AppSetting.SHOW_DEBUG_PANELS]: isDevelopment,
-        },
-      }),
-    [],
-  );
+  const appConfiguration = useMemo(() => {
+    const configuration = new LocalStorageAppConfiguration({
+      defaults: {
+        [AppSetting.SHOW_DEBUG_PANELS]: isDevelopment,
+      },
+    });
+    const configuredUrl = configuration.get(AppSetting.VIZ_SERVER_URL);
+    setHttpBaseUrl(typeof configuredUrl === "string" ? configuredUrl : undefined);
+    return configuration;
+  }, []);
 
   const defaultExtensionLoaders: IExtensionLoader[] = [
     new IdbExtensionLoader("org"),
     new IdbExtensionLoader("local"),
   ];
   const url = new URL(globalThis.location.href);
-  const workspace = url.searchParams.get("workspace");
+  const workspace = resolveWorkspace(appConfiguration);
 
-  if (workspace && APP_CONFIG.apiUrl) {
+  if (resolveVizServerConfigured(workspace)) {
     defaultExtensionLoaders.push(new RemoteExtensionLoader("org", workspace));
   }
   const [extensionLoaders] = useState(() => defaultExtensionLoaders);

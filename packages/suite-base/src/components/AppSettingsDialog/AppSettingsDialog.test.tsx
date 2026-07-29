@@ -50,6 +50,7 @@ jest.mock("./settings", () => ({
   StepSize: () => null,
   TimeFormat: () => null,
   TimezoneSettings: () => null,
+  VizServerSettings: () => null,
 }));
 
 describe("AppSettingsDialog Agent tab", () => {

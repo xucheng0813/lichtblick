@@ -5,6 +5,7 @@ import { BasicBuilder } from "@lichtblick/test-builders";
 
 import { HttpError } from "./HttpError";
 import { HttpService } from "./HttpService";
+import { setHttpBaseUrl } from "./httpBaseUrl";
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -24,6 +25,7 @@ describe("HttpService", () => {
   let httpService: HttpService;
 
   beforeEach(() => {
+    setHttpBaseUrl(undefined);
     httpService = new HttpService();
     mockFetch.mockClear();
     jest.clearAllTimers();
@@ -41,6 +43,34 @@ describe("HttpService", () => {
   });
 
   describe("GET requests", () => {
+    it("uses the latest runtime base URL for an existing service instance", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: {
+          get: jest.fn().mockReturnValue("application/json"),
+        },
+        json: jest.fn().mockResolvedValue({ data: {} }),
+      });
+
+      setHttpBaseUrl("http://viz.example.com:9903/lichtblick/");
+      await httpService.get("layouts");
+
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        "http://viz.example.com:9903/lichtblick/layouts?",
+        expect.any(Object),
+      );
+
+      setHttpBaseUrl("http://other.example.com/lichtblick");
+      await httpService.get("layouts");
+
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        "http://other.example.com/lichtblick/layouts?",
+        expect.any(Object),
+      );
+    });
+
     it("should make a successful GET request", async () => {
       const mockResponse = {
         data: { id: 1, name: "Test" },
