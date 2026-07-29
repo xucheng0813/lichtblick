@@ -19,6 +19,9 @@ export const appSettings = {
     "These credentials are currently stored with plaintext-equivalent protection by a legacy insecure backend. Review and save Agent settings again to move them to the supported plaintext fallback. Installed extensions are trusted at the same level as the application and can access credentials stored on this device.",
   agentDesktopPlaintextCredentialStorageWarning:
     "No secure credential backend is available (for example, Linux without a keyring), so credentials are stored in plain text. Installed extensions are trusted at the same level as the application and can access credentials stored on this device.",
+  agentEnable: "Enable agent",
+  agentEnableHelp:
+    "Show the Agent Chat button in the app bar and allow the agent sidebar to open.",
   agentFieldRequired: "This field is required.",
   agentInvalidUrl:
     "Enter a valid HTTP or HTTPS URL without credentials, query parameters, or a fragment.",
@@ -27,6 +30,31 @@ export const appSettings = {
   agentLlmBaseUrl: "Base URL",
   agentLlmModel: "Model",
   agentLlmProvider: "LLM provider",
+  agentInstructions: "Custom instructions",
+  agentInstructionsPlaceholder:
+    "e.g. Always answer in Chinese. Prefer 60-second slices unless I ask for more.",
+  agentMemory: "Memory",
+  agentMemoryClear: "Forget all",
+  agentMemoryEmpty: "The agent has not stored anything yet.",
+  agentMemoryForget: "Forget: {{text}}",
+  agentMemoryHelp:
+    "Facts the agent chose to keep across sessions. They are included in its context on every message.",
+  agentPrompt: "Instructions and skills",
+  agentPromptHelp:
+    "Customize how the agent behaves. Instructions apply to every message; skills are reference documents it loads on demand.",
+  agentPromptSave: "Save instructions and skills",
+  agentPromptSaved: "Saved.",
+  agentSkillAdd: "Add a skill",
+  agentSkillDelete: "Delete this skill",
+  agentSkillEdit: "Edit",
+  agentSkillEdited: "(edited)",
+  agentSkillPreview: "Preview",
+  agentSkillNewBody: "Describe what the agent should know or do.",
+  agentSkillNewName: "New skill",
+  agentSkillNewWhenToUse: "Describe when the agent should load this skill.",
+  agentSkillReset: "Reset to the built-in text",
+  agentSkillSelect: "Select a skill to edit\u2026",
+  agentSkills: "Skills",
   agentProviderAnthropic: "Anthropic",
   agentProviderOpenAICompatible: "OpenAI-compatible",
   agentNotConfigured: "Agent is not configured. Fix the fields below to enable it.",

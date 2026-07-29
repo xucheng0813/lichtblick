@@ -66,6 +66,8 @@ const dismissProposal = jest.fn<ReturnType<AgentChatState["actions"]["dismissPro
 const reset = jest.fn<ReturnType<AgentChatState["actions"]["reset"]>, []>();
 const notifyCatalogReady = jest.fn();
 const cancelWaiting = jest.fn();
+const newConversation =
+  jest.fn<ReturnType<AgentChatState["actions"]["newConversation"]>, []>();
 
 function createDeferred(): {
   promise: Promise<void>;
@@ -103,6 +105,7 @@ function setMockState(overrides: Partial<AgentChatState> = {}): void {
       reset,
       notifyCatalogReady,
       cancelWaiting,
+      newConversation,
     },
     ...overrides,
   };
@@ -304,6 +307,30 @@ describe("AgentChatSidebar", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     fireEvent.click(link);
     expect(handleLink).toHaveBeenCalledWith(expect.anything(), "https://example.com/docs");
+  });
+
+  it("starts a new conversation, and offers it only once there is something to discard", () => {
+    setMockState();
+    const { rerender } = render(<AgentChatSidebar />);
+    // Nothing to reset yet, so the control stays out of the way rather than being a no-op.
+    expect(screen.getByTestId("agent-chat-new-conversation")).toBeDisabled();
+
+    setMockState({
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          content: "find SN001",
+          createdAt: "2026-07-29T00:00:00.000Z",
+        },
+      ],
+    });
+    rerender(<AgentChatSidebar />);
+
+    const button = screen.getByTestId("agent-chat-new-conversation");
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(newConversation).toHaveBeenCalledTimes(1);
   });
 
   it("sends a trimmed message with Enter and clears the input", async () => {

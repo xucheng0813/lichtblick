@@ -16,15 +16,40 @@ export type VtdRecord = {
   raw: unknown;
 };
 
+export const VTD_ORDER_DIRECTIONS = ["ASC", "DESC"] as const;
+export type VtdOrderDirection = (typeof VTD_ORDER_DIRECTIONS)[number];
+
+/**
+ * The `vtd list` filter surface. This mirrors the sidecar command spec rather than the complete
+ * CLI: options that write to disk or open a GUI are deliberately unreachable from the app.
+ */
 export type VtdSearchParams = {
+  id?: string;
   botSn?: string;
+  botSnExact?: string;
   botName?: string;
   triggerType?: string;
+  dataType?: string;
+  inspection?: string;
+  fixData?: string;
   start?: string;
   end?: string;
   at?: string;
+  triggerTime?: string;
+  queryStart?: string;
+  queryEnd?: string;
+  queryTime?: string;
+  dataDay?: string;
+  dataTos?: string;
+  orderBy?: string;
+  orderDir?: VtdOrderDirection;
   page?: number;
   pageSize?: number;
+};
+
+export type VtdTriggerParams = {
+  triggerId: string;
+  all?: boolean;
 };
 
 export type VtdSliceParams = {
@@ -50,4 +75,11 @@ export interface IVtdClient {
     signal?: AbortSignal,
   ): Promise<{ downloadUrl: string; raw: unknown }>;
   url(id: string, signal?: AbortSignal): Promise<{ downloadUrl: string }>;
+  /**
+   * Reverse-lookup of the data records and app logs attached to one triggerId. Read-only: the
+   * download and GUI options of the underlying CLI command are not exposed.
+   *
+   * The response shape has no stable contract yet, so it is returned unnormalized.
+   */
+  trigger(params: VtdTriggerParams, signal?: AbortSignal): Promise<unknown>;
 }

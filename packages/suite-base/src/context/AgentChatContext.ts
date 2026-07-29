@@ -43,6 +43,8 @@ export type AgentChatState = {
     notifyCatalogReady: (requestId: string) => void;
     cancelWaiting: () => void;
     reset: () => void;
+    /** Discards the current conversation, including its stored transcript, and starts a fresh one. */
+    newConversation: () => void;
   };
 };
 

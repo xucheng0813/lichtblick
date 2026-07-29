@@ -25,6 +25,7 @@ import {
   AgentStreamSizeLimitError,
 } from "@lichtblick/suite-base/services/agent/AgentClient";
 import { validateLayoutProposal } from "@lichtblick/suite-base/services/agent/layoutSchema";
+import type { AgentConversationPersistence } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
 import type {
   AgentEvent,
   ChatMessage,
@@ -46,6 +47,7 @@ const AGENT_CHAT_DISABLED_ERROR = "Agent chat is disabled";
 type AgentChatProviderProps = PropsWithChildren<{
   client?: IAgentClient;
   enabled?: boolean;
+  persistence?: AgentConversationPersistence;
   onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
   onOpenDataSource?: (urls: string[], sessionId?: string) => void;
 }>;
@@ -103,7 +105,7 @@ type Subscription = {
 
 type AgentChatRuntime = {
   disable: () => void;
-  mount: (client: IAgentClient) => () => void;
+  mount: (client: IAgentClient, persistence?: AgentConversationPersistence) => () => void;
   store: StoreApi<AgentChatState>;
 };
 
@@ -274,6 +276,8 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
   let committedEnabled: boolean | undefined;
   let initializationGate = createDeferred<Lifecycle>();
   let lifecycle: Lifecycle | undefined;
+  // Assigned on mount; the actions object is constructed before a persistence instance exists.
+  let activePersistence: AgentConversationPersistence | undefined;
   let nextGeneration = 0;
   let queuedProposal: ProposalRecord | undefined;
   let sessionPromise: SessionPromise | undefined;
@@ -504,6 +508,19 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       }
       stopLifecycle(active.generation);
       startLifecycle(active.client);
+      store.setState(emptyState());
+    },
+    newConversation: () => {
+      assertCommittedEnabled();
+      // Rotate the stored conversation before restarting. The next session rehydrates from
+      // storage, so clearing only the UI would leave the model still carrying the old transcript
+      // while the user believes they started over.
+      activePersistence?.startNewConversation();
+      const active = lifecycle;
+      if (active != undefined) {
+        stopLifecycle(active.generation);
+        startLifecycle(active.client);
+      }
       store.setState(emptyState());
     },
   };
@@ -1114,14 +1131,47 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       }
       store.setState(emptyState());
     },
-    mount: (client: IAgentClient) => {
+    mount: (client: IAgentClient, persistence?: AgentConversationPersistence) => {
       committedEnabled = true;
       if (lifecycle != undefined) {
         stopLifecycle();
       }
       const active = startLifecycle(client);
       store.setState(emptyState());
+      activePersistence = persistence;
+
+      let unsubscribe: (() => void) | undefined;
+      if (persistence != undefined) {
+        // Restore into the state this mount just cleared. A later generation means the user has
+        // moved on, so the restored transcript is dropped rather than replacing newer messages.
+        void persistence
+          .restoreUiMessages()
+          .then((messages: unknown[]) => {
+            if (lifecycle?.generation === active.generation && messages.length > 0) {
+              store.setState((state) =>
+                state.messages.length === 0
+                  ? { messages: messages as AgentChatState["messages"] }
+                  : state,
+              );
+            }
+          })
+          .catch(() => {
+            // A transcript that cannot be restored must not break a new conversation.
+          });
+
+        let lastMessages = store.getState().messages;
+        unsubscribe = store.subscribe(() => {
+          const { messages } = store.getState();
+          if (messages !== lastMessages) {
+            lastMessages = messages;
+            persistence.onUiMessagesChanged(messages);
+          }
+        });
+      }
+
       return () => {
+        unsubscribe?.();
+        activePersistence = undefined;
         stopLifecycle(active.generation);
       };
     },
@@ -1135,6 +1185,7 @@ export default function AgentChatProvider({
   enabled = true,
   onApplyProposal,
   onOpenDataSource,
+  persistence,
 }: AgentChatProviderProps): React.JSX.Element {
   const callbackRefs = useRef<CallbackRefs>({});
   const [runtime] = useState(() => createAgentChatRuntime(callbackRefs));
@@ -1151,8 +1202,8 @@ export default function AgentChatProvider({
       runtime.disable();
       return;
     }
-    return runtime.mount(client);
-  }, [client, enabled, runtime]);
+    return runtime.mount(client, persistence);
+  }, [client, enabled, persistence, runtime]);
 
   return <AgentChatContext.Provider value={runtime.store}>{children}</AgentChatContext.Provider>;
 }

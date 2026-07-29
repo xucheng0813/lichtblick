@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import AddCommentOutlinedIcon from "@mui/icons-material/AddCommentOutlined";
 import SendIcon from "@mui/icons-material/Send";
 import {
   Alert,
@@ -167,6 +168,18 @@ export function AgentChatSidebar(): React.JSX.Element {
         </Typography>
         <Stack direction="row" alignItems="center" gap={1}>
           {showBusyIndicator && <CircularProgress aria-label={statusLabel} size={14} />}
+          <IconButton
+            aria-label={t("newConversation")}
+            data-testid="agent-chat-new-conversation"
+            disabled={messages.length === 0 && status === "idle"}
+            size="small"
+            title={t("newConversation")}
+            onClick={() => {
+              actions.newConversation();
+            }}
+          >
+            <AddCommentOutlinedIcon fontSize="small" />
+          </IconButton>
           <Chip
             size="small"
             color={STATUS_COLORS[status]}

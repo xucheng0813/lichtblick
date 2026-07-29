@@ -22,7 +22,13 @@ import {
   VtdPermissionError,
   VtdTimeoutError,
 } from "./errors";
-import type { IVtdClient, VtdRecord, VtdSearchParams, VtdSliceParams } from "./types";
+import type {
+  IVtdClient,
+  VtdRecord,
+  VtdSearchParams,
+  VtdSliceParams,
+  VtdTriggerParams,
+} from "./types";
 
 // Keep these command literals in lockstep with
 // packages/suite-desktop/src/common/types.ts::VtdInvokeCommand. suite-base cannot import the
@@ -171,6 +177,10 @@ export default class DesktopVtdClient implements IVtdClient {
 
   public async url(id: string, signal?: AbortSignal): Promise<{ downloadUrl: string }> {
     return normalizeVtdUrlResponse(await this.#invoke("url", { id }, signal));
+  }
+
+  public async trigger(params: VtdTriggerParams, signal?: AbortSignal): Promise<unknown> {
+    return await this.#invoke("trigger", params, signal);
   }
 
   async #invoke(
