@@ -33,6 +33,8 @@ export { default as waitForFonts } from "./util/waitForFonts";
 export { initI18n } from "./i18n";
 export type { Namespace } from "./types";
 export { RemoteExtensionLoader } from "./services/extension/RemoteExtensionLoader";
+export { getHttpBaseUrl, setHttpBaseUrl } from "./services/http/httpBaseUrl";
+export { resolveVizServerConfigured, resolveWorkspace } from "./util/vizServerParams";
 export type {
   IExtensionLoader,
   TypeExtensionLoader,
