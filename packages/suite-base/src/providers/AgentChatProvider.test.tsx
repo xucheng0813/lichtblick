@@ -25,6 +25,7 @@ import {
   AgentStreamProtocolError,
   AgentStreamSizeLimitError,
 } from "@lichtblick/suite-base/services/agent/AgentClient";
+import type { AgentConversationPersistence } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
 import type {
   AgentEvent,
   IAgentClient,
@@ -140,6 +141,7 @@ function makeWrapper(
     onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
     onOpenDataSource?: (urls: string[], sessionId?: string) => void;
     enabled?: boolean;
+    persistence?: AgentConversationPersistence;
     strict?: boolean;
   } = {},
 ): React.ComponentType<PropsWithChildren> {
@@ -150,6 +152,7 @@ function makeWrapper(
         enabled={options.enabled}
         onApplyProposal={options.onApplyProposal}
         onOpenDataSource={options.onOpenDataSource}
+        persistence={options.persistence}
       >
         {children}
       </AgentChatProvider>
@@ -175,6 +178,110 @@ function requestIdAt(client: jest.Mocked<IAgentClient>, index: number): string {
 describe("AgentChatProvider", () => {
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it("aborts the old lifecycle, restores the selected transcript, and creates a new session", async () => {
+    const harness = createClientHarness();
+    harness.client.createSession
+      .mockResolvedValueOnce({ sessionId: "session-1" })
+      .mockResolvedValueOnce({ sessionId: "session-2" });
+    const transcripts = new Map<string, unknown[]>([
+      [
+        "conversation-1",
+        [
+          {
+            id: "old-message",
+            role: "assistant",
+            content: "old transcript",
+            createdAt: "2026-07-29T00:00:00.000Z",
+          },
+        ],
+      ],
+      [
+        "conversation-2",
+        [
+          {
+            id: "target-message",
+            role: "assistant",
+            content: "target transcript",
+            createdAt: "2026-07-29T00:01:00.000Z",
+          },
+        ],
+      ],
+    ]);
+    let activeConversationId = "conversation-1";
+    const persistence: AgentConversationPersistence = {
+      clear: jest.fn(),
+      deleteConversation: jest.fn().mockResolvedValue(false),
+      getActiveConversationId: () => activeConversationId,
+      listConversations: jest.fn().mockResolvedValue({
+        items: [],
+        total: 0,
+        offline: false,
+      }),
+      onLlmHistoryChanged: jest.fn(),
+      onUiMessagesChanged: jest.fn(),
+      restoreLlmHistory: jest.fn().mockResolvedValue([]),
+      restoreUiMessages: jest.fn(async () => transcripts.get(activeConversationId) ?? []),
+      startNewConversation: jest.fn(() => {
+        activeConversationId = "conversation-3";
+        return activeConversationId;
+      }),
+      switchConversation: jest.fn(async (conversationId: string) => {
+        activeConversationId = conversationId;
+      }),
+    };
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, { persistence }),
+    });
+    await waitFor(() => {
+      expect(result.current.messages[0]?.id).toBe("old-message");
+    });
+
+    let firstSend!: Promise<void>;
+    act(() => {
+      firstSend = result.current.actions.sendMessage("old request");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+      expect(harness.subscriptions).toHaveLength(1);
+    });
+    const oldSubscriptionSignal = harness.subscriptions[0]?.signal;
+
+    await act(async () => {
+      await result.current.actions.switchConversation("conversation-2");
+      await firstSend;
+    });
+
+    expect(oldSubscriptionSignal?.aborted).toBe(true);
+    expect(result.current.activeConversationId).toBe("conversation-2");
+    expect(result.current.messages.map((message) => message.id)).toEqual([
+      "target-message",
+    ]);
+
+    let secondSend!: Promise<void>;
+    act(() => {
+      secondSend = result.current.actions.sendMessage("target request");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(2);
+      expect(harness.subscriptions).toHaveLength(2);
+    });
+    expect(harness.client.sendMessage.mock.calls[1]?.[0]).toBe("session-2");
+    const secondRequestId = requestIdAt(harness.client, 1);
+    act(() => {
+      harness.emit(
+        {
+          type: "done",
+          requestId: secondRequestId,
+          seq: 1,
+        },
+        1,
+      );
+    });
+    await act(async () => {
+      await secondSend;
+    });
   });
 
   it("keeps children mounted but rejects actions without creating a session when disabled", async () => {

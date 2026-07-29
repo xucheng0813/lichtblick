@@ -93,7 +93,7 @@ describe("createAgentConversationPersistence", () => {
     expect((await store.load("c3"))?.llmHistory).toHaveLength(1);
   });
 
-  it("starts a new conversation by rotating the id and dropping the old record", async () => {
+  it("starts a new conversation by rotating the id and retaining the old record", async () => {
     const store = new AgentConversationStore();
     localStorage.setItem(AGENT_CONVERSATION_ID_KEY, "c5");
     const persistence = createAgentConversationPersistence({
@@ -109,9 +109,7 @@ describe("createAgentConversationPersistence", () => {
     persistence.startNewConversation();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The old transcript must be gone from storage, not merely hidden: the orchestrator rehydrates
-    // from here on its next session.
-    expect(await store.load("c5")).toBeUndefined();
+    expect(await store.load("c5")).toBeDefined();
     await expect(persistence.restoreLlmHistory()).resolves.toEqual([]);
     await expect(persistence.restoreUiMessages()).resolves.toEqual([]);
     // The new id has to survive a reload, otherwise the next launch resumes the discarded one.
@@ -131,6 +129,34 @@ describe("createAgentConversationPersistence", () => {
 
     expect((await store.load("c8"))?.llmHistory).toEqual(history);
     expect(await store.load("c7")).toBeUndefined();
+  });
+
+  it("flushes the old conversation and restores both halves when switching", async () => {
+    const store = new AgentConversationStore();
+    await store.save({
+      conversationId: "target",
+      updatedAt: "2026-07-29T00:00:00Z",
+      llmHistory: [{ role: "assistant", content: "target history" }],
+      uiMessages: [{ id: "target-message" }],
+    });
+    const persistence = createAgentConversationPersistence({
+      conversationId: "source",
+      makeId: () => "new",
+      store,
+    });
+    persistence.onLlmHistoryChanged(history);
+    persistence.onUiMessagesChanged([{ id: "source-message" }]);
+
+    await persistence.switchConversation("target");
+
+    expect((await store.load("source"))?.uiMessages).toEqual([{ id: "source-message" }]);
+    await expect(persistence.restoreLlmHistory()).resolves.toEqual([
+      { role: "assistant", content: "target history" },
+    ]);
+    await expect(persistence.restoreUiMessages()).resolves.toEqual([
+      { id: "target-message" },
+    ]);
+    expect(localStorage.getItem(AGENT_CONVERSATION_ID_KEY)).toBe("target");
   });
 
   it("clears the stored conversation", async () => {

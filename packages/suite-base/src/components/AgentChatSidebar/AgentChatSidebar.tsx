@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import AddCommentOutlinedIcon from "@mui/icons-material/AddCommentOutlined";
+import HistoryOutlinedIcon from "@mui/icons-material/HistoryOutlined";
 import SendIcon from "@mui/icons-material/Send";
 import {
   Alert,
@@ -10,6 +11,7 @@ import {
   ChipProps,
   CircularProgress,
   IconButton,
+  Popover,
   TextField,
   Typography,
 } from "@mui/material";
@@ -24,6 +26,7 @@ import {
 } from "@lichtblick/suite-base/context/AgentChatContext";
 
 import { useStyles } from "./AgentChatSidebar.style";
+import { ConversationList } from "./ConversationList";
 import { MessageList } from "./MessageList";
 
 const AUTO_SCROLL_THRESHOLD_PX = 80;
@@ -65,6 +68,7 @@ export function AgentChatSidebar(): React.JSX.Element {
 
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [conversationListAnchor, setConversationListAnchor] = useState<HTMLElement>();
   const bottomRef = useRef<HTMLDivElement>(ReactNull);
   const messagesRef = useRef<HTMLDivElement>(ReactNull);
   const scrollFrameRef = useRef<number>();
@@ -169,6 +173,18 @@ export function AgentChatSidebar(): React.JSX.Element {
         <Stack direction="row" alignItems="center" gap={1}>
           {showBusyIndicator && <CircularProgress aria-label={statusLabel} size={14} />}
           <IconButton
+            aria-label={t("conversationList.history")}
+            data-testid="agent-chat-conversation-history"
+            size="small"
+            title={t("conversationList.history")}
+            onClick={(event) => {
+              setConversationListAnchor(event.currentTarget);
+              void actions.refreshConversations();
+            }}
+          >
+            <HistoryOutlinedIcon fontSize="small" />
+          </IconButton>
+          <IconButton
             aria-label={t("newConversation")}
             data-testid="agent-chat-new-conversation"
             disabled={messages.length === 0 && status === "idle"}
@@ -198,6 +214,20 @@ export function AgentChatSidebar(): React.JSX.Element {
           )}
         </Stack>
       </Stack>
+      <Popover
+        anchorEl={conversationListAnchor}
+        open={conversationListAnchor != undefined}
+        slotProps={{ paper: { className: classes.conversationPopover } }}
+        onClose={() => {
+          setConversationListAnchor(undefined);
+        }}
+      >
+        <ConversationList
+          onConversationSelected={() => {
+            setConversationListAnchor(undefined);
+          }}
+        />
+      </Popover>
 
       <div
         aria-busy={status === "connecting" || status === "streaming" || status === "waiting-for-catalog"}

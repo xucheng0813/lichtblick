@@ -50,6 +50,10 @@ describe("AgentCatalogWatcher", () => {
       notifyCatalogReady,
       reset: jest.fn(),
     newConversation: jest.fn(),
+      startNewConversation: jest.fn(),
+      switchConversation: jest.fn(),
+      deleteConversation: jest.fn(),
+      refreshConversations: jest.fn(),
       sendMessage: jest.fn(),
     };
   }
@@ -73,6 +77,9 @@ describe("AgentCatalogWatcher", () => {
     };
     store = createStore<AgentChatState>()(() => ({
       actions: makeActions(),
+      conversations: [],
+      conversationsLoading: false,
+      conversationsOffline: false,
       messages: [],
       sessionId: "session-1",
       status: "idle",
