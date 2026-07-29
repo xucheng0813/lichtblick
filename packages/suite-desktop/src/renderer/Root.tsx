@@ -9,14 +9,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   App,
-  AppSetting,
   FoxgloveWebSocketDataSourceFactory,
   IAppConfiguration,
   IDataSourceFactory,
   IdbExtensionLoader,
+  IExtensionLoader,
   McapLocalDataSourceFactory,
   OsContext,
   RemoteDataSourceFactory,
+  RemoteExtensionLoader,
   Ros1LocalBagDataSourceFactory,
   Ros1SocketDataSourceFactory,
   Ros2LocalBagDataSourceFactory,
@@ -25,6 +26,12 @@ import {
   UlogLocalDataSourceFactory,
   VelodyneDataSourceFactory,
 } from "@lichtblick/suite-base";
+import { AppSetting } from "@lichtblick/suite-base/AppSetting";
+import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspace,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 import { DesktopExtensionLoader } from "./services/DesktopExtensionLoader";
 import { DesktopLayoutLoader } from "./services/DesktopLayoutLoader";
@@ -49,6 +56,11 @@ export default function Root(props: RootProps): React.JSX.Element {
     throw new Error("storageBridge is missing");
   }
   const { appConfiguration, appParameters, extraProviders } = props;
+  const [workspace] = useState(() => {
+    const configuredUrl = appConfiguration.get(AppSetting.VIZ_SERVER_URL);
+    setHttpBaseUrl(typeof configuredUrl === "string" ? configuredUrl : undefined);
+    return resolveWorkspace(appConfiguration);
+  });
 
   useEffect(() => {
     const handler = () => {
@@ -71,10 +83,16 @@ export default function Root(props: RootProps): React.JSX.Element {
     };
   }, [appConfiguration]);
 
-  const [extensionLoaders] = useState(() => [
-    new IdbExtensionLoader("org"),
-    new DesktopExtensionLoader(desktopBridge),
-  ]);
+  const [extensionLoaders] = useState(() => {
+    const loaders: IExtensionLoader[] = [
+      new IdbExtensionLoader("org"),
+      new DesktopExtensionLoader(desktopBridge),
+    ];
+    if (resolveVizServerConfigured(workspace)) {
+      loaders.push(new RemoteExtensionLoader("org", workspace));
+    }
+    return loaders;
+  });
 
   const [layoutLoaders] = useState(() => [new DesktopLayoutLoader(desktopBridge)]);
 

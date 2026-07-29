@@ -12,7 +12,6 @@ import { HTML5Backend } from "react-dnd-html5-backend";
 import { IdbLayoutStorage } from "@lichtblick/suite-base/IdbLayoutStorage";
 import { LayoutsAPI } from "@lichtblick/suite-base/api/layouts/LayoutsAPI";
 import { BundledExtensionInstaller } from "@lichtblick/suite-base/components/BundledExtensionInstaller";
-import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import LayoutStorageContext from "@lichtblick/suite-base/context/LayoutStorageContext";
 import NativeAppMenuContext from "@lichtblick/suite-base/context/NativeAppMenuContext";
 import NativeWindowContext from "@lichtblick/suite-base/context/NativeWindowContext";
@@ -24,6 +23,10 @@ import LayoutManagerProvider from "@lichtblick/suite-base/providers/LayoutManage
 import { StudioLogsSettingsProvider } from "@lichtblick/suite-base/providers/StudioLogsSettingsProvider";
 import TimelineInteractionStateProvider from "@lichtblick/suite-base/providers/TimelineInteractionStateProvider";
 import UserProfileLocalStorageProvider from "@lichtblick/suite-base/providers/UserProfileLocalStorageProvider";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspace,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 import Workspace from "./Workspace";
 import DocumentTitleAdapter from "./components/DocumentTitleAdapter";
@@ -61,6 +64,7 @@ export function StudioApp(): React.JSX.Element {
     customWindowControlProps,
     onAppBarDoubleClick,
     AppBarComponent,
+    appConfiguration,
   } = useSharedRootContext();
 
   const providers = [
@@ -101,11 +105,10 @@ export function StudioApp(): React.JSX.Element {
   providers.unshift(<LayoutStorageContext.Provider value={layoutStorage} />);
   const MaybeLaunchPreference = enableLaunchPreferenceScreen === true ? LaunchPreference : Fragment;
 
-  const url = new URL(window.location.href);
-  const workspace = url.searchParams.get("workspace");
+  const workspace = resolveWorkspace(appConfiguration);
 
   const remoteLayoutStorage = useMemo(() => {
-    if (workspace && APP_CONFIG.apiUrl) {
+    if (resolveVizServerConfigured(workspace)) {
       return new LayoutsAPI(workspace);
     }
     return undefined;

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
-import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
+import { getHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { HttpRequestOptions, HttpResponse } from "@lichtblick/suite-base/services/http/types";
 
 /**
@@ -19,11 +19,9 @@ import { HttpRequestOptions, HttpResponse } from "@lichtblick/suite-base/service
  **/
 export class HttpService {
   private readonly apiVersion = "1.0";
-  private readonly baseURL?: string;
   private readonly defaultOptions: RequestInit;
 
   public constructor() {
-    this.baseURL = APP_CONFIG.apiUrl;
     this.defaultOptions = {
       headers: {
         "Content-Type": "application/json",
@@ -37,7 +35,8 @@ export class HttpService {
     options: HttpRequestOptions = {},
   ): Promise<HttpResponse<T>> {
     const { timeout, responseType = "json", ...fetchOptions } = options;
-    const url = this.baseURL ? `${this.baseURL}/${endpoint}` : endpoint;
+    const baseUrl = getHttpBaseUrl();
+    const url = baseUrl ? `${baseUrl}/${endpoint}` : endpoint;
     const shouldUseDefaultHeaders = !(fetchOptions.body instanceof FormData);
 
     const requestOptions: RequestInit = {

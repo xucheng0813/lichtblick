@@ -43,7 +43,9 @@ jest.mock("@lichtblick/suite-base/constants/config", () => ({
 
 jest.mock("./services/LocalStorageAppConfiguration", () => ({
   __esModule: true,
-  default: jest.fn(),
+  default: jest.fn().mockImplementation(() => ({
+    get: jest.fn().mockReturnValue(undefined),
+  })),
 }));
 
 describe("WebRoot", () => {

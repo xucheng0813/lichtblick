@@ -74,6 +74,7 @@ import {
   writeAgentPromptCustomization,
 } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { LaunchPreferenceValue } from "@lichtblick/suite-base/types/LaunchPreferenceValue";
 import { TimeDisplayMethod } from "@lichtblick/suite-base/types/panels";
 import { formatTime } from "@lichtblick/suite-base/util/formatTime";
@@ -473,6 +474,42 @@ export function LanguageSettings(): React.ReactElement {
           </MenuItem>
         ))}
       </Select>
+    </Stack>
+  );
+}
+
+export function VizServerSettings(): React.ReactElement {
+  const [vizServerUrl, setVizServerUrl] = useAppConfigurationValue<string>(
+    AppSetting.VIZ_SERVER_URL,
+  );
+  const [vizServerWorkspace, setVizServerWorkspace] = useAppConfigurationValue<string>(
+    AppSetting.VIZ_SERVER_WORKSPACE,
+  );
+  const reloadHelp = "修改后需重新加载应用生效。";
+
+  return (
+    <Stack gap={2}>
+      <TextField
+        fullWidth
+        type="url"
+        label="可视化服务地址"
+        value={vizServerUrl ?? ""}
+        helperText={reloadHelp}
+        onChange={(event) => {
+          const value = event.target.value || undefined;
+          setHttpBaseUrl(value);
+          void setVizServerUrl(value);
+        }}
+      />
+      <TextField
+        fullWidth
+        label="工作区"
+        value={vizServerWorkspace ?? ""}
+        helperText={reloadHelp}
+        onChange={(event) => {
+          void setVizServerWorkspace(event.target.value || undefined);
+        }}
+      />
     </Stack>
   );
 }

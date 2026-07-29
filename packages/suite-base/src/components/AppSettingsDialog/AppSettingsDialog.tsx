@@ -56,6 +56,7 @@ import {
   RosPackagePath,
   TimeFormat,
   TimezoneSettings,
+  VizServerSettings,
 } from "./settings";
 
 const selectWorkspaceInitialActiveTab = (store: WorkspaceContextStore) =>
@@ -164,6 +165,7 @@ export function AppSettingsDialog(
               <MessageFramerate />
               <StepSize />
               <LanguageSettings />
+              <VizServerSettings />
               {supportsAppUpdates && <AutoUpdate />}
               {!isDesktopApp() && <LaunchDefault />}
               {isDesktopApp() && <RosPackagePath />}

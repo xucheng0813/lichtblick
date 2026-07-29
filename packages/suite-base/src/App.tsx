@@ -10,9 +10,11 @@ import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 
 import { IdbLayoutStorage } from "@lichtblick/suite-base/IdbLayoutStorage";
+import { LayoutsAPI } from "@lichtblick/suite-base/api/layouts/LayoutsAPI";
 import GlobalCss from "@lichtblick/suite-base/components/GlobalCss";
 import { AppParametersInput } from "@lichtblick/suite-base/context/AppParametersContext";
 import LayoutStorageContext from "@lichtblick/suite-base/context/LayoutStorageContext";
+import { RemoteLayoutStorageContext } from "@lichtblick/suite-base/context/RemoteLayoutStorageContext";
 import { UserScriptStateProvider } from "@lichtblick/suite-base/context/UserScriptStateContext";
 import AlertsContextProvider from "@lichtblick/suite-base/providers/AlertsContextProvider";
 import AppParametersProvider from "@lichtblick/suite-base/providers/AppParametersProvider";
@@ -22,6 +24,10 @@ import { StudioLogsSettingsProvider } from "@lichtblick/suite-base/providers/Stu
 import TimelineInteractionStateProvider from "@lichtblick/suite-base/providers/TimelineInteractionStateProvider";
 import UserProfileLocalStorageProvider from "@lichtblick/suite-base/providers/UserProfileLocalStorageProvider";
 import { LayoutLoader } from "@lichtblick/suite-base/services/ILayoutLoader";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspace,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 import Workspace from "./Workspace";
 import { CustomWindowControlsProps } from "./components/AppBar/CustomWindowControls";
@@ -116,6 +122,18 @@ export function App(props: AppProps): React.JSX.Element {
 
   const layoutStorage = useMemo(() => new IdbLayoutStorage(), []);
   providers.unshift(<LayoutStorageContext.Provider value={layoutStorage} />);
+
+  const workspace = resolveWorkspace(appConfiguration);
+  const remoteLayoutStorage = useMemo(() => {
+    if (resolveVizServerConfigured(workspace)) {
+      return new LayoutsAPI(workspace);
+    }
+    return undefined;
+  }, [workspace]);
+
+  if (remoteLayoutStorage) {
+    providers.unshift(<RemoteLayoutStorageContext.Provider value={remoteLayoutStorage} />);
+  }
 
   // The toast and logs provider comes first so they are available to all downstream providers
   providers.unshift(<StudioToastProvider />);

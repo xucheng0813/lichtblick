@@ -29,6 +29,8 @@ export enum AppSetting {
   AGENT_MEMORY = "agent.memory",
   /** JSON-serialized user edits to the agent's instructions and skills; see services/agent/prompts. */
   AGENT_PROMPT_CUSTOMIZATION = "agent.promptCustomization",
+  VIZ_SERVER_URL = "vizServer.url",
+  VIZ_SERVER_WORKSPACE = "vizServer.workspace",
   COLOR_SCHEME = "colorScheme",
   TIMEZONE = "timezone",
   TIME_FORMAT = "time.format",

@@ -6,12 +6,17 @@
 import "@testing-library/jest-dom";
 import { fireEvent, render, screen } from "@testing-library/react";
 
+import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import { useAppConfigurationValue } from "@lichtblick/suite-base/hooks/useAppConfigurationValue";
+import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 
-import { AutoUpdate, StepSize } from "./settings";
+import { AutoUpdate, StepSize, VizServerSettings } from "./settings";
 
 jest.mock("@lichtblick/suite-base/hooks/useAppConfigurationValue", () => ({
   useAppConfigurationValue: jest.fn(),
+}));
+jest.mock("@lichtblick/suite-base/services/http/httpBaseUrl", () => ({
+  setHttpBaseUrl: jest.fn(),
 }));
 
 describe("StepSize component", () => {
@@ -54,5 +59,38 @@ describe("AutoUpdate component", () => {
     render(<AutoUpdate />);
     const input: HTMLInputElement = screen.getByRole("checkbox");
     expect(input.checked).toBe(true);
+  });
+});
+
+describe("VizServerSettings component", () => {
+  const mockSetVizServerUrl = jest.fn();
+  const mockSetVizServerWorkspace = jest.fn();
+
+  beforeEach(() => {
+    jest.mocked(setHttpBaseUrl).mockClear();
+    mockSetVizServerUrl.mockClear();
+    mockSetVizServerWorkspace.mockClear();
+    jest.mocked(useAppConfigurationValue).mockImplementation((setting) => {
+      if (setting === AppSetting.VIZ_SERVER_URL) {
+        return ["http://localhost:9903/lichtblick", mockSetVizServerUrl];
+      }
+      return ["default-workspace", mockSetVizServerWorkspace];
+    });
+  });
+
+  it("updates the runtime URL and persists both settings", () => {
+    render(<VizServerSettings />);
+
+    fireEvent.change(screen.getByLabelText("可视化服务地址"), {
+      target: { value: "http://viz.example.com:9903/lichtblick" },
+    });
+    fireEvent.change(screen.getByLabelText("工作区"), {
+      target: { value: "robot-team" },
+    });
+
+    expect(setHttpBaseUrl).toHaveBeenCalledWith("http://viz.example.com:9903/lichtblick");
+    expect(mockSetVizServerUrl).toHaveBeenCalledWith("http://viz.example.com:9903/lichtblick");
+    expect(mockSetVizServerWorkspace).toHaveBeenCalledWith("robot-team");
+    expect(screen.getAllByText("修改后需重新加载应用生效。")).toHaveLength(2);
   });
 });
