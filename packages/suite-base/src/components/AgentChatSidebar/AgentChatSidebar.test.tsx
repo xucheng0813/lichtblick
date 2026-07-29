@@ -68,6 +68,10 @@ const notifyCatalogReady = jest.fn();
 const cancelWaiting = jest.fn();
 const newConversation =
   jest.fn<ReturnType<AgentChatState["actions"]["newConversation"]>, []>();
+const startNewConversation = jest.fn();
+const switchConversation = jest.fn().mockResolvedValue(undefined);
+const deleteConversation = jest.fn().mockResolvedValue(undefined);
+const refreshConversations = jest.fn().mockResolvedValue(undefined);
 
 function createDeferred(): {
   promise: Promise<void>;
@@ -95,6 +99,9 @@ let mockState: AgentChatState;
 
 function setMockState(overrides: Partial<AgentChatState> = {}): void {
   mockState = {
+    conversations: [],
+    conversationsLoading: false,
+    conversationsOffline: false,
     messages: [],
     status: "idle",
     actions: {
@@ -106,6 +113,10 @@ function setMockState(overrides: Partial<AgentChatState> = {}): void {
       notifyCatalogReady,
       cancelWaiting,
       newConversation,
+      startNewConversation,
+      switchConversation,
+      deleteConversation,
+      refreshConversations,
     },
     ...overrides,
   };
