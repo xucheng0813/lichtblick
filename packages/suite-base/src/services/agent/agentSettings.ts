@@ -9,6 +9,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import type { IAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
+import { readCurrentAgentBootstrap } from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
 
 export type AgentLlmProvider = "anthropic" | "openai-compatible";
 
@@ -1349,15 +1350,77 @@ export function selectAgentConfiguration(
   snapshot: AgentSettingsSnapshot,
   { desktop }: { desktop: boolean },
 ): AgentConfiguration {
+  const serverConfig = readCurrentAgentBootstrap()?.config;
+  const provider =
+    snapshot.revision === "" && serverConfig?.provider != undefined
+      ? serverConfig.provider
+      : snapshot.provider;
   const providerSettings =
-    snapshot.provider === "anthropic" ? snapshot.anthropic : snapshot.openAiCompatible;
+    provider === "anthropic" ? snapshot.anthropic : snapshot.openAiCompatible;
+  const matchingServerConfig =
+    serverConfig?.provider == undefined || serverConfig.provider === provider
+      ? serverConfig
+      : undefined;
   return {
-    ...providerSettings,
+    apiKey:
+      providerSettings.apiKey === ""
+        ? (matchingServerConfig?.apiKey ?? "")
+        : providerSettings.apiKey,
+    baseUrl:
+      snapshot.revision === "" || providerSettings.baseUrl === ""
+        ? (matchingServerConfig?.baseUrl ?? providerSettings.baseUrl)
+        : providerSettings.baseUrl,
     desktop,
-    provider: snapshot.provider,
-    vtdAuthToken: desktop ? undefined : snapshot.vtdAuthToken,
-    vtdEndpoint: desktop ? undefined : snapshot.vtdEndpoint,
+    model:
+      snapshot.revision === "" || providerSettings.model === ""
+        ? (matchingServerConfig?.model ?? providerSettings.model)
+        : providerSettings.model,
+    provider,
+    vtdAuthToken: desktop
+      ? undefined
+      : snapshot.vtdAuthToken === ""
+        ? serverConfig?.vtdAuthToken
+        : snapshot.vtdAuthToken,
+    vtdEndpoint: desktop
+      ? undefined
+      : snapshot.vtdEndpoint === ""
+        ? serverConfig?.vtdEndpoint
+        : snapshot.vtdEndpoint,
   };
+}
+
+export function getAgentConfigurationSource(
+  snapshot: AgentSettingsSnapshot,
+  { desktop }: { desktop: boolean },
+): "local" | "server" {
+  const serverConfig = readCurrentAgentBootstrap()?.config;
+  if (serverConfig == undefined) {
+    return "local";
+  }
+  const providerUsesServerDefault =
+    snapshot.revision === "" && serverConfig.provider != undefined;
+  const provider =
+    snapshot.revision === "" && serverConfig.provider != undefined
+      ? serverConfig.provider
+      : snapshot.provider;
+  const providerSettings =
+    provider === "anthropic" ? snapshot.anthropic : snapshot.openAiCompatible;
+  const providerMatchesServer =
+    serverConfig.provider == undefined || serverConfig.provider === provider;
+  const llmUsesServerDefault =
+    providerMatchesServer &&
+    ((providerSettings.apiKey === "" && serverConfig.apiKey != undefined) ||
+      ((snapshot.revision === "" || providerSettings.baseUrl === "") &&
+        serverConfig.baseUrl != undefined) ||
+      ((snapshot.revision === "" || providerSettings.model === "") &&
+        serverConfig.model != undefined));
+  const vtdUsesServerDefault =
+    !desktop &&
+    ((snapshot.vtdAuthToken === "" && serverConfig.vtdAuthToken != undefined) ||
+      (snapshot.vtdEndpoint === "" && serverConfig.vtdEndpoint != undefined));
+  return providerUsesServerDefault || llmUsesServerDefault || vtdUsesServerDefault
+    ? "server"
+    : "local";
 }
 
 function isHttpUrlWithoutRequestSuffix(value: string): boolean {
