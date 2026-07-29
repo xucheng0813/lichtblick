@@ -3,6 +3,16 @@
 
 export const agentChat = {
   newConversation: "New conversation",
+  conversationList: {
+    history: "Conversation history",
+    newConversation: "New conversation",
+    loading: "Loading conversations…",
+    empty: "No conversation history",
+    offline: "Conversation history is offline. Local chat remains available.",
+    untitled: "Untitled conversation",
+    delete: "Delete {{title}}",
+    metadata: "{{time}} · {{count}} messages",
+  },
   title: "Agent Chat",
   assistant: "Assistant",
   you: "You",

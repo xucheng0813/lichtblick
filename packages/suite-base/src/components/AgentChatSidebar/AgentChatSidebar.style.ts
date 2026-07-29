@@ -20,6 +20,30 @@ export const useStyles = makeStyles()((theme) => ({
     padding: theme.spacing(0.75, 1.5),
     borderBottom: `1px solid ${theme.palette.divider}`,
   },
+  conversationPopover: {
+    width: 320,
+    maxWidth: "calc(100vw - 32px)",
+  },
+  conversationList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: theme.spacing(1),
+    maxHeight: 420,
+    padding: theme.spacing(1),
+    overflowY: "auto",
+  },
+  conversationListStatus: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing(1),
+    minHeight: theme.spacing(8),
+    padding: theme.spacing(1),
+    textAlign: "center",
+  },
+  conversationListAlert: {
+    flex: "none",
+  },
   messages: {
     flex: "1 1 auto",
     minHeight: 0,

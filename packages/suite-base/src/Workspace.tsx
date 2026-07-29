@@ -69,6 +69,7 @@ import { TopicList } from "@lichtblick/suite-base/components/TopicList";
 import VariablesList from "@lichtblick/suite-base/components/VariablesList";
 import { WorkspaceDialogs } from "@lichtblick/suite-base/components/WorkspaceDialogs";
 import { AllowedFileExtensions } from "@lichtblick/suite-base/constants/allowedFileExtensions";
+import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { useAppContext } from "@lichtblick/suite-base/context/AppContext";
 import {
@@ -112,6 +113,7 @@ import {
 } from "@lichtblick/suite-base/services/agent/agentSettings";
 import { useLocalAgentClient } from "@lichtblick/suite-base/services/agent/localAgentClient";
 import { AgentConversationStore } from "@lichtblick/suite-base/services/agent/memory/AgentConversationStore";
+import { RemoteAgentConversationStore } from "@lichtblick/suite-base/services/agent/memory/RemoteAgentConversationStore";
 import {
   createAgentConversationPersistence,
   getOrCreateConversationId,
@@ -914,15 +916,18 @@ function ConfiguredAgentWorkspaceIntegration({
     () => createAgentMemoryStore(appConfiguration, { makeId: () => uuidv4().slice(0, 8) }),
     [appConfiguration],
   );
-  const persistence = useMemo(
-    () =>
-      createAgentConversationPersistence({
-        conversationId: getOrCreateConversationId(() => uuidv4()),
-        makeId: () => uuidv4(),
-        store: new AgentConversationStore(),
-      }),
-    [],
-  );
+  const persistence = useMemo(() => {
+    const workspace = new URL(globalThis.location.href).searchParams.get("workspace")?.trim();
+    const store =
+      workspace != undefined && workspace !== "" && APP_CONFIG.apiUrl
+        ? new RemoteAgentConversationStore({ workspace })
+        : new AgentConversationStore();
+    return createAgentConversationPersistence({
+      conversationId: getOrCreateConversationId(() => uuidv4()),
+      makeId: () => uuidv4(),
+      store,
+    });
+  }, []);
   const getPromptCustomization = useCallback(
     () => readAgentPromptCustomization(appConfiguration),
     [appConfiguration],
