@@ -76,7 +76,6 @@ import {
 } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import {
-  getVizServerWorkspace,
   publishCustomization,
   readCachedAgentBootstrap,
 } from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
@@ -85,6 +84,10 @@ import { LaunchPreferenceValue } from "@lichtblick/suite-base/types/LaunchPrefer
 import { TimeDisplayMethod } from "@lichtblick/suite-base/types/panels";
 import { formatTime } from "@lichtblick/suite-base/util/formatTime";
 import { formatTimeRaw } from "@lichtblick/suite-base/util/time";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspace,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 const MESSAGE_RATES = [1, 3, 5, 10, 15, 20, 30, 60];
 const LANGUAGE_OPTIONS: { key: Language; value: string }[] = [{ key: "en", value: "English" }];
@@ -838,7 +841,10 @@ function AgentPromptSettings(): React.ReactElement {
   const [skillView, setSkillView] = useState<SkillView>("edit");
   const [error, setError] = useState<string>();
   const [saved, setSaved] = useState(false);
-  const workspace = getVizServerWorkspace();
+  const resolvedWorkspace = resolveWorkspace(appConfiguration);
+  const workspace = resolveVizServerConfigured(resolvedWorkspace)
+    ? resolvedWorkspace
+    : undefined;
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string>();
   const [publishSucceeded, setPublishSucceeded] = useState(false);

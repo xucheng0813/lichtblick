@@ -3,13 +3,18 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import HttpService from "@lichtblick/suite-base/services/http/HttpService";
+import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
+import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAppConfiguration";
+import { resolveWorkspace } from "@lichtblick/suite-base/util/vizServerParams";
 
 import {
   fetchAgentBootstrap,
   mergeCustomizations,
   publishCustomization,
   readCachedAgentBootstrap,
+  readCurrentAgentBootstrap,
 } from "./remotePromptCustomization";
 
 jest.mock("@lichtblick/suite-base/services/http/HttpService");
@@ -28,6 +33,12 @@ describe("remote prompt customization", () => {
   beforeEach(() => {
     localStorage.clear();
     jest.clearAllMocks();
+    globalThis.history.replaceState({}, "", "/");
+    setHttpBaseUrl(undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it("merges with local precedence and clamps instructions and custom skills", () => {
@@ -70,15 +81,19 @@ describe("remote prompt customization", () => {
 
   it("uses a valid workspace cache and ignores malformed entries", async () => {
     const workspace = "cached-workspace";
+    const serialized = JSON.stringify({
+      [workspace]: {
+        prompt: { ...emptyPrompt, instructions: "cached" },
+        version: "v1",
+      },
+      malformed: { prompt: "bad", version: "v2" },
+    });
+    if (serialized == undefined) {
+      throw new Error("Unable to serialize bootstrap test fixture");
+    }
     localStorage.setItem(
       "lichtblick.vizserver.agent-bootstrap.v1",
-      JSON.stringify({
-        [workspace]: {
-          prompt: { ...emptyPrompt, instructions: "cached" },
-          version: "v1",
-        },
-        malformed: { prompt: "bad", version: "v2" },
-      }),
+      serialized,
     );
 
     expect(readCachedAgentBootstrap(workspace)).toMatchObject({
@@ -144,6 +159,51 @@ describe("remote prompt customization", () => {
       "server-secret",
     );
     expect(localStorage.getItem("lichtblick.agent.credentials.v1")).toBeNull();
+  });
+
+  it("skips cache persistence when JSON serialization returns undefined", async () => {
+    const workspace = "unserializable-workspace";
+    const mockGet = jest.fn().mockResolvedValue(
+      response({
+        prompt: emptyPrompt,
+        version: "v1",
+      }),
+    );
+    jest.mocked(HttpService).get = mockGet;
+    const setItem = jest.spyOn(Storage.prototype, "setItem");
+    const stringify = jest.spyOn(JSON, "stringify").mockReturnValueOnce(undefined);
+
+    await expect(fetchAgentBootstrap(workspace)).resolves.toMatchObject({
+      version: "v1",
+    });
+
+    stringify.mockRestore();
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("uses the authoritative workspace snapshot and runtime HTTP base URL", async () => {
+    const workspace = "configured-workspace";
+    resolveWorkspace(
+      makeMockAppConfiguration([
+        [AppSetting.VIZ_SERVER_WORKSPACE, workspace],
+      ]),
+    );
+    setHttpBaseUrl("http://runtime.example.com/lichtblick");
+    const mockGet = jest.fn().mockResolvedValue(
+      response({
+        prompt: { ...emptyPrompt, instructions: "from configured workspace" },
+        version: "v1",
+      }),
+    );
+    jest.mocked(HttpService).get = mockGet;
+    await fetchAgentBootstrap(workspace);
+
+    expect(readCurrentAgentBootstrap()?.prompt?.instructions).toBe(
+      "from configured workspace",
+    );
+
+    setHttpBaseUrl(undefined);
+    expect(readCurrentAgentBootstrap()).toBeUndefined();
   });
 
   it("publishes the local prompt and updates the cached version and payload", async () => {
