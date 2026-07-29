@@ -33,3 +33,6 @@ test-results/*
 .scannerwork
 eslint-report.json
 blob-report/*
+
+# Extensions fetched by `yarn extensions:fetch`; too large to commit, see ci/extensions.json
+.extensions/

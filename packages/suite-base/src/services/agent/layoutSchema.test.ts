@@ -10,6 +10,8 @@ import {
   AGENT_SAFE_LAYOUT_MAX_GRAPH_NODES,
   AGENT_SAFE_LAYOUT_MAX_MOSAIC_DEPTH,
   AGENT_SAFE_LAYOUT_MAX_STRING_BYTES,
+  HUMANOID_VIZ_PANEL_TYPE,
+  QUADRUPED_VIZ_PANEL_TYPE,
   type AgentSafeLayoutData,
   isValidLayoutProposalData,
   validateLayoutProposal,
@@ -116,6 +118,30 @@ describe("layoutSchema", () => {
       );
     },
   );
+
+  it.each([QUADRUPED_VIZ_PANEL_TYPE, HUMANOID_VIZ_PANEL_TYPE])(
+    "accepts the extension panel type %s, whose name contains spaces and dots",
+    (panelType) => {
+      const panelId = `${panelType}!main`;
+      const data = validLayoutData();
+      data.configById = { [panelId]: {} };
+      data.layout = panelId;
+
+      expect(() => validateLayoutProposalData(data)).not.toThrow();
+      expect(isValidLayoutProposalData(data)).toBe(true);
+    },
+  );
+
+  it("still rejects an unlisted panel type that contains spaces", () => {
+    // Relaxing the id shape to allow extension panel names must not turn the allowlist into a
+    // shape check.
+    const panelId = "Some Other Extension.Some Panel!main";
+    const data = validLayoutData();
+    data.configById = { [panelId]: {} };
+    data.layout = panelId;
+
+    expect(() => validateLayoutProposalData(data)).toThrow("uses unsupported panel type");
+  });
 
   it("rejects a Mosaic leaf without a configById entry", () => {
     const data = validLayoutData();

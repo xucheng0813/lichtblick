@@ -95,12 +95,25 @@ export type VtdInvokeCommand =
 
 export type VtdInvokeCommandParams = {
   list: {
+    id?: string;
     botSn?: string;
+    botSnExact?: string;
     botName?: string;
     triggerType?: string;
+    dataType?: string;
+    inspection?: string;
+    fixData?: string;
     start?: string;
     end?: string;
     at?: string;
+    triggerTime?: string;
+    queryStart?: string;
+    queryEnd?: string;
+    queryTime?: string;
+    dataDay?: string;
+    dataTos?: string;
+    orderBy?: string;
+    orderDir?: "ASC" | "DESC";
     page?: number;
     pageSize?: number;
   };
@@ -114,7 +127,7 @@ export type VtdInvokeCommandParams = {
     endNs?: string;
   };
   "slice-get": { sliceId: string };
-  trigger: { triggerId: string };
+  trigger: { triggerId: string; all?: boolean };
 };
 
 export type VtdInvokeRequest = {

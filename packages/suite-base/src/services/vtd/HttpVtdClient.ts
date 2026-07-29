@@ -20,6 +20,7 @@ import type {
   VtdRecord,
   VtdSearchParams,
   VtdSliceParams,
+  VtdTriggerParams,
 } from "./types";
 
 type Fetch = typeof globalThis.fetch;
@@ -278,6 +279,10 @@ export default class HttpVtdClient implements IVtdClient {
 
   public async url(id: string, signal?: AbortSignal): Promise<{ downloadUrl: string }> {
     return normalizeVtdUrlResponse(await this.#invoke("url", { id }, signal));
+  }
+
+  public async trigger(params: VtdTriggerParams, signal?: AbortSignal): Promise<unknown> {
+    return await this.#invoke("trigger", params, signal);
   }
 
   async #invoke(command: string, params: unknown, signal?: AbortSignal): Promise<unknown> {

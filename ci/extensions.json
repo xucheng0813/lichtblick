@@ -1,0 +1,19 @@
+{
+  "$comment": "Extensions bundled with the app but not committed to git. Fetched by ci/fetch-extensions.ts into .extensions/, which both the web and desktop builds copy into their output. `id` must match the installed extension id, which is derived from the .foxe package.json as `<publisher>.<name>` and does not necessarily match the file name.",
+  "extensions": [
+    {
+      "id": "fengchen.humanoid-viz",
+      "version": "0.12.0",
+      "file": "vitasim.humanoid-viz-0.12.0.foxe",
+      "url": "http://10.100.10.2:8082/deps/vitasim.humanoid-viz-0.12.0.foxe",
+      "sha256": "995f93f0df9b5be10e80ed7642d09e200ba5dfaf4189f112bc43286ec978dd45"
+    },
+    {
+      "id": "fengchen.quadruped-viz",
+      "version": "0.1.17",
+      "file": "vitasim.quadruped-viz-0.1.17.foxe",
+      "url": "http://10.100.10.2:8082/deps/vitasim.quadruped-viz-0.1.17.foxe",
+      "sha256": "1ccb491c16a8cbae13c2d00eb02375b0a6bc4837aa8d2fd66fd8e21ab4bf628f"
+    }
+  ]
+}

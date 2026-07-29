@@ -31,6 +31,11 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - name: Fetch bundled extensions
+        # Optional: the extension host is on an internal network that GitHub-hosted runners cannot
+        # reach. When unreachable the build proceeds without the bundled extensions.
+        run: yarn extensions:fetch --optional
+
       - name: Read version from package.json
         id: package_version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_ENV

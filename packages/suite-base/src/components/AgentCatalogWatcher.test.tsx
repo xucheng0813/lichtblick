@@ -49,6 +49,7 @@ describe("AgentCatalogWatcher", () => {
       dismissProposal: jest.fn(),
       notifyCatalogReady,
       reset: jest.fn(),
+    newConversation: jest.fn(),
       sendMessage: jest.fn(),
     };
   }

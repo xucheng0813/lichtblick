@@ -160,6 +160,35 @@ function optionalTopics(params: Record<string, unknown>): string[] | undefined {
   return value;
 }
 
+function optionalBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
+  const value = params[key];
+  if (value == undefined) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    throw cliError("invalid-request", `vtd parameter ${key} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalEnum(
+  params: Record<string, unknown>,
+  key: string,
+  allowed: readonly string[],
+): string | undefined {
+  const value = optionalString(params, key);
+  if (value == undefined) {
+    return undefined;
+  }
+  if (!allowed.includes(value)) {
+    throw cliError(
+      "invalid-request",
+      `vtd parameter ${key} must be one of: ${allowed.join(", ")}`,
+    );
+  }
+  return value;
+}
+
 function readParams(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) {
     throw cliError("invalid-request", "vtd command parameters must be an object");
@@ -192,27 +221,75 @@ function appendPositiveIntegerFlag(
   }
 }
 
+function appendEnumFlag(
+  args: string[],
+  params: Record<string, unknown>,
+  key: string,
+  flag: string,
+  allowed: readonly string[],
+): void {
+  const value = optionalEnum(params, key, allowed);
+  if (value != undefined) {
+    args.push(flag, value);
+  }
+}
+
+function appendBooleanFlag(
+  args: string[],
+  params: Record<string, unknown>,
+  key: string,
+  flag: string,
+): void {
+  if (optionalBoolean(params, key) === true) {
+    args.push(flag);
+  }
+}
+
+const VTD_ORDER_DIRECTIONS = ["ASC", "DESC"] as const;
+
+/**
+ * The `vtd list` filter surface, as a single table so the accepted-key allowlist and the emitted
+ * argv can never drift apart. Accepting a key without emitting its flag would silently discard the
+ * filter, which is worse than rejecting it.
+ */
+const VTD_LIST_STRING_FLAGS: ReadonlyArray<readonly [key: string, flag: string]> = [
+  ["id", "--id"],
+  ["botSn", "--bot-sn"],
+  ["botSnExact", "--bot-sn-exact"],
+  ["botName", "--bot-name"],
+  ["triggerType", "--trigger-type"],
+  ["dataType", "--data-type"],
+  ["inspection", "--inspection"],
+  ["fixData", "--fix-data"],
+  ["start", "--start"],
+  ["end", "--end"],
+  ["at", "--at"],
+  ["triggerTime", "--trigger-time"],
+  ["queryStart", "--query-start"],
+  ["queryEnd", "--query-end"],
+  ["queryTime", "--query-time"],
+  ["dataDay", "--data-day"],
+  ["dataTos", "--data-tos"],
+  ["orderBy", "--order-by"],
+];
+
+const VTD_LIST_ALLOWED_KEYS: readonly string[] = [
+  ...VTD_LIST_STRING_FLAGS.map(([key]) => key),
+  "orderDir",
+  "page",
+  "pageSize",
+];
+
 function buildArgs(command: VtdInvokeCommand, value: unknown): string[] {
   const params = readParams(value);
   const args: string[] = [command];
   switch (command) {
     case "list":
-      assertAllowedKeys(params, [
-        "botSn",
-        "botName",
-        "triggerType",
-        "start",
-        "end",
-        "at",
-        "page",
-        "pageSize",
-      ]);
-      appendStringFlag(args, params, "botSn", "--bot-sn");
-      appendStringFlag(args, params, "botName", "--bot-name");
-      appendStringFlag(args, params, "triggerType", "--trigger-type");
-      appendStringFlag(args, params, "start", "--start");
-      appendStringFlag(args, params, "end", "--end");
-      appendStringFlag(args, params, "at", "--at");
+      assertAllowedKeys(params, VTD_LIST_ALLOWED_KEYS);
+      for (const [key, flag] of VTD_LIST_STRING_FLAGS) {
+        appendStringFlag(args, params, key, flag);
+      }
+      appendEnumFlag(args, params, "orderDir", "--order-dir", VTD_ORDER_DIRECTIONS);
       appendPositiveIntegerFlag(args, params, "page", "--page", VTD_MAX_PAGE);
       appendPositiveIntegerFlag(args, params, "pageSize", "--page-size", VTD_MAX_PAGE_SIZE);
       break;
@@ -238,8 +315,9 @@ function buildArgs(command: VtdInvokeCommand, value: unknown): string[] {
       args.push(requiredPositionalString(params, "sliceId"));
       break;
     case "trigger":
-      assertAllowedKeys(params, ["triggerId"]);
+      assertAllowedKeys(params, ["triggerId", "all"]);
       args.push(requiredPositionalString(params, "triggerId"));
+      appendBooleanFlag(args, params, "all", "--all");
       break;
   }
   args.push("--json");

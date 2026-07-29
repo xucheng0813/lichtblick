@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 export const agentChat = {
+  newConversation: "New conversation",
   title: "Agent Chat",
   assistant: "Assistant",
   you: "You",

@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
-import { Button, Link, Typography } from "@mui/material";
-import { memo, useContext, useEffect, useState } from "react";
+import { Button, Typography } from "@mui/material";
+import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import Markdown, { Components } from "react-markdown";
 
-import LinkHandlerContext from "@lichtblick/suite-base/context/LinkHandlerContext";
+import { AgentMarkdown } from "@lichtblick/suite-base/components/AgentMarkdown";
 import { ChatMessage, LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
 
 import { useStyles } from "./AgentChatSidebar.style";
@@ -21,97 +20,6 @@ type MessageListProps = {
 };
 
 const MESSAGE_WINDOW_SIZE = 100;
-
-const MarkdownLink: NonNullable<Components["a"]> = ({ children, href }) => {
-  const handleLink = useContext(LinkHandlerContext);
-
-  return (
-    <Link
-      href={href}
-      rel="noopener noreferrer"
-      target="_blank"
-      onClick={(event) => {
-        handleLink(event, href ?? "");
-      }}
-    >
-      {children}
-    </Link>
-  );
-};
-
-type ImageTarget = {
-  hasAdditionalParameters: boolean;
-  label: string;
-};
-
-function imageTarget(src: string): ImageTarget {
-  const parameterIndex = src.search(/[?#]/u);
-  const fallbackLabel = parameterIndex === -1 ? src : src.slice(0, parameterIndex);
-  try {
-    const url = new URL(src, globalThis.location.href);
-    return {
-      hasAdditionalParameters: url.search !== "" || url.hash !== "",
-      label: url.origin === "null" ? fallbackLabel : `${url.origin}${url.pathname}`,
-    };
-  } catch {
-    return {
-      hasAdditionalParameters: parameterIndex !== -1,
-      label: fallbackLabel,
-    };
-  }
-}
-
-function DeferredMarkdownImage(props: { alt?: string; src: string }): React.JSX.Element {
-  const { alt, src } = props;
-  const { classes } = useStyles();
-  const { t } = useTranslation("agentChat");
-  const [approvedSrc, setApprovedSrc] = useState<string>();
-  const target = imageTarget(src);
-  const additionalParametersLabel = target.hasAdditionalParameters
-    ? t("imageHasAdditionalParameters", { defaultValue: "Includes additional parameters" })
-    : undefined;
-  const approvalLabel =
-    additionalParametersLabel == undefined
-      ? target.label
-      : `${target.label} (${additionalParametersLabel})`;
-
-  if (approvedSrc === src) {
-    return (
-      <img
-        className={classes.markdownImage}
-        alt={alt ?? ""}
-        decoding="async"
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        src={src}
-      />
-    );
-  }
-
-  return (
-    <Button
-      aria-label={alt == undefined || alt === "" ? approvalLabel : `${approvalLabel}: ${alt}`}
-      className={classes.imagePlaceholder}
-      size="small"
-      title={src}
-      variant="outlined"
-      onClick={() => {
-        setApprovedSrc(src);
-      }}
-    >
-      {approvalLabel}
-    </Button>
-  );
-}
-
-const MarkdownImage: NonNullable<Components["img"]> = ({ alt, src }) => {
-  return src == undefined || src === "" ? <>{alt}</> : <DeferredMarkdownImage alt={alt} src={src} />;
-};
-
-const MARKDOWN_COMPONENTS: Components = {
-  a: MarkdownLink,
-  img: MarkdownImage,
-};
 
 const MessageItem = memo(function MemoizedMessageItem({
   message,
@@ -138,11 +46,7 @@ const MessageItem = memo(function MemoizedMessageItem({
       >
         {isUser ? t("you") : t("assistant")}
       </Typography>
-      <div className={classes.markdown}>
-        <Markdown components={MARKDOWN_COMPONENTS} skipHtml>
-          {message.content}
-        </Markdown>
-      </div>
+      <AgentMarkdown>{message.content}</AgentMarkdown>
       {message.toolRuns?.map((toolRun) => (
         <ToolRunCard key={toolRun.id} toolRun={toolRun} />
       ))}

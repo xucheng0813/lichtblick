@@ -132,6 +132,85 @@ describe("VtdCliService", () => {
     await expect(invocation).resolves.toEqual({ data: [{ id: 1 }] });
   });
 
+  it("emits a flag for every accepted list filter so none is silently discarded", async () => {
+    const child = createFakeChild();
+    mockChild(child);
+    const service = new VtdCliService();
+
+    const invocation = invoke(service, "list", {
+      botSnExact: "SN20240601001",
+      dataDay: "20260727",
+      dataTos: "tos://bucket/file.mcap",
+      dataType: "2",
+      fixData: "0",
+      id: "1234",
+      inspection: "1",
+      orderBy: "trigger_time",
+      orderDir: "DESC",
+      queryEnd: "2026-07-27 13:00:00",
+      queryStart: "2026-07-27 12:00:00",
+      queryTime: "2026-07-27 12:30:00",
+      triggerTime: "2026-07-27 12:00:00",
+    });
+    const args = mockSpawn.mock.calls[0]?.[1] as string[];
+    for (const flag of [
+      "--id",
+      "--bot-sn-exact",
+      "--data-type",
+      "--inspection",
+      "--fix-data",
+      "--trigger-time",
+      "--query-start",
+      "--query-end",
+      "--query-time",
+      "--data-day",
+      "--data-tos",
+      "--order-by",
+      "--order-dir",
+    ]) {
+      expect(args).toContain(flag);
+    }
+    finishWithJson(child, { data: [] });
+    await expect(invocation).resolves.toEqual({ data: [] });
+  });
+
+  it("validates the enum and boolean parameter kinds before spawning", async () => {
+    const service = new VtdCliService();
+
+    await expect(invoke(service, "list", { orderDir: "sideways" })).rejects.toThrow(
+      "must be one of: ASC, DESC",
+    );
+    await expect(
+      invoke(service, "trigger", { all: "yes", triggerId: "trigger-1" }),
+    ).rejects.toThrow("must be a boolean");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("appends the trigger --all flag only when it is true", async () => {
+    const child = createFakeChild();
+    mockChild(child);
+    const service = new VtdCliService();
+
+    const invocation = invoke(service, "trigger", { all: true, triggerId: "trigger-1" });
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "vtd",
+      ["trigger", "trigger-1", "--all", "--json"],
+      { shell: false },
+    );
+    finishWithJson(child, { records: [] });
+    await expect(invocation).resolves.toEqual({ records: [] });
+
+    mockSpawn.mockClear();
+    const secondChild = createFakeChild();
+    mockChild(secondChild);
+    const withoutAll = invoke(service, "trigger", { all: false, triggerId: "trigger-1" });
+    expect(mockSpawn).toHaveBeenCalledWith("vtd", ["trigger", "trigger-1", "--json"], {
+      shell: false,
+    });
+    finishWithJson(secondChild, { records: [] });
+    await expect(withoutAll).resolves.toEqual({ records: [] });
+  });
+
   it("constructs positional and slice arguments without a shell", async () => {
     const sliceChild = createFakeChild();
     const detailChild = createFakeChild();

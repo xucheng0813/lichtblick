@@ -69,58 +69,6 @@ export const useStyles = makeStyles()((theme) => ({
   userRoleLabel: {
     color: theme.palette.primary.contrastText,
   },
-  markdown: {
-    fontFamily: theme.typography.body2.fontFamily,
-    fontSize: theme.typography.body2.fontSize,
-    lineHeight: theme.typography.body2.lineHeight,
-
-    "p, ul, ol, pre, blockquote": {
-      margin: theme.spacing(0.75, 0),
-
-      "&:first-child": {
-        marginTop: 0,
-      },
-      "&:last-child": {
-        marginBottom: 0,
-      },
-    },
-    "ul, ol": {
-      paddingLeft: theme.spacing(2.5),
-    },
-    pre: {
-      maxWidth: "100%",
-      overflowX: "auto",
-      padding: theme.spacing(1),
-      backgroundColor: theme.palette.background.default,
-      borderRadius: theme.shape.borderRadius,
-    },
-    code: {
-      fontFamily: customTypography.fontMonospace,
-      padding: theme.spacing(0, 0.25),
-      backgroundColor: theme.palette.action.selected,
-      borderRadius: theme.shape.borderRadius,
-    },
-    "pre code": {
-      padding: 0,
-      backgroundColor: "transparent",
-    },
-    a: {
-      color: "inherit",
-      textDecoration: "underline",
-    },
-  },
-  markdownImage: {
-    display: "block",
-    maxWidth: "100%",
-    height: "auto",
-    margin: theme.spacing(0.75, 0),
-  },
-  imagePlaceholder: {
-    maxWidth: "100%",
-    overflowWrap: "anywhere",
-    textAlign: "left",
-    textTransform: "none",
-  },
   toolCard: {
     marginTop: theme.spacing(1),
     padding: theme.spacing(1),

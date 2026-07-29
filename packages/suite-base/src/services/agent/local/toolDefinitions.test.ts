@@ -6,7 +6,12 @@ import { LOCAL_AGENT_TOOL_DEFINITIONS } from "./toolDefinitions";
 describe("LOCAL_AGENT_TOOL_DEFINITIONS", () => {
   it("exposes exactly the contracted tool allowlist with object schemas", () => {
     expect(LOCAL_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
+      "load_skill",
+      "memory_write",
+      "memory_forget",
+      "memory_list",
       "vtd_search",
+      "vtd_trigger",
       "vtd_detail",
       "vtd_topics",
       "vtd_slice_store",
