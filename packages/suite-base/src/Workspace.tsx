@@ -69,7 +69,6 @@ import { TopicList } from "@lichtblick/suite-base/components/TopicList";
 import VariablesList from "@lichtblick/suite-base/components/VariablesList";
 import { WorkspaceDialogs } from "@lichtblick/suite-base/components/WorkspaceDialogs";
 import { AllowedFileExtensions } from "@lichtblick/suite-base/constants/allowedFileExtensions";
-import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { useAppContext } from "@lichtblick/suite-base/context/AppContext";
 import {
@@ -122,7 +121,6 @@ import { createAgentMemoryStore } from "@lichtblick/suite-base/services/agent/me
 import { readAgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import {
   fetchAgentBootstrap,
-  getVizServerWorkspace,
   mergeCustomizations,
   readCachedAgentBootstrap,
 } from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
@@ -137,6 +135,10 @@ import {
 import { parseAppURLState } from "@lichtblick/suite-base/util/appURLState";
 import useBroadcast from "@lichtblick/suite-base/util/broadcast/useBroadcast";
 import isDesktopApp from "@lichtblick/suite-base/util/isDesktopApp";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspace,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 import { useWorkspaceActions } from "./context/Workspace/useWorkspaceActions";
 import { severityToBadgeColor } from "./utils";
@@ -918,23 +920,25 @@ function ConfiguredAgentWorkspaceIntegration({
   const appConfiguration = useAppConfiguration();
   const { migrationReady, snapshot } = useAgentSettings(appConfiguration, { desktop });
   const configuration = selectAgentConfiguration(snapshot, { desktop });
+  const resolvedWorkspace = resolveWorkspace(appConfiguration);
+  const vizServerWorkspace = resolveVizServerConfigured(resolvedWorkspace)
+    ? resolvedWorkspace
+    : undefined;
   const memoryStore = useMemo(
     () => createAgentMemoryStore(appConfiguration, { makeId: () => uuidv4().slice(0, 8) }),
     [appConfiguration],
   );
   const persistence = useMemo(() => {
-    const workspace = new URL(globalThis.location.href).searchParams.get("workspace")?.trim();
     const store =
-      workspace != undefined && workspace !== "" && APP_CONFIG.apiUrl
-        ? new RemoteAgentConversationStore({ workspace })
+      vizServerWorkspace != undefined
+        ? new RemoteAgentConversationStore({ workspace: vizServerWorkspace })
         : new AgentConversationStore();
     return createAgentConversationPersistence({
       conversationId: getOrCreateConversationId(() => uuidv4()),
       makeId: () => uuidv4(),
       store,
     });
-  }, []);
-  const vizServerWorkspace = getVizServerWorkspace();
+  }, [vizServerWorkspace]);
   const serverCustomizationRef = useRef(
     vizServerWorkspace == undefined
       ? undefined

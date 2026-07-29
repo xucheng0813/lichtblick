@@ -5,7 +5,6 @@
 // License, v2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
-import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import {
   AGENT_PROMPT_MAX_CUSTOM_SKILLS,
   AGENT_PROMPT_MAX_INSTRUCTIONS_LENGTH,
@@ -13,6 +12,10 @@ import {
   validateAgentPromptCustomization,
 } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import HttpService from "@lichtblick/suite-base/services/http/HttpService";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspaceBestEffort,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 export type AgentBootstrapConfig = {
   apiKey?: string;
@@ -194,10 +197,14 @@ function persistBootstrap(workspace: string, bootstrap: AgentBootstrap): void {
     ...(bootstrap.config == undefined ? {} : { config: cacheableConfig }),
   };
   try {
-    storage.setItem(
-      BOOTSTRAP_CACHE_KEY,
-      JSON.stringify({ ...readCacheRecord(), [workspace]: cacheableBootstrap }),
-    );
+    const serialized = JSON.stringify({
+      ...readCacheRecord(),
+      [workspace]: cacheableBootstrap,
+    });
+    if (serialized == undefined) {
+      return;
+    }
+    storage.setItem(BOOTSTRAP_CACHE_KEY, serialized);
   } catch {
     // The in-memory bootstrap remains usable when storage is unavailable or full.
   }
@@ -207,18 +214,6 @@ function applyBootstrap(workspace: string, bootstrap: AgentBootstrap): AgentBoot
   inMemoryBootstraps.set(workspace, bootstrap);
   persistBootstrap(workspace, bootstrap);
   return bootstrap;
-}
-
-export function getVizServerWorkspace(): string | undefined {
-  if (APP_CONFIG.apiUrl == undefined || APP_CONFIG.apiUrl.trim() === "") {
-    return undefined;
-  }
-  try {
-    const workspace = new URLSearchParams(globalThis.location.search).get("workspace")?.trim();
-    return workspace === "" ? undefined : workspace;
-  } catch {
-    return undefined;
-  }
 }
 
 export function readCachedAgentBootstrap(workspace: string): AgentBootstrap | undefined {
@@ -234,8 +229,10 @@ export function readCachedAgentBootstrap(workspace: string): AgentBootstrap | un
 }
 
 export function readCurrentAgentBootstrap(): AgentBootstrap | undefined {
-  const workspace = getVizServerWorkspace();
-  return workspace == undefined ? undefined : readCachedAgentBootstrap(workspace);
+  const workspace = resolveWorkspaceBestEffort();
+  return resolveVizServerConfigured(workspace)
+    ? readCachedAgentBootstrap(workspace)
+    : undefined;
 }
 
 export async function fetchAgentBootstrap(
