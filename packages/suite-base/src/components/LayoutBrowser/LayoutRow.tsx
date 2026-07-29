@@ -33,11 +33,26 @@ import { useLayoutManager } from "@lichtblick/suite-base/context/LayoutManagerCo
 import { useConfirm } from "@lichtblick/suite-base/hooks/useConfirm";
 import { Layout, layoutIsShared } from "@lichtblick/suite-base/services/ILayoutStorage";
 
+import { EditLayoutDescriptionDialog } from "./EditLayoutDescriptionDialog";
 import { StyledListItem, StyledMenuItem } from "./LayoutRow.style";
 import { LayoutActionMenuItem } from "./types";
 
+function canEditLayoutDescription(
+  layout: Layout,
+  { enabled }: { enabled: boolean },
+): boolean {
+  return (
+    enabled &&
+    layout.externalId != undefined &&
+    layout.syncInfo != undefined &&
+    layout.syncInfo.status !== "new" &&
+    layout.syncInfo.status !== "remotely-deleted"
+  );
+}
+
 export default React.memo(function LayoutRow({
   layout,
+  descriptionEditingEnabled = false,
   anySelectedModifiedLayouts,
   multiSelectedIds,
   selected,
@@ -50,8 +65,10 @@ export default React.memo(function LayoutRow({
   onOverwrite,
   onRevert,
   onMakePersonalCopy,
+  onSetDescription,
 }: {
   layout: Layout;
+  descriptionEditingEnabled?: boolean;
   anySelectedModifiedLayouts: boolean;
   multiSelectedIds: readonly string[];
   selected: boolean;
@@ -64,12 +81,14 @@ export default React.memo(function LayoutRow({
   onOverwrite: (item: Layout) => void;
   onRevert: (item: Layout) => void;
   onMakePersonalCopy: (item: Layout) => void;
+  onSetDescription?: (layoutId: string, description: string) => Promise<boolean>;
 }): React.JSX.Element {
   const isMounted = useMountedState();
   const [confirm, confirmModal] = useConfirm();
   const layoutManager = useLayoutManager();
 
   const [editingName, setEditingName] = useState(false);
+  const [editingDescription, setEditingDescription] = useState(false);
   const [nameFieldValue, setNameFieldValue] = useState("");
   const [isOnline, setIsOnline] = useState(layoutManager.isOnline);
   const [contextMenuTarget, setContextMenuTarget] = useState<
@@ -114,6 +133,10 @@ export default React.memo(function LayoutRow({
     setNameFieldValue(layout.name);
     setEditingName(true);
   }, [layout]);
+
+  const editDescriptionAction = useCallback(() => {
+    setEditingDescription(true);
+  }, []);
 
   const duplicateAction = useCallback(() => {
     if (layoutIsShared(layout)) {
@@ -211,6 +234,15 @@ export default React.memo(function LayoutRow({
       disabled: (layoutIsShared(layout) && !isOnline) || multiSelection,
       secondaryText: layoutIsShared(layout) && !isOnline ? "Offline" : undefined,
     },
+    canEditLayoutDescription(layout, { enabled: descriptionEditingEnabled }) &&
+      onSetDescription != undefined &&
+      !multiSelection && {
+        type: "item",
+        key: "edit-description",
+        text: "编辑描述",
+        onClick: editDescriptionAction,
+        "data-testid": "edit-layout-description",
+      },
     // For shared layouts, "Make a personal copy" is always available
     // For personal layouts, "Duplicate" is available if no modifications
     (layoutIsShared(layout) || !hasModifications) && {
@@ -333,6 +365,16 @@ export default React.memo(function LayoutRow({
       }
     >
       {confirmModal}
+      <EditLayoutDescriptionDialog
+        layoutName={layout.name}
+        open={editingDescription}
+        onClose={() => {
+          setEditingDescription(false);
+        }}
+        onSave={async (description) =>
+          (await onSetDescription?.(layout.id, description)) ?? false
+        }
+      />
       <ListItemButton
         data-testid="layout-list-item"
         selected={selected || multiSelectedIds.includes(layout.id)}

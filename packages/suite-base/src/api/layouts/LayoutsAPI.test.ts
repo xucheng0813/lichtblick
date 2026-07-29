@@ -214,6 +214,24 @@ describe("LayoutsAPI", () => {
     });
   });
 
+  describe("setDescription", () => {
+    it("should update the layout description through the compatibility endpoint", async () => {
+      const mockHttpService = jest.mocked(HttpService);
+      const mockPut = jest
+        .fn()
+        .mockResolvedValue(createMockHttpResponse({ updated: true }));
+      mockHttpService.put = mockPut;
+
+      await expect(
+        layoutsAPI.setDescription("layout-123", "用于查看设备诊断数据"),
+      ).resolves.toBe(true);
+      expect(mockPut).toHaveBeenCalledWith(
+        `workspaces/${mockWorkspace}/layouts/layout-123/description`,
+        { description: "用于查看设备诊断数据" },
+      );
+    });
+  });
+
   describe("error handling", () => {
     it("should propagate HTTP errors from getLayouts", async () => {
       const mockError = new Error("Network error");
