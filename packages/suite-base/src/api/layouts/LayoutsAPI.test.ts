@@ -77,6 +77,47 @@ describe("LayoutsAPI", () => {
     });
   });
 
+  describe("getDefaultLayout", () => {
+    it("should fetch and transform the workspace default layout", async () => {
+      const mockLayoutData: LayoutApiData = {
+        id: "external-default",
+        layoutId: "default-layout" as LayoutID,
+        name: "Workspace Default",
+        data: {
+          configById: {},
+          globalVariables: {},
+          playbackConfig: { speed: 1 },
+          userNodes: {},
+        },
+        permission: "ORG_READ",
+        from: "viz-server",
+        workspace: mockWorkspace,
+        createdAt: "2023-01-01T00:00:00.000Z",
+        updatedAt: "2023-01-02T00:00:00.000Z",
+      };
+      const mockGet = jest.fn().mockResolvedValue(createMockHttpResponse(mockLayoutData));
+      jest.mocked(HttpService).get = mockGet;
+
+      await expect(layoutsAPI.getDefaultLayout()).resolves.toEqual({
+        id: mockLayoutData.layoutId,
+        externalId: mockLayoutData.id,
+        name: mockLayoutData.name,
+        data: mockLayoutData.data,
+        permission: mockLayoutData.permission,
+        savedAt: mockLayoutData.updatedAt,
+      });
+      expect(mockGet).toHaveBeenCalledWith(`workspaces/${mockWorkspace}/default-layout`);
+    });
+
+    it("should return undefined when the workspace has no default layout", async () => {
+      const mockGet = jest.fn().mockResolvedValue(createMockHttpResponse(null));
+      jest.mocked(HttpService).get = mockGet;
+
+      await expect(layoutsAPI.getDefaultLayout()).resolves.toBeUndefined();
+      expect(mockGet).toHaveBeenCalledWith(`workspaces/${mockWorkspace}/default-layout`);
+    });
+  });
+
   describe("getLayout", () => {
     it("should throw not implemented error", async () => {
       await expect(layoutsAPI.getLayout()).rejects.toThrow("Method not implemented.");
@@ -240,6 +281,14 @@ describe("LayoutsAPI", () => {
       mockHttpService.get = mockGet;
 
       await expect(layoutsAPI.getLayouts()).rejects.toThrow("Network error");
+    });
+
+    it("should propagate HTTP errors from getDefaultLayout", async () => {
+      const mockError = new Error("Default layout unavailable");
+      const mockGet = jest.fn().mockRejectedValue(mockError);
+      jest.mocked(HttpService).get = mockGet;
+
+      await expect(layoutsAPI.getDefaultLayout()).rejects.toThrow("Default layout unavailable");
     });
 
     it("should propagate HTTP errors from deleteLayout", async () => {

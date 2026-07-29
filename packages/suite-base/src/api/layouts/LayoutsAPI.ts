@@ -17,6 +17,17 @@ import {
 } from "@lichtblick/suite-base/services/IRemoteLayoutStorage";
 import HttpService from "@lichtblick/suite-base/services/http/HttpService";
 
+function toRemoteLayout(layout: LayoutApiResponse): RemoteLayout {
+  return {
+    id: layout.layoutId,
+    externalId: layout.id,
+    name: layout.name,
+    data: layout.data,
+    permission: layout.permission,
+    savedAt: layout.updatedAt as ISO8601Timestamp,
+  };
+}
+
 export class LayoutsAPI implements IRemoteLayoutStorage {
   public readonly workspace: string;
   public readonly workspacePath: string = "workspaces";
@@ -31,14 +42,15 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
       `${this.workspacePath}/${this.workspace}/${this.layoutPath}`,
     );
 
-    return layoutData.map((layout) => ({
-      id: layout.layoutId,
-      externalId: layout.id,
-      name: layout.name,
-      data: layout.data,
-      permission: layout.permission,
-      savedAt: layout.updatedAt as ISO8601Timestamp,
-    }));
+    return layoutData.map(toRemoteLayout);
+  }
+
+  public async getDefaultLayout(): Promise<RemoteLayout | undefined> {
+    const { data: layoutData } = await HttpService.get<LayoutApiResponse | null>(
+      `${this.workspacePath}/${this.workspace}/default-layout`,
+    );
+
+    return layoutData == undefined ? undefined : toRemoteLayout(layoutData);
   }
 
   public async getLayout(): Promise<RemoteLayout | undefined> {
@@ -60,16 +72,7 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
 
     const { layout: layoutData } = data;
 
-    const transformedLayout = {
-      id: layoutData.layoutId,
-      externalId: layoutData.id,
-      name: layoutData.name,
-      data: layoutData.data,
-      permission: layoutData.permission,
-      savedAt: layoutData.updatedAt as ISO8601Timestamp,
-    };
-
-    return transformedLayout;
+    return toRemoteLayout(layoutData);
   }
 
   public async updateLayout(params: UpdateLayoutRequest): Promise<UpdateLayoutResponse> {
@@ -85,14 +88,7 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
     );
 
     // Transform the HTTP response into the expected UpdateLayoutResponse format
-    const newLayout: RemoteLayout = {
-      id: layoutData.layoutId,
-      externalId: layoutData.id,
-      name: layoutData.name,
-      data: layoutData.data,
-      permission: layoutData.permission,
-      savedAt: layoutData.updatedAt as ISO8601Timestamp,
-    };
+    const newLayout = toRemoteLayout(layoutData);
 
     return { status: "success", newLayout };
   }

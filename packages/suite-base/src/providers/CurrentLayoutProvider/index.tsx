@@ -39,6 +39,7 @@ import {
   SwapPanelPayload,
 } from "@lichtblick/suite-base/context/CurrentLayoutContext/actions";
 import { useLayoutManager } from "@lichtblick/suite-base/context/LayoutManagerContext";
+import { useRemoteLayoutStorage } from "@lichtblick/suite-base/context/RemoteLayoutStorageContext";
 import { useUserProfileStorage } from "@lichtblick/suite-base/context/UserProfileStorageContext";
 import {
   BUSY_POLLING_INTERVAL_MS,
@@ -47,9 +48,11 @@ import {
   MAX_SUPPORTED_LAYOUT_VERSION,
   ORG_PERMISSION_PREFIX,
 } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/constants";
+import { hasInjectedDefaultLayout } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/defaultLayout";
 import useUpdateSharedPanelState from "@lichtblick/suite-base/providers/CurrentLayoutProvider/hooks/useUpdateSharedPanelState";
 import { loadDefaultLayouts } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/loadDefaultLayouts";
 import panelsReducer from "@lichtblick/suite-base/providers/CurrentLayoutProvider/reducers";
+import { selectCloudDefaultLayout } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/selectCloudDefaultLayout";
 import { AppEvent } from "@lichtblick/suite-base/services/IAnalytics";
 import { LayoutLoader } from "@lichtblick/suite-base/services/ILayoutLoader";
 import { LayoutManagerEventTypes } from "@lichtblick/suite-base/services/ILayoutManager";
@@ -74,12 +77,14 @@ export default function CurrentLayoutProvider({
   const { enqueueSnackbar } = useSnackbar();
   const { getUserProfile, setUserProfile } = useUserProfileStorage();
   const layoutManager = useLayoutManager();
+  const remoteLayoutStorage = useRemoteLayoutStorage();
   const analytics = useAnalytics();
   const isMounted = useMountedState();
 
   const { t } = useTranslation("general");
 
   const appParameters = useAppParameters();
+  const initialLayoutLoadStarted = useRef(false);
 
   const [mosaicId] = useState(() => uuidv4());
 
@@ -279,6 +284,11 @@ export default function CurrentLayoutProvider({
 
   // Load initial state by re-selecting the last selected layout from the UserProfile.
   useAsync(async () => {
+    if (initialLayoutLoadStarted.current) {
+      return;
+    }
+    initialLayoutLoadStarted.current = true;
+
     // Don't restore the layout if there's one specified in the app state url.
     if (windowAppURLState()?.layoutId) {
       return;
@@ -315,6 +325,16 @@ export default function CurrentLayoutProvider({
 
     const layouts = await layoutManager.getLayouts();
 
+    // The last locally selected layout has highest priority when it can still be restored.
+    const layout = currentLayoutId
+      ? layouts.find((element) => element.id === currentLayoutId)
+      : undefined;
+
+    if (layout) {
+      await setSelectedLayoutId(currentLayoutId, { saveToProfile: false });
+      return;
+    }
+
     // Check if there's a layout specified by app parameter. When multiple layouts share the
     // name, prefer the organizational (shared) layout over a local one.
     const matchingLayouts = layouts.filter((l) => l.name === appParameters.defaultLayout);
@@ -335,14 +355,18 @@ export default function CurrentLayoutProvider({
       });
     }
 
-    // Retrieve the selected layout id from the user's profile. If there's no layout specified
-    // or we can't load it then save and select a default layout
-    const layout = currentLayoutId
-      ? layouts.find((element) => element.id === currentLayoutId)
-      : undefined;
-
-    if (layout) {
-      await setSelectedLayoutId(currentLayoutId, { saveToProfile: false });
+    // A Docker-injected default retains priority over the cloud fallback. The existing fallback
+    // below will persist that injected data only when there are no layouts at all.
+    if (!hasInjectedDefaultLayout && remoteLayoutStorage?.getDefaultLayout != undefined) {
+      await selectCloudDefaultLayout({
+        layoutManager,
+        remoteLayoutStorage,
+        selectLayout: async (id) => {
+          await setSelectedLayoutId(id);
+        },
+      });
+      // A configured server owns this fallback. On null, failure, or timeout, keep the current
+      // unselected state instead of creating a local copy that a later sync could upload.
       return;
     }
 
@@ -358,7 +382,7 @@ export default function CurrentLayoutProvider({
     await setSelectedLayoutId(defaultLayout.id);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getUserProfile, layoutManager, setSelectedLayoutId, enqueueSnackbar]);
+  }, [getUserProfile, layoutManager, remoteLayoutStorage, setSelectedLayoutId, enqueueSnackbar]);
 
   const { updateSharedPanelState } = useUpdateSharedPanelState(layoutStateRef, setLayoutState);
 

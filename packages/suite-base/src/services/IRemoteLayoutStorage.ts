@@ -34,6 +34,9 @@ export interface IRemoteLayoutStorage {
 
   getLayouts: () => Promise<readonly RemoteLayout[]>;
 
+  /** Fetches the workspace's selected default layout, if one is configured. */
+  getDefaultLayout?: () => Promise<RemoteLayout | undefined>;
+
   getLayout: (id: LayoutID) => Promise<RemoteLayout | undefined>;
 
   saveNewLayout: (params: SaveNewLayoutParams) => Promise<RemoteLayout>;

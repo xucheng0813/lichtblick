@@ -14,6 +14,8 @@ import { defaultPlaybackConfig } from "@lichtblick/suite-base/providers/CurrentL
 const staticDefaultLayout = (globalThis as { LICHTBLICK_SUITE_DEFAULT_LAYOUT?: LayoutData })
   .LICHTBLICK_SUITE_DEFAULT_LAYOUT;
 
+export const hasInjectedDefaultLayout = staticDefaultLayout != undefined;
+
 /**
  * This is loaded when the user has no layout selected on application launch
  * to avoid presenting the user with a blank layout.
