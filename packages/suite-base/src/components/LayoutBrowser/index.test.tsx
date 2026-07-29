@@ -3,11 +3,12 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import { LayoutSelectionState } from "@lichtblick/suite-base/components/LayoutBrowser/types";
 import { useAnalytics } from "@lichtblick/suite-base/context/AnalyticsContext";
+import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import {
   LayoutID,
   useCurrentLayoutSelector,
@@ -23,7 +24,11 @@ import { useLayoutNavigation } from "@lichtblick/suite-base/hooks/useLayoutNavig
 import { usePrompt } from "@lichtblick/suite-base/hooks/usePrompt";
 import { Layout } from "@lichtblick/suite-base/services/ILayoutStorage";
 import MockLayoutManager from "@lichtblick/suite-base/services/LayoutManager/MockLayoutManager";
+import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
+import HttpService from "@lichtblick/suite-base/services/http/HttpService";
+import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import LayoutBuilder from "@lichtblick/suite-base/testing/builders/LayoutBuilder";
+import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAppConfiguration";
 import { BasicBuilder } from "@lichtblick/test-builders";
 
 import LayoutBrowser from "./index";
@@ -34,6 +39,10 @@ jest.mock("notistack", () => ({
 
 jest.mock("@lichtblick/suite-base/context/LayoutManagerContext", () => ({
   useLayoutManager: jest.fn(),
+}));
+
+jest.mock("@lichtblick/suite-base/context/AppConfigurationContext", () => ({
+  useAppConfiguration: jest.fn(),
 }));
 
 jest.mock("@lichtblick/suite-base/context/AnalyticsContext", () => ({
@@ -120,7 +129,10 @@ describe("LayoutBrowser", () => {
   const ids = [BasicBuilder.string(), BasicBuilder.string()];
 
   beforeEach(() => {
+    globalThis.history.replaceState({}, "", "/");
+    setHttpBaseUrl(undefined);
     dispatchMock = jest.fn();
+    (useAppConfiguration as jest.Mock).mockReturnValue(makeMockAppConfiguration());
     (useLayoutManager as jest.Mock).mockReturnValue(mockLayoutManager);
     (useAnalytics as jest.Mock).mockReturnValue({ logEvent: jest.fn() });
     (useCurrentLayoutSelector as jest.Mock).mockReturnValue(undefined);
@@ -151,12 +163,79 @@ describe("LayoutBrowser", () => {
   });
 
   afterEach(() => {
+    setHttpBaseUrl(undefined);
     jest.clearAllMocks();
   });
 
   it("renders without crashing", () => {
     render(<LayoutBrowser />);
     expect(screen.getByTestId("sidebar-content")).toBeInTheDocument();
+  });
+
+  it("enables layout description editing when workspace and viz-server are configured", () => {
+    globalThis.history.replaceState({}, "", "/?workspace=test-workspace");
+    setHttpBaseUrl("http://viz.example.com:9903/lichtblick");
+    const originalLayoutSectionMock = jest.requireMock("./LayoutSection").default;
+    const capturedProps: Record<string, unknown>[] = [];
+    jest.requireMock("./LayoutSection").default = jest
+      .fn()
+      .mockImplementation((props: Record<string, unknown>) => {
+        capturedProps.push(props);
+        return <div data-testid="layout-section" />;
+      });
+
+    try {
+      render(<LayoutBrowser />);
+      expect(capturedProps.length).toBeGreaterThan(0);
+      expect(
+        capturedProps.every((props) => props.descriptionEditingEnabled === true),
+      ).toBe(true);
+    } finally {
+      jest.requireMock("./LayoutSection").default = originalLayoutSectionMock;
+    }
+  });
+
+  it.each([
+    [
+      new HttpError("not found", 404, "Not Found"),
+      "布局尚未同步到服务器,请稍后重试",
+    ],
+    [new Error("network failed"), "描述保存失败"],
+  ])("shows the expected description save error", async (error, expectedMessage) => {
+    globalThis.history.replaceState({}, "", "/?workspace=test-workspace");
+    setHttpBaseUrl("http://viz.example.com:9903/lichtblick");
+    const enqueueSnackbar = jest.fn();
+    (jest.requireMock("notistack").useSnackbar as jest.Mock).mockReturnValue({
+      enqueueSnackbar,
+    });
+    const put = jest.spyOn(HttpService, "put").mockRejectedValue(error);
+    const originalLayoutSectionMock = jest.requireMock("./LayoutSection").default;
+    let onSetDescription:
+      | ((layoutId: string, description: string) => Promise<boolean>)
+      | undefined;
+    jest.requireMock("./LayoutSection").default = jest
+      .fn()
+      .mockImplementation(
+        (props: {
+          onSetDescription?: (layoutId: string, description: string) => Promise<boolean>;
+        }) => {
+          onSetDescription = props.onSetDescription;
+          return <div data-testid="layout-section" />;
+        },
+      );
+
+    try {
+      render(<LayoutBrowser />);
+      await act(async () => {
+        await expect(onSetDescription?.("layout-1", "诊断布局")).resolves.toBe(false);
+      });
+      expect(enqueueSnackbar).toHaveBeenCalledWith(expectedMessage, {
+        variant: "error",
+      });
+    } finally {
+      put.mockRestore();
+      jest.requireMock("./LayoutSection").default = originalLayoutSectionMock;
+    }
   });
 
   describe("processAction useEffect", () => {
