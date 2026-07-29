@@ -43,6 +43,7 @@ const SUBSCRIPTION_RETRY_BASE_MS = 250;
 const SUBSCRIPTION_RETRY_MAX_MS = 2_000;
 const MAX_TERMINAL_REQUEST_IDS = 1_024;
 const AGENT_CHAT_DISABLED_ERROR = "Agent chat is disabled";
+const CONVERSATION_LIST_REFRESH_DELAY_MS = 2_250;
 
 type AgentChatProviderProps = PropsWithChildren<{
   client?: IAgentClient;
@@ -278,9 +279,13 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
   let lifecycle: Lifecycle | undefined;
   // Assigned on mount; the actions object is constructed before a persistence instance exists.
   let activePersistence: AgentConversationPersistence | undefined;
+  let conversationListRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let conversationOperationQueue: Promise<void> = Promise.resolve();
+  let conversationRefreshGeneration = 0;
   let nextGeneration = 0;
   let queuedProposal: ProposalRecord | undefined;
   let sessionPromise: SessionPromise | undefined;
+  let suspendUiPersistence = false;
   let subscription: Subscription | undefined;
 
   const confirmingToolRuns = new Map<string, Promise<void>>();
@@ -508,20 +513,73 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       }
       stopLifecycle(active.generation);
       startLifecycle(active.client);
-      store.setState(emptyState());
+      store.setState(emptyStateWithConversationList());
     },
     newConversation: () => {
-      assertCommittedEnabled();
-      // Rotate the stored conversation before restarting. The next session rehydrates from
-      // storage, so clearing only the UI would leave the model still carrying the old transcript
-      // while the user believes they started over.
-      activePersistence?.startNewConversation();
-      const active = lifecycle;
-      if (active != undefined) {
+      startNewConversation();
+    },
+    startNewConversation,
+    switchConversation: async (conversationId) => {
+      await enqueueConversationOperation(async () => {
+        assertCommittedEnabled();
+        const persistence = activePersistence;
+        const active = lifecycle;
+        if (
+          persistence == undefined ||
+          active == undefined ||
+          conversationId === persistence.getActiveConversationId()
+        ) {
+          return;
+        }
+
+        suspendUiPersistence = true;
         stopLifecycle(active.generation);
-        startLifecycle(active.client);
-      }
-      store.setState(emptyState());
+        try {
+          await persistence.switchConversation(conversationId);
+          const restarted = startLifecycle(active.client);
+          store.setState(
+            emptyStateWithConversationList(persistence.getActiveConversationId()),
+          );
+          const messages = await persistence.restoreUiMessages();
+          if (lifecycle?.generation === restarted.generation) {
+            store.setState({ messages: messages as AgentChatState["messages"] });
+          }
+        } finally {
+          suspendUiPersistence = false;
+        }
+      });
+    },
+    deleteConversation: async (conversationId) => {
+      await enqueueConversationOperation(async () => {
+        assertCommittedEnabled();
+        const persistence = activePersistence;
+        if (persistence == undefined) {
+          return;
+        }
+
+        const active = lifecycle;
+        const deletingActive = conversationId === persistence.getActiveConversationId();
+        if (deletingActive && active != undefined) {
+          suspendUiPersistence = true;
+          stopLifecycle(active.generation);
+        }
+        try {
+          const rotated = await persistence.deleteConversation(conversationId);
+          if (rotated && active != undefined) {
+            startLifecycle(active.client);
+            store.setState(
+              emptyStateWithConversationList(persistence.getActiveConversationId()),
+            );
+          }
+          await refreshConversationList();
+        } finally {
+          suspendUiPersistence = false;
+        }
+      });
+    },
+    refreshConversations: async () => {
+      assertCommittedEnabled();
+      await refreshConversationList();
     },
   };
 
@@ -532,6 +590,10 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
 
   function emptyState(): Omit<AgentChatState, "actions"> {
     return {
+      activeConversationId: undefined,
+      conversations: [],
+      conversationsLoading: false,
+      conversationsOffline: false,
       error: undefined,
       messages: [],
       pendingProposal: undefined,
@@ -541,6 +603,76 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       status: "idle",
       waitingRequest: undefined,
     };
+  }
+
+  function emptyStateWithConversationList(
+    activeConversationId = activePersistence?.getActiveConversationId(),
+  ): Omit<AgentChatState, "actions"> {
+    const state = store.getState();
+    return {
+      ...emptyState(),
+      activeConversationId,
+      conversations: state.conversations,
+      conversationsLoading: state.conversationsLoading,
+      conversationsOffline: state.conversationsOffline,
+    };
+  }
+
+  async function enqueueConversationOperation(
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const queued = conversationOperationQueue.then(operation, operation);
+    conversationOperationQueue = queued.catch(() => {});
+    await queued;
+  }
+
+  function startNewConversation(): void {
+    assertCommittedEnabled();
+    const persistence = activePersistence;
+    const active = lifecycle;
+    if (persistence == undefined) {
+      return;
+    }
+
+    suspendUiPersistence = true;
+    if (active != undefined) {
+      stopLifecycle(active.generation);
+    }
+    const conversationId = persistence.startNewConversation();
+    if (active != undefined) {
+      startLifecycle(active.client);
+    }
+    store.setState(emptyStateWithConversationList(conversationId));
+    suspendUiPersistence = false;
+    void refreshConversationList();
+  }
+
+  async function refreshConversationList(): Promise<void> {
+    const persistence = activePersistence;
+    if (persistence == undefined) {
+      return;
+    }
+    const generation = ++conversationRefreshGeneration;
+    store.setState({ conversationsLoading: true });
+    const result = await persistence.listConversations();
+    if (activePersistence !== persistence || generation !== conversationRefreshGeneration) {
+      return;
+    }
+    store.setState({
+      conversations: result.items,
+      conversationsLoading: false,
+      conversationsOffline: result.offline,
+    });
+  }
+
+  function scheduleConversationListRefresh(): void {
+    if (conversationListRefreshTimer != undefined) {
+      clearTimeout(conversationListRefreshTimer);
+    }
+    conversationListRefreshTimer = setTimeout(() => {
+      conversationListRefreshTimer = undefined;
+      void refreshConversationList();
+    }, CONVERSATION_LIST_REFRESH_DELAY_MS);
   }
 
   function startLifecycle(client: IAgentClient): Lifecycle {
@@ -1122,6 +1254,11 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
   return {
     disable: () => {
       committedEnabled = false;
+      conversationRefreshGeneration++;
+      if (conversationListRefreshTimer != undefined) {
+        clearTimeout(conversationListRefreshTimer);
+        conversationListRefreshTimer = undefined;
+      }
       const pendingInitialization = initializationGate;
       if (lifecycle != undefined) {
         stopLifecycle();
@@ -1137,11 +1274,15 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         stopLifecycle();
       }
       const active = startLifecycle(client);
-      store.setState(emptyState());
       activePersistence = persistence;
+      store.setState({
+        ...emptyState(),
+        activeConversationId: persistence?.getActiveConversationId(),
+      });
 
       let unsubscribe: (() => void) | undefined;
       if (persistence != undefined) {
+        void refreshConversationList();
         // Restore into the state this mount just cleared. A later generation means the user has
         // moved on, so the restored transcript is dropped rather than replacing newer messages.
         void persistence
@@ -1164,15 +1305,23 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
           const { messages } = store.getState();
           if (messages !== lastMessages) {
             lastMessages = messages;
-            persistence.onUiMessagesChanged(messages);
+            if (!suspendUiPersistence) {
+              persistence.onUiMessagesChanged(messages);
+              scheduleConversationListRefresh();
+            }
           }
         });
       }
 
       return () => {
         unsubscribe?.();
+        conversationRefreshGeneration++;
+        if (conversationListRefreshTimer != undefined) {
+          clearTimeout(conversationListRefreshTimer);
+          conversationListRefreshTimer = undefined;
+        }
         activePersistence = undefined;
-        stopLifecycle(active.generation);
+        stopLifecycle();
       };
     },
     store,

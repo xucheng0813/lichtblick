@@ -9,6 +9,7 @@ import { createContext } from "react";
 import { type StoreApi, useStore } from "zustand";
 
 import { useGuaranteedContext } from "@lichtblick/hooks";
+import type { ConversationSummary } from "@lichtblick/suite-base/services/agent/memory/RemoteAgentConversationStore";
 import type { ChatMessage, LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
 
 export type AgentChatStatus =
@@ -21,6 +22,10 @@ export type AgentChatStatus =
 export type AgentChatState = {
   sessionId?: string;
   messages: ChatMessage[];
+  conversations: ConversationSummary[];
+  activeConversationId?: string;
+  conversationsLoading: boolean;
+  conversationsOffline: boolean;
   status: AgentChatStatus;
   waitingRequest?: {
     requestId: string;
@@ -43,8 +48,13 @@ export type AgentChatState = {
     notifyCatalogReady: (requestId: string) => void;
     cancelWaiting: () => void;
     reset: () => void;
-    /** Discards the current conversation, including its stored transcript, and starts a fresh one. */
+    /** Compatibility alias for startNewConversation. */
     newConversation: () => void;
+    /** Leaves the current conversation in history and starts a fresh one. */
+    startNewConversation: () => void;
+    switchConversation: (conversationId: string) => Promise<void>;
+    deleteConversation: (conversationId: string) => Promise<void>;
+    refreshConversations: () => Promise<void>;
   };
 };
 

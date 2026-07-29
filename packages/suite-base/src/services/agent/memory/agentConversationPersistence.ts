@@ -8,7 +8,8 @@
 import { KEY_WORKSPACE_PREFIX } from "@lichtblick/suite-base/constants/browserStorageKeys";
 import type { LlmMessage } from "@lichtblick/suite-base/services/agent/local/types";
 
-import type { AgentConversationStore, StoredConversation } from "./AgentConversationStore";
+import type { StoredConversation } from "./AgentConversationStore";
+import type { ConversationListPage } from "./RemoteAgentConversationStore";
 
 export const AGENT_CONVERSATION_ID_KEY = `${KEY_WORKSPACE_PREFIX}studio.agent.conversation-id`;
 
@@ -50,20 +51,34 @@ function rememberConversationId(conversationId: string): void {
  * both and writes them as one record.
  */
 export type AgentConversationPersistence = {
+  getActiveConversationId: () => string;
   /** Resolves the stored record once; repeat calls reuse the same read. */
   restoreLlmHistory: () => Promise<LlmMessage[]>;
   restoreUiMessages: () => Promise<unknown[]>;
   onLlmHistoryChanged: (history: readonly LlmMessage[]) => void;
   onUiMessagesChanged: (messages: readonly unknown[]) => void;
   /**
-   * Discards the current conversation and starts a new one.
+   * Leaves the current conversation in storage and starts a new one.
    *
    * Rotating the id rather than only clearing state matters: the orchestrator re-reads the stored
    * transcript whenever it creates a session, so a "new conversation" that left the old record in
    * place would silently pull the old history back into the model's context.
    */
-  startNewConversation: () => void;
+  startNewConversation: () => string;
+  switchConversation: (conversationId: string) => Promise<void>;
+  deleteConversation: (conversationId: string) => Promise<boolean>;
+  listConversations: (
+    page?: number,
+    pageSize?: number,
+  ) => Promise<ConversationListPage & { offline: boolean }>;
   clear: () => void;
+};
+
+type ConversationStore = {
+  load: (conversationId: string) => Promise<StoredConversation | undefined>;
+  save: (conversation: StoredConversation) => Promise<void>;
+  delete: (conversationId: string) => Promise<void>;
+  list?: (page: number, pageSize: number) => Promise<ConversationListPage>;
 };
 
 export function createAgentConversationPersistence({
@@ -76,7 +91,7 @@ export function createAgentConversationPersistence({
   /** Mints the id for a new conversation. */
   makeId: () => string;
   now?: () => Date;
-  store: AgentConversationStore;
+  store: ConversationStore;
 }): AgentConversationPersistence {
   let conversationId = initialConversationId;
   let loaded: Promise<StoredConversation | undefined> | undefined;
@@ -106,6 +121,7 @@ export function createAgentConversationPersistence({
   };
 
   return {
+    getActiveConversationId: () => conversationId,
     restoreLlmHistory: async () => {
       await load();
       return [...llmHistory];
@@ -123,17 +139,48 @@ export function createAgentConversationPersistence({
       flush();
     },
     startNewConversation: () => {
-      const previous = conversationId;
-      writeQueue = writeQueue.then(async () => {
-        await store.delete(previous);
-      });
       conversationId = makeId();
       rememberConversationId(conversationId);
       llmHistory = [];
       uiMessages = [];
-      // Resolve rather than reset to undefined so a restore racing this call cannot re-read the
-      // discarded conversation.
       loaded = Promise.resolve(undefined);
+      return conversationId;
+    },
+    switchConversation: async (nextConversationId) => {
+      if (nextConversationId === conversationId) {
+        return;
+      }
+      await writeQueue;
+      conversationId = nextConversationId;
+      loaded = undefined;
+      llmHistory = [];
+      uiMessages = [];
+      await load();
+      rememberConversationId(conversationId);
+    },
+    deleteConversation: async (deletedConversationId) => {
+      await writeQueue;
+      await store.delete(deletedConversationId);
+      if (deletedConversationId !== conversationId) {
+        return false;
+      }
+      conversationId = makeId();
+      rememberConversationId(conversationId);
+      llmHistory = [];
+      uiMessages = [];
+      loaded = Promise.resolve(undefined);
+      return true;
+    },
+    listConversations: async (page = 1, pageSize = 50) => {
+      if (store.list == undefined) {
+        return { items: [], total: 0, offline: false };
+      }
+      try {
+        const result = await store.list(page, pageSize);
+        return { ...result, offline: false };
+      } catch {
+        return { items: [], total: 0, offline: true };
+      }
     },
     clear: () => {
       llmHistory = [];
