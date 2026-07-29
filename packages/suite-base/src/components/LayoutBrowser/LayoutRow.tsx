@@ -44,9 +44,7 @@ function canEditLayoutDescription(
   return (
     enabled &&
     layout.externalId != undefined &&
-    layout.syncInfo != undefined &&
-    layout.syncInfo.status !== "new" &&
-    layout.syncInfo.status !== "remotely-deleted"
+    layout.syncInfo?.status !== "remotely-deleted"
   );
 }
 
