@@ -119,7 +119,8 @@ describe("HttpVtdClient", () => {
       .mockResolvedValueOnce(
         jsonResponse({ download_url: "https://download/slice", mcap_slice_id: "slice-1" }),
       )
-      .mockResolvedValueOnce(jsonResponse({ download_url: "https://download/full" }));
+      .mockResolvedValueOnce(jsonResponse({ download_url: "https://download/full" }))
+      .mockResolvedValueOnce(jsonResponse({ records: [], logs: [] }));
     const client = new HttpVtdClient("http://sidecar", mockFetch);
 
     await expect(client.detail("record-1")).resolves.toEqual({ id: "record-1" });
@@ -137,6 +138,10 @@ describe("HttpVtdClient", () => {
     });
     await expect(client.url("record-1")).resolves.toEqual({
       downloadUrl: "https://download/full",
+    });
+    await expect(client.trigger({ all: true, triggerId: "trigger-1" })).resolves.toEqual({
+      logs: [],
+      records: [],
     });
 
     const requests = mockFetch.mock.calls.map(([request, init]) => {
@@ -157,6 +162,7 @@ describe("HttpVtdClient", () => {
       ],
       ["http://sidecar/vtd/slice-get", { sliceId: "slice-1" }],
       ["http://sidecar/vtd/url", { id: "record-1" }],
+      ["http://sidecar/vtd/trigger", { all: true, triggerId: "trigger-1" }],
     ]);
   });
 

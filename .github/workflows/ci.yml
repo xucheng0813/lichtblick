@@ -71,6 +71,11 @@ jobs:
 
       - run: yarn install --immutable
 
+      - name: Fetch bundled extensions
+        # Optional: the extension host is on an internal network that GitHub-hosted runners cannot
+        # reach. When unreachable the build proceeds without the bundled extensions.
+        run: yarn extensions:fetch --optional
+
       - run: ${{ matrix.config.command }}
 
   e2e-desktop:
@@ -109,6 +114,11 @@ jobs:
           restore-keys: v5-${{ runner.os }}-yarn-
 
       - run: yarn install --immutable
+
+      - name: Fetch bundled extensions
+        # Optional: the extension host is on an internal network that GitHub-hosted runners cannot
+        # reach. When unreachable the build proceeds without the bundled extensions.
+        run: yarn extensions:fetch --optional
 
       - name: Apply AppArmor Fix (Ubuntu)
         # Required for Playwright on Ubuntu to work properly
@@ -161,6 +171,11 @@ jobs:
 
       - run: yarn install --immutable
 
+      - name: Fetch bundled extensions
+        # Optional: the extension host is on an internal network that GitHub-hosted runners cannot
+        # reach. When unreachable the build proceeds without the bundled extensions.
+        run: yarn extensions:fetch --optional
+
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
@@ -202,6 +217,11 @@ jobs:
           restore-keys: v5-${{ runner.os }}-yarn-
 
       - run: yarn install --immutable
+
+      - name: Fetch bundled extensions
+        # Optional: the extension host is on an internal network that GitHub-hosted runners cannot
+        # reach. When unreachable the build proceeds without the bundled extensions.
+        run: yarn extensions:fetch --optional
 
       - name: Download all desktop blob reports
         uses: actions/download-artifact@v8

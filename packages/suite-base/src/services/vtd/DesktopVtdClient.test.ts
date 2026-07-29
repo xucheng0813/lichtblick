@@ -111,7 +111,8 @@ describe("DesktopVtdClient", () => {
       .mockResolvedValueOnce({
         ok: true,
         value: { download_url: "https://download/full" },
-      });
+      })
+      .mockResolvedValueOnce({ ok: true, value: { records: [], logs: [] } });
     testGlobal.desktopBridge = { cancelVtd, invokeVtd };
     const client = new DesktopVtdClient();
     const searchParams = { botSn: "SN001", page: 2, pageSize: 20 };
@@ -148,6 +149,10 @@ describe("DesktopVtdClient", () => {
     await expect(client.url("record-1")).resolves.toEqual({
       downloadUrl: "https://download/full",
     });
+    await expect(client.trigger({ triggerId: "trigger-1" })).resolves.toEqual({
+      records: [],
+      logs: [],
+    });
 
     expect(invokeVtd.mock.calls).toEqual([
       ["list", searchParams, expect.any(String)],
@@ -156,6 +161,7 @@ describe("DesktopVtdClient", () => {
       ["slice-store", sliceParams, expect.any(String)],
       ["slice-get", { sliceId: "slice-1" }, expect.any(String)],
       ["url", { id: "record-1" }, expect.any(String)],
+      ["trigger", { triggerId: "trigger-1" }, expect.any(String)],
     ]);
     const requestIds = invokeVtd.mock.calls.map((call) => call[2]);
     expect(new Set(requestIds).size).toBe(requestIds.length);

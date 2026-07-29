@@ -11,6 +11,7 @@ import { HTML5Backend } from "react-dnd-html5-backend";
 
 import { IdbLayoutStorage } from "@lichtblick/suite-base/IdbLayoutStorage";
 import { LayoutsAPI } from "@lichtblick/suite-base/api/layouts/LayoutsAPI";
+import { BundledExtensionInstaller } from "@lichtblick/suite-base/components/BundledExtensionInstaller";
 import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import LayoutStorageContext from "@lichtblick/suite-base/context/LayoutStorageContext";
 import NativeAppMenuContext from "@lichtblick/suite-base/context/NativeAppMenuContext";
@@ -126,6 +127,7 @@ export function StudioApp(): React.JSX.Element {
       <MultiProvider providers={providers}>
         <DocumentTitleAdapter />
         <SendNotificationToastAdapter />
+        <BundledExtensionInstaller />
         <DndProvider backend={HTML5Backend}>
           <Suspense fallback={<></>}>
             <PanelCatalogProvider>

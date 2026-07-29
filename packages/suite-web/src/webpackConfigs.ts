@@ -149,7 +149,16 @@ export const mainConfig =
         ...plugins,
         ...(appWebpackConfig.plugins ?? []),
         new CopyPlugin({
-          patterns: [{ from: path.resolve(__dirname, "..", "public") }],
+          patterns: [
+            { from: path.resolve(__dirname, "..", "public") },
+            {
+              // Bundled .foxe extensions, populated by `yarn extensions:fetch`. Optional so a
+              // build without them still succeeds; the app simply installs nothing at startup.
+              from: path.resolve(__dirname, "..", "..", "..", ".extensions"),
+              to: "extensions",
+              noErrorOnMissing: true,
+            },
+          ],
         }),
         new HtmlWebpackPlugin({
           templateContent: ({ htmlWebpackPlugin }) => `

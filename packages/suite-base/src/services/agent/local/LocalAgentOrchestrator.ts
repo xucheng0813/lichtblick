@@ -4,6 +4,13 @@
 import { v4 as uuidv4 } from "uuid";
 
 import { validateLayoutProposal } from "@lichtblick/suite-base/services/agent/layoutSchema";
+import { renderAgentMemories } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import type { AgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import {
+  EMPTY_CUSTOMIZATION,
+  resolveSkills,
+  type AgentPromptCustomization,
+} from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import type {
   AgentEvent,
   IAgentClient,
@@ -12,17 +19,21 @@ import type {
   SubscribeEventsResult,
   ToolRun,
 } from "@lichtblick/suite-base/services/agent/types";
+import { VTD_ORDER_DIRECTIONS } from "@lichtblick/suite-base/services/vtd/types";
 import type {
   IVtdClient,
   VtdSearchParams,
   VtdSliceParams,
 } from "@lichtblick/suite-base/services/vtd/types";
 
-import { LOCAL_AGENT_SYSTEM_PROMPT } from "./systemPrompt";
-import { LOCAL_AGENT_TOOL_DEFINITIONS } from "./toolDefinitions";
+
+import { renderSkill, type Skill } from "./skills";
+import { buildSystemPrompt } from "./systemPrompt";
+import { buildToolDefinitions } from "./toolDefinitions";
 import type {
   CatalogSnapshot,
   ILlmProvider,
+  LlmToolDef,
   LlmContentBlock,
   LlmMessage,
   LlmStopReason,
@@ -54,6 +65,8 @@ type RequestState = {
   messageId: string;
   signal: AbortSignal;
   catalogReady?: CatalogSnapshot;
+  /** Skills resolved for this turn; fixed so load_skill matches the advertised index. */
+  skills?: readonly Skill[];
   openedDataSource: boolean;
   openingDataSourceThisRound: boolean;
   terminal: "pending" | "done" | "error" | "aborted";
@@ -111,6 +124,16 @@ export type LocalAgentOrchestratorOptions = {
   provider: ILlmProvider;
   vtdClient: IVtdClient;
   getCatalog: () => CatalogSnapshot;
+  /** Current layout, summarized into the system prompt. Optional: absence just omits that line. */
+  getCurrentLayout?: () => unknown;
+  /** Long-term memory. Absent means the memory tools report that memory is unavailable. */
+  memoryStore?: AgentMemoryStore;
+  /** Restores a previous LLM transcript when a session is created. */
+  restoreHistory?: () => Promise<LlmMessage[]>;
+  /** Called once per completed turn so the transcript can be persisted. */
+  onHistoryChanged?: (history: readonly LlmMessage[]) => void;
+  /** User edits to the instructions and skills. Absent means built-ins only. */
+  getPromptCustomization?: () => AgentPromptCustomization;
   model?: string;
   confirmationTimeoutMs?: number;
   dependencyTimeoutMs?: number;
@@ -198,6 +221,39 @@ function optionalString(
     throw new Error(`${toolName}.${property} must be a non-empty string`);
   }
   return value;
+}
+
+function optionalBoolean(
+  input: Record<string, unknown>,
+  property: string,
+  toolName: string,
+): boolean | undefined {
+  const value = input[property];
+  if (!Object.hasOwn(input, property) || typeof value === "undefined") {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(`${toolName}.${property} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalEnum<T extends string>(
+  input: Record<string, unknown>,
+  property: string,
+  toolName: string,
+  allowed: readonly T[],
+): T | undefined {
+  const value = optionalString(input, property, toolName);
+  if (value == undefined) {
+    return undefined;
+  }
+  if (!allowed.includes(value as T)) {
+    throw new Error(
+      `${toolName}.${property} must be one of: ${allowed.join(", ")}`,
+    );
+  }
+  return value as T;
 }
 
 function optionalPositiveInteger(
@@ -304,6 +360,76 @@ function normalizeCatalog(catalog: CatalogSnapshot): {
     topics: catalog.topics,
     datatypes: Object.fromEntries(catalog.datatypes),
   };
+}
+
+/**
+ * Upper bound on the auto-injected workspace summary.
+ *
+ * The system prompt is not part of `session.history`, so #enforceHistoryBudget never sees it. A
+ * recording with thousands of topics would otherwise grow the prompt without any existing limit
+ * noticing.
+ */
+export const LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES = 4096;
+
+function readStringField(value: unknown, field: string): string | undefined {
+  if (typeof value !== "object" || value == undefined) {
+    return undefined;
+  }
+  const candidate = (value as Record<string, unknown>)[field];
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+}
+
+/**
+ * Groups catalog topics by schema so the agent can see what kind of data is loaded without
+ * spending a get_data_catalog round trip. Truncated to a byte budget: this is orientation, not a
+ * substitute for the full catalog.
+ */
+export function summarizeWorkspace(
+  catalog: CatalogSnapshot,
+  layout?: unknown,
+): string {
+  const lines: string[] = [];
+  const topicCount = catalog.topics.length;
+  if (topicCount === 0) {
+    lines.push("No data source is loaded yet.");
+  } else {
+    lines.push(`Loaded data source with ${String(topicCount)} topics.`);
+
+    const bySchema = new Map<string, string[]>();
+    for (const topic of catalog.topics) {
+      const name = readStringField(topic, "name");
+      if (name == undefined) {
+        continue;
+      }
+      const schema = readStringField(topic, "schemaName") ?? "(unknown schema)";
+      const names = bySchema.get(schema);
+      if (names == undefined) {
+        bySchema.set(schema, [name]);
+      } else {
+        names.push(name);
+      }
+    }
+    if (bySchema.size > 0) {
+      lines.push("Topics by schema:");
+      for (const [schema, names] of bySchema) {
+        lines.push(`  ${schema}: ${names.join(", ")}`);
+      }
+    }
+  }
+
+  const panelIds =
+    typeof layout === "object" && layout != undefined
+      ? Object.keys((layout as { configById?: Record<string, unknown> }).configById ?? {})
+      : [];
+  if (panelIds.length > 0) {
+    lines.push(`Current layout panels: ${panelIds.join(", ")}`);
+  }
+
+  const summary = lines.join("\n");
+  if (summary.length <= LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES) {
+    return summary;
+  }
+  return `${summary.slice(0, LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES)}\n… truncated; call get_data_catalog for the full topic list.`;
 }
 
 function safeSerialize(value: unknown): string {
@@ -590,6 +716,11 @@ export class LocalAgentOrchestrator implements IAgentClient {
     this.#provider = options.provider;
     this.#vtdClient = options.vtdClient;
     this.#getCatalog = options.getCatalog;
+    this.#getCurrentLayout = options.getCurrentLayout;
+    this.#memoryStore = options.memoryStore;
+    this.#restoreHistory = options.restoreHistory;
+    this.#onHistoryChanged = options.onHistoryChanged;
+    this.#getPromptCustomization = options.getPromptCustomization;
     this.#model = options.model;
     this.#confirmationTimeoutMs =
       options.confirmationTimeoutMs ?? LOCAL_AGENT_CONFIRMATION_TIMEOUT_MS;
@@ -625,6 +756,11 @@ export class LocalAgentOrchestrator implements IAgentClient {
   readonly #provider: ILlmProvider;
   readonly #vtdClient: IVtdClient;
   readonly #getCatalog: () => CatalogSnapshot;
+  readonly #getCurrentLayout?: () => unknown;
+  readonly #memoryStore?: AgentMemoryStore;
+  readonly #restoreHistory?: () => Promise<LlmMessage[]>;
+  readonly #onHistoryChanged?: (history: readonly LlmMessage[]) => void;
+  readonly #getPromptCustomization?: () => AgentPromptCustomization;
   readonly #model: string | undefined;
   readonly #confirmationTimeoutMs: number;
   readonly #dependencyTimeoutMs: number;
@@ -668,9 +804,41 @@ export class LocalAgentOrchestrator implements IAgentClient {
         signal.removeEventListener("abort", onAbort);
       };
     }
+    await this.#rehydrateHistory(session, signal);
+    signal?.throwIfAborted();
     this.#sessions.set(sessionId, session);
     return { sessionId };
   };
+
+  /**
+   * Seeds a new session with a previously persisted transcript.
+   *
+   * The whole restored transcript is recorded as a single history turn. Turn boundaries only exist
+   * to drive oldest-first eviction, and the persisted messages carry no reliable turn markers —
+   * tool results are stored with the user role, so they cannot be told apart from a real user
+   * message. One boundary keeps #removeOldestHistoryTurn's index-rebasing correct and makes the
+   * restored block the first thing evicted, which is the right priority.
+   */
+  async #rehydrateHistory(session: SessionState, signal?: AbortSignal): Promise<void> {
+    if (this.#restoreHistory == undefined) {
+      return;
+    }
+    let restored: LlmMessage[];
+    try {
+      restored = await this.#restoreHistory();
+    } catch {
+      // Failing to restore must never stop a new conversation from starting.
+      return;
+    }
+    if (signal?.aborted === true || restored.length === 0) {
+      return;
+    }
+    if (serializedByteLength(restored) > LOCAL_AGENT_MAX_HISTORY_BYTES) {
+      return;
+    }
+    session.history.push(...restored);
+    session.historyTurnStarts.push({ start: 0 });
+  }
 
   public sendMessage = async (
     sessionId: string,
@@ -933,6 +1101,44 @@ export class LocalAgentOrchestrator implements IAgentClient {
     return sequenced;
   }
 
+  /**
+   * A failure to read workspace state must never take down the turn: the summary is an
+   * optimization, and the agent can always fall back to get_data_catalog.
+   */
+  #buildTurnContext(): { skills: Skill[]; system: string; tools: LlmToolDef[] } {
+    let workspace: string | undefined;
+    try {
+      workspace = summarizeWorkspace(this.#getCatalog(), this.#getCurrentLayout?.());
+    } catch {
+      workspace = undefined;
+    }
+    let memories: string | undefined;
+    try {
+      const entries = this.#memoryStore?.list() ?? [];
+      memories = entries.length > 0 ? renderAgentMemories(entries) : undefined;
+    } catch {
+      memories = undefined;
+    }
+    let customization = EMPTY_CUSTOMIZATION;
+    try {
+      customization = this.#getPromptCustomization?.() ?? EMPTY_CUSTOMIZATION;
+    } catch {
+      // A broken customization must not make the agent unusable; fall back to the built-ins.
+      customization = EMPTY_CUSTOMIZATION;
+    }
+    const skills = resolveSkills(customization);
+    return {
+      skills,
+      system: buildSystemPrompt({
+        instructions: customization.instructions,
+        memories,
+        skills,
+        workspace,
+      }),
+      tools: buildToolDefinitions(skills.map((skill) => skill.id)),
+    };
+  }
+
   async #runRequest(
     session: SessionState,
     request: RequestState,
@@ -945,6 +1151,13 @@ export class LocalAgentOrchestrator implements IAgentClient {
       this.#enforceHistoryBudget(session, turnBoundary);
     }
     this.#emit(session, { type: "message-start", messageId, requestId });
+
+    // Computed once per user turn, not per tool round: the workspace does not change mid-turn and
+    // rebuilding it for every round would churn the prompt the provider caches. The resolved skill
+    // set must also stay fixed for the turn so load_skill cannot accept an id mid-turn that the
+    // index never advertised.
+    const turn = this.#buildTurnContext();
+    request.skills = turn.skills;
 
     try {
       for (let round = 0; round < LOCAL_AGENT_MAX_TOOL_ROUNDS; round++) {
@@ -965,9 +1178,9 @@ export class LocalAgentOrchestrator implements IAgentClient {
               async (dependencySignal) => {
                 await this.#provider.stream(
                   {
-                    system: LOCAL_AGENT_SYSTEM_PROMPT,
+                    system: turn.system,
                     messages: [...session.history],
-                    tools: LOCAL_AGENT_TOOL_DEFINITIONS,
+                    tools: turn.tools,
                     model: this.#model,
                   },
                   (event) => {
@@ -1340,6 +1553,13 @@ export class LocalAgentOrchestrator implements IAgentClient {
     );
   }
 
+  #requireMemoryStore(toolName: string): AgentMemoryStore {
+    if (this.#memoryStore == undefined) {
+      throw new Error(`${toolName} is unavailable: memory is not configured`);
+    }
+    return this.#memoryStore;
+  }
+
   async #invokeTool(
     session: SessionState,
     request: RequestState,
@@ -1348,14 +1568,60 @@ export class LocalAgentOrchestrator implements IAgentClient {
   ): Promise<unknown> {
     const input = requireRecord(toolCall.input, toolCall.name);
     switch (toolCall.name) {
+      case "load_skill": {
+        const skillId = requireString(input, "skillId", toolCall.name);
+        const availableSkills = request.skills ?? [];
+        const skill = availableSkills.find((candidate) => candidate.id === skillId);
+        if (skill == undefined) {
+          throw new Error(
+            `${toolCall.name}.skillId must be one of: ${availableSkills
+              .map((candidate) => candidate.id)
+              .join(", ")}`,
+          );
+        }
+        return renderSkill(skill);
+      }
+      case "memory_write": {
+        const store = this.#requireMemoryStore(toolCall.name);
+        const entry = await store.add(requireString(input, "text", toolCall.name));
+        return { remembered: entry.id };
+      }
+      case "memory_forget": {
+        const store = this.#requireMemoryStore(toolCall.name);
+        const id = requireString(input, "id", toolCall.name);
+        if (!(await store.remove(id))) {
+          throw new Error(`${toolCall.name}.id "${id}" is not a stored memory`);
+        }
+        return { forgotten: id };
+      }
+      case "memory_list":
+        return { memories: this.#requireMemoryStore(toolCall.name).list() };
       case "vtd_search": {
         const params: VtdSearchParams = {
+          id: optionalString(input, "id", toolCall.name),
           botSn: optionalString(input, "botSn", toolCall.name),
+          botSnExact: optionalString(input, "botSnExact", toolCall.name),
           botName: optionalString(input, "botName", toolCall.name),
           triggerType: optionalString(input, "triggerType", toolCall.name),
+          dataType: optionalString(input, "dataType", toolCall.name),
+          inspection: optionalString(input, "inspection", toolCall.name),
+          fixData: optionalString(input, "fixData", toolCall.name),
           start: optionalString(input, "start", toolCall.name),
           end: optionalString(input, "end", toolCall.name),
           at: optionalString(input, "at", toolCall.name),
+          triggerTime: optionalString(input, "triggerTime", toolCall.name),
+          queryStart: optionalString(input, "queryStart", toolCall.name),
+          queryEnd: optionalString(input, "queryEnd", toolCall.name),
+          queryTime: optionalString(input, "queryTime", toolCall.name),
+          dataDay: optionalString(input, "dataDay", toolCall.name),
+          dataTos: optionalString(input, "dataTos", toolCall.name),
+          orderBy: optionalString(input, "orderBy", toolCall.name),
+          orderDir: optionalEnum(
+            input,
+            "orderDir",
+            toolCall.name,
+            VTD_ORDER_DIRECTIONS,
+          ),
           page: optionalPositiveInteger(input, "page", toolCall.name),
           pageSize: optionalPositiveInteger(
             input,
@@ -1366,6 +1632,14 @@ export class LocalAgentOrchestrator implements IAgentClient {
         };
         return await this.#vtdClient.search(params, signal);
       }
+      case "vtd_trigger":
+        return await this.#vtdClient.trigger(
+          {
+            triggerId: requireString(input, "triggerId", toolCall.name),
+            all: optionalBoolean(input, "all", toolCall.name),
+          },
+          signal,
+        );
       case "vtd_detail":
         return await this.#vtdClient.detail(
           requireString(input, "id", toolCall.name),
@@ -1535,6 +1809,13 @@ export class LocalAgentOrchestrator implements IAgentClient {
       requestId: request.requestId,
     });
     this.#emit(session, { type: "done", requestId: request.requestId });
+    // One flush per completed turn, not per history append: the three append sites fire on every
+    // tool round and would multiply writes for no benefit.
+    try {
+      this.#onHistoryChanged?.(session.history);
+    } catch {
+      // Persistence is best-effort and must not fail the turn that just succeeded.
+    }
   }
 
   #errorRequest(

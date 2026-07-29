@@ -6,6 +6,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import ReactRefreshPlugin from "@pmmmwh/react-refresh-webpack-plugin";
+import CopyPlugin from "copy-webpack-plugin";
 import { EsbuildPlugin } from "esbuild-loader";
 import HtmlWebpackPlugin from "html-webpack-plugin";
 import path from "path";
@@ -65,6 +66,17 @@ export const webpackRendererConfig =
       plugins: [
         ...plugins,
         ...(appWebpackConfig.plugins ?? []),
+        new CopyPlugin({
+          patterns: [
+            {
+              // Bundled .foxe extensions, populated by `yarn extensions:fetch`. Optional so a
+              // build without them still succeeds; the app simply installs nothing at startup.
+              from: path.resolve(__dirname, "..", "..", "..", ".extensions"),
+              to: "extensions",
+              noErrorOnMissing: true,
+            },
+          ],
+        }),
         new HtmlWebpackPlugin({
           templateContent: `
   <!doctype html>

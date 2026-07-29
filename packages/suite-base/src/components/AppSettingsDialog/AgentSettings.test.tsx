@@ -200,6 +200,95 @@ describe("AgentSettings", () => {
     expect(agentSettingsModule).not.toHaveProperty("writeAgentApiKey");
   });
 
+  it("publishes the enable toggle immediately without waiting for a draft save", async () => {
+    const configuration = makeMockAppConfiguration();
+    await commitAgentSettings(configuration, baseDraft);
+    renderSettings(configuration);
+
+    const toggle = screen.getByRole("checkbox", { name: "Enable agent" });
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(configuration.get(AppSetting.AGENT_ENABLED)).toBe(true);
+    });
+    expect(screen.getByRole("checkbox", { name: "Enable agent" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enable agent" }));
+
+    await waitFor(() => {
+      expect(configuration.get(AppSetting.AGENT_ENABLED)).toBe(false);
+    });
+  });
+
+  it("reflects an agent that was already enabled", async () => {
+    const configuration = makeMockAppConfiguration();
+    await commitAgentSettings(configuration, baseDraft);
+    await configuration.set(AppSetting.AGENT_ENABLED, true);
+    renderSettings(configuration);
+
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: "Enable agent" })).toBeChecked();
+    });
+  });
+
+  it("previews a skill body as rendered markdown", async () => {
+    const configuration = makeMockAppConfiguration();
+    await commitAgentSettings(configuration, baseDraft);
+    renderSettings(configuration);
+
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Skills" }));
+    fireEvent.click(await screen.findByRole("option", { name: /^robot-viz/ }));
+
+    // Edit view first: the raw markdown source.
+    const editor = screen.getByRole("textbox", {
+      name: /Robot visualization panels/,
+    });
+    expect((editor as HTMLTextAreaElement).value).toContain("# Robot visualization panels");
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    const preview = screen.getByTestId("agent-skill-preview");
+    // The heading and table must come back as real elements, not literal markdown syntax.
+    expect(preview.querySelector("h1")).toHaveTextContent("Robot visualization panels");
+    expect(preview.querySelector("table")).toBeInTheDocument();
+    expect(preview.textContent).not.toContain("| Panel type |");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByTestId("agent-skill-preview")).not.toBeInTheDocument();
+  });
+
+  it("lists stored memories and deletes them without a draft save", async () => {
+    const configuration = makeMockAppConfiguration();
+    await commitAgentSettings(configuration, baseDraft);
+    await configuration.set(
+      AppSetting.AGENT_MEMORY,
+      JSON.stringify([
+        { id: "m1", text: "Usually reviews SN001", createdAt: "2026-07-28T00:00:00Z" },
+        { id: "m2", text: "Prefers 3D beside a plot", createdAt: "2026-07-28T00:00:00Z" },
+      ]),
+    );
+    renderSettings(configuration);
+
+    expect(screen.getByText("Usually reviews SN001")).toBeInTheDocument();
+    expect(screen.getByText("Prefers 3D beside a plot")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Forget: Usually reviews SN001" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Usually reviews SN001")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Prefers 3D beside a plot")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Forget all" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("The agent has not stored anything yet.")).toBeInTheDocument();
+    });
+    expect(configuration.get(AppSetting.AGENT_MEMORY)).toBeUndefined();
+  });
+
   it("keeps a complete draft local and publishes it with one save action", async () => {
     const configuration = makeMockAppConfiguration();
     await commitAgentSettings(configuration, baseDraft);

@@ -25,6 +25,7 @@ import {
   useState,
 } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { v4 as uuidv4 } from "uuid";
 
 import Logger from "@lichtblick/log";
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
@@ -110,6 +111,13 @@ import {
   useAgentSettings,
 } from "@lichtblick/suite-base/services/agent/agentSettings";
 import { useLocalAgentClient } from "@lichtblick/suite-base/services/agent/localAgentClient";
+import { AgentConversationStore } from "@lichtblick/suite-base/services/agent/memory/AgentConversationStore";
+import {
+  createAgentConversationPersistence,
+  getOrCreateConversationId,
+} from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
+import { createAgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import { readAgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import type { LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
 import { useAgentWorkspaceTools } from "@lichtblick/suite-base/services/agent/workspaceTools";
 import ICONS from "@lichtblick/suite-base/theme/icons";
@@ -891,6 +899,7 @@ function ConfiguredAgentWorkspaceIntegration({
     workspaceToolsRef.current = workspaceTools;
   }, [workspaceTools]);
   const getCatalog = useCallback(() => workspaceToolsRef.current.getCatalog(), []);
+  const getCurrentLayout = useCallback(() => workspaceToolsRef.current.getCurrentLayout(), []);
   const onApplyProposal = useCallback(async (proposal: LayoutProposal) => {
     await workspaceToolsRef.current.applyLayout(proposal.name, proposal.data);
   }, []);
@@ -901,11 +910,35 @@ function ConfiguredAgentWorkspaceIntegration({
   const appConfiguration = useAppConfiguration();
   const { migrationReady, snapshot } = useAgentSettings(appConfiguration, { desktop });
   const configuration = selectAgentConfiguration(snapshot, { desktop });
+  const memoryStore = useMemo(
+    () => createAgentMemoryStore(appConfiguration, { makeId: () => uuidv4().slice(0, 8) }),
+    [appConfiguration],
+  );
+  const persistence = useMemo(
+    () =>
+      createAgentConversationPersistence({
+        conversationId: getOrCreateConversationId(() => uuidv4()),
+        makeId: () => uuidv4(),
+        store: new AgentConversationStore(),
+      }),
+    [],
+  );
+  const getPromptCustomization = useCallback(
+    () => readAgentPromptCustomization(appConfiguration),
+    [appConfiguration],
+  );
+  const restoreHistory = useMemo(() => persistence.restoreLlmHistory, [persistence]);
+  const onHistoryChanged = useMemo(() => persistence.onLlmHistoryChanged, [persistence]);
   const agentClient = useLocalAgentClient(
     configuration,
     {
       enabled: agentEnabled && migrationReady && !snapshot.storageError,
       getCatalog,
+      getCurrentLayout,
+      memoryStore,
+      onHistoryChanged,
+      restoreHistory,
+      getPromptCustomization,
     },
   );
   const configuredAgentEnabled = agentEnabled && agentClient != undefined;
@@ -916,6 +949,7 @@ function ConfiguredAgentWorkspaceIntegration({
       enabled={configuredAgentEnabled}
       onApplyProposal={onApplyProposal}
       onOpenDataSource={onOpenDataSource}
+      persistence={persistence}
     >
       <AgentCatalogWatcher />
       {children}

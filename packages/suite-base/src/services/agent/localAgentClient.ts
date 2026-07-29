@@ -14,15 +14,24 @@ import {
 } from "@lichtblick/suite-base/services/agent/agentSettings";
 import { AnthropicProvider } from "@lichtblick/suite-base/services/agent/local/AnthropicProvider";
 import { LocalAgentOrchestrator } from "@lichtblick/suite-base/services/agent/local/LocalAgentOrchestrator";
+import type { LocalAgentOrchestratorOptions } from "@lichtblick/suite-base/services/agent/local/LocalAgentOrchestrator";
 import { OpenAICompatProvider } from "@lichtblick/suite-base/services/agent/local/OpenAICompatProvider";
 import type { CatalogSnapshot } from "@lichtblick/suite-base/services/agent/local/types";
+import type { AgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
 import DesktopVtdClient from "@lichtblick/suite-base/services/vtd/DesktopVtdClient";
 import HttpVtdClient from "@lichtblick/suite-base/services/vtd/HttpVtdClient";
 
 const log = Logger.getLogger(__filename);
 
+const noLayout = (): undefined => undefined;
+
 export type AgentClientConfiguration = AgentConfiguration & {
   getCatalog: () => CatalogSnapshot;
+  getCurrentLayout?: () => unknown;
+  memoryStore?: AgentMemoryStore;
+  onHistoryChanged?: LocalAgentOrchestratorOptions["onHistoryChanged"];
+  restoreHistory?: LocalAgentOrchestratorOptions["restoreHistory"];
+  getPromptCustomization?: LocalAgentOrchestratorOptions["getPromptCustomization"];
 };
 
 export function createLocalAgentClient({
@@ -30,7 +39,12 @@ export function createLocalAgentClient({
   baseUrl,
   desktop,
   getCatalog,
+  getCurrentLayout,
+  getPromptCustomization,
+  memoryStore,
   model,
+  onHistoryChanged,
+  restoreHistory,
   provider,
   vtdAuthToken,
   vtdEndpoint,
@@ -76,6 +90,11 @@ export function createLocalAgentClient({
     provider: llmProvider,
     vtdClient,
     getCatalog,
+    getCurrentLayout,
+    memoryStore,
+    onHistoryChanged,
+    restoreHistory,
+    getPromptCustomization,
   });
 }
 
@@ -84,14 +103,25 @@ export function useLocalAgentClient(
   {
     enabled,
     getCatalog,
+    getCurrentLayout,
+    getPromptCustomization,
+    memoryStore,
+    onHistoryChanged,
+    restoreHistory,
   }: {
     enabled: boolean;
     getCatalog: AgentClientConfiguration["getCatalog"];
+    getCurrentLayout?: () => unknown;
+    memoryStore?: AgentMemoryStore;
+    onHistoryChanged?: LocalAgentOrchestratorOptions["onHistoryChanged"];
+    restoreHistory?: LocalAgentOrchestratorOptions["restoreHistory"];
+    getPromptCustomization?: LocalAgentOrchestratorOptions["getPromptCustomization"];
   },
 ): LocalAgentOrchestrator | undefined {
   const { apiKey, baseUrl, desktop, model, provider, vtdAuthToken, vtdEndpoint } =
     configuration;
   const stableGetCatalog = useLatestAgentCatalog(getCatalog);
+  const stableGetCurrentLayout = useLatestGetter(getCurrentLayout ?? noLayout);
   // The identity is a pure render value. Resource creation is deferred until a committed layout
   // effect, so an abandoned concurrent render cannot leak an orchestrator.
   const configurationIdentity = useMemo(
@@ -124,7 +154,12 @@ export function useLocalAgentClient(
       baseUrl: current.baseUrl,
       desktop: current.desktop,
       getCatalog: stableGetCatalog,
+      getCurrentLayout: stableGetCurrentLayout,
+      getPromptCustomization,
+      memoryStore,
       model: current.model,
+      onHistoryChanged,
+      restoreHistory,
       provider: current.provider,
       vtdAuthToken: current.vtdAuthToken,
       vtdEndpoint: current.vtdEndpoint,
@@ -137,19 +172,36 @@ export function useLocalAgentClient(
         log.error(error, "Failed to dispose local Agent orchestrator");
       }
     };
-  }, [configurationIdentity, stableGetCatalog, valid]);
+  }, [
+    configurationIdentity,
+    getPromptCustomization,
+    memoryStore,
+    onHistoryChanged,
+    restoreHistory,
+    stableGetCatalog,
+    stableGetCurrentLayout,
+    valid,
+  ]);
 
   return valid && resource?.identity === configurationIdentity
     ? resource.client
     : undefined;
 }
 
+/**
+ * Wraps a getter in a stable identity so it can be handed to the orchestrator without a changing
+ * reference forcing the client to be rebuilt on every render.
+ */
+export function useLatestGetter<T>(getter: () => T): () => T {
+  const latestRef = useRef(getter);
+  useLayoutEffect(() => {
+    latestRef.current = getter;
+  }, [getter]);
+  return useCallback(() => latestRef.current(), []);
+}
+
 export function useLatestAgentCatalog(
   getCatalog: AgentClientConfiguration["getCatalog"],
 ): AgentClientConfiguration["getCatalog"] {
-  const latestGetCatalogRef = useRef(getCatalog);
-  useLayoutEffect(() => {
-    latestGetCatalogRef.current = getCatalog;
-  }, [getCatalog]);
-  return useCallback(() => latestGetCatalogRef.current(), []);
+  return useLatestGetter(getCatalog);
 }

@@ -8,6 +8,7 @@
 import Brightness5Icon from "@mui/icons-material/Brightness5";
 import ComputerIcon from "@mui/icons-material/Computer";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import QuestionAnswerOutlinedIcon from "@mui/icons-material/QuestionAnswerOutlined";
 import WebIcon from "@mui/icons-material/Web";
 import {
@@ -18,7 +19,12 @@ import {
   Divider,
   FormControl,
   FormControlLabel,
+  FormHelperText,
   FormLabel,
+  IconButton,
+  List,
+  ListItem,
+  ListItemText,
   MenuItem,
   Select,
   SelectChangeEvent,
@@ -35,6 +41,7 @@ import { makeStyles } from "tss-react/mui";
 import { filterMap } from "@lichtblick/den/collection";
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import OsContextSingleton from "@lichtblick/suite-base/OsContextSingleton";
+import { AgentMarkdown } from "@lichtblick/suite-base/components/AgentMarkdown";
 import Stack from "@lichtblick/suite-base/components/Stack";
 import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { useAppTimeFormat } from "@lichtblick/suite-base/hooks";
@@ -54,6 +61,19 @@ import {
   useAgentSettings,
   validateAgentConfiguration,
 } from "@lichtblick/suite-base/services/agent/agentSettings";
+import { SKILL_REGISTRY } from "@lichtblick/suite-base/services/agent/local/skills";
+import {
+  clearAgentMemories,
+  readAgentMemories,
+  removeAgentMemory,
+} from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import type { MemoryEntry } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import {
+  readAgentPromptCustomization,
+  resolveSkills,
+  writeAgentPromptCustomization,
+} from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import { LaunchPreferenceValue } from "@lichtblick/suite-base/types/LaunchPreferenceValue";
 import { TimeDisplayMethod } from "@lichtblick/suite-base/types/panels";
 import { formatTime } from "@lichtblick/suite-base/util/formatTime";
@@ -72,6 +92,14 @@ const useStyles = makeStyles()((theme) => ({
     "&.MuiFormControlLabel-root": {
       alignItems: "start",
     },
+  },
+  skillPreview: {
+    maxHeight: 420,
+    padding: theme.spacing(1.5),
+    overflowY: "auto",
+    border: `1px solid ${theme.palette.divider}`,
+    borderRadius: theme.shape.borderRadius,
+    backgroundColor: theme.palette.background.default,
   },
   toggleButton: {
     display: "flex !important",
@@ -461,7 +489,11 @@ function AgentSettingsForm({
   onCommitHandlerChange,
 }: AgentSettingsFormProps): React.ReactElement {
   const { t } = useTranslation("appSettings");
+  const { classes } = useStyles();
   const appConfiguration = useAppConfiguration();
+  const [agentEnabled = false, setAgentEnabled] = useAppConfigurationValue<boolean>(
+    AppSetting.AGENT_ENABLED,
+  );
   const {
     credentialBackendUnavailable,
     migrationError,
@@ -592,6 +624,20 @@ function AgentSettingsForm({
 
   return (
     <Stack gap={2}>
+      <FormControl>
+        <FormControlLabel
+          className={classes.formControlLabel}
+          control={
+            <Checkbox
+              className={classes.checkbox}
+              checked={agentEnabled}
+              onChange={(_event, checked) => void setAgentEnabled(checked)}
+            />
+          }
+          label={t("agentEnable")}
+        />
+        <FormHelperText>{t("agentEnableHelp")}</FormHelperText>
+      </FormControl>
       <Alert severity={Object.keys(errors).length === 0 ? "success" : "info"}>
         {Object.keys(errors).length === 0 ? t("agentConfigured") : t("agentNotConfigured")}
       </Alert>
@@ -715,6 +761,263 @@ function AgentSettingsForm({
       >
         {saving ? t("agentSaving") : t("agentSave")}
       </Button>
+      <Divider />
+      <AgentPromptSettings />
+      <Divider />
+      <AgentMemorySettings />
+    </Stack>
+  );
+}
+
+/**
+ * Editing surface for the agent's instructions and skills.
+ *
+ * Edits are held locally and written on save so a half-typed skill body never reaches a live
+ * conversation. Built-in skills are edited as overrides, so "Reset" always restores the shipped
+ * text even after the built-in has been updated.
+ */
+type SkillView = "edit" | "preview";
+
+function AgentPromptSettings(): React.ReactElement {
+  const { classes } = useStyles();
+  const { t } = useTranslation("appSettings");
+  const appConfiguration = useAppConfiguration();
+  const [draft, setDraft] = useState<AgentPromptCustomization>(() =>
+    readAgentPromptCustomization(appConfiguration),
+  );
+  const [selectedSkillId, setSelectedSkillId] = useState<string>("");
+  const [skillView, setSkillView] = useState<SkillView>("edit");
+  const [error, setError] = useState<string>();
+  const [saved, setSaved] = useState(false);
+
+  const skills = useMemo(() => resolveSkills(draft), [draft]);
+  const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
+  const isBuiltIn = selectedSkill != undefined && SKILL_REGISTRY.has(selectedSkill.id);
+  const isOverridden =
+    selectedSkill != undefined && draft.skillOverrides[selectedSkill.id] != undefined;
+
+  const update = (next: AgentPromptCustomization) => {
+    setDraft(next);
+    setSaved(false);
+    setError(undefined);
+  };
+
+  const save = async () => {
+    try {
+      await writeAgentPromptCustomization(appConfiguration, draft);
+      setError(undefined);
+      setSaved(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setSaved(false);
+    }
+  };
+
+  return (
+    <Stack gap={1.5}>
+      <FormLabel>{t("agentPrompt")}:</FormLabel>
+      <FormHelperText>{t("agentPromptHelp")}</FormHelperText>
+
+      <TextField
+        fullWidth
+        multiline
+        minRows={3}
+        label={t("agentInstructions")}
+        placeholder={t("agentInstructionsPlaceholder")}
+        value={draft.instructions}
+        onChange={(event) => {
+          update({ ...draft, instructions: event.target.value });
+        }}
+      />
+
+      <FormControl fullWidth>
+        <FormLabel id="agent-skill-label">{t("agentSkills")}:</FormLabel>
+        <Select<string>
+          displayEmpty
+          inputProps={{ "aria-label": t("agentSkills") }}
+          value={selectedSkillId}
+          onChange={(event) => {
+            setSelectedSkillId(event.target.value);
+          }}
+        >
+          <MenuItem value="">{t("agentSkillSelect")}</MenuItem>
+          {skills.map((skill) => (
+            <MenuItem key={skill.id} value={skill.id}>
+              {skill.id}
+              {draft.skillOverrides[skill.id] != undefined ? ` ${t("agentSkillEdited")}` : ""}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      {selectedSkill != undefined && (
+        <>
+          <FormHelperText>{selectedSkill.whenToUse}</FormHelperText>
+          <ToggleButtonGroup
+            color="primary"
+            exclusive
+            size="small"
+            value={skillView}
+            onChange={(_event, next?: SkillView) => {
+              if (next != undefined) {
+                setSkillView(next);
+              }
+            }}
+          >
+            <ToggleButton value="edit">{t("agentSkillEdit")}</ToggleButton>
+            <ToggleButton value="preview">{t("agentSkillPreview")}</ToggleButton>
+          </ToggleButtonGroup>
+          {skillView === "preview" ? (
+            // Skills are markdown and the agent consumes them as such; previewing the rendered form
+            // is how you catch a broken table or an unclosed fence before the agent reads it.
+            <div className={classes.skillPreview} data-testid="agent-skill-preview">
+              <AgentMarkdown>{selectedSkill.body}</AgentMarkdown>
+            </div>
+          ) : (
+          <TextField
+            fullWidth
+            multiline
+            minRows={8}
+            maxRows={20}
+            label={selectedSkill.name}
+            value={selectedSkill.body}
+            onChange={(event) => {
+              const body = event.target.value;
+              if (isBuiltIn) {
+                update({
+                  ...draft,
+                  skillOverrides: { ...draft.skillOverrides, [selectedSkill.id]: body },
+                });
+              } else {
+                update({
+                  ...draft,
+                  customSkills: draft.customSkills.map((skill) =>
+                    skill.id === selectedSkill.id ? { ...skill, body } : skill,
+                  ),
+                });
+              }
+            }}
+          />
+          )}
+          {isBuiltIn ? (
+            <Button
+              disabled={!isOverridden}
+              onClick={() => {
+                const { [selectedSkill.id]: _removed, ...rest } = draft.skillOverrides;
+                update({ ...draft, skillOverrides: rest });
+              }}
+            >
+              {t("agentSkillReset")}
+            </Button>
+          ) : (
+            <Button
+              color="error"
+              onClick={() => {
+                update({
+                  ...draft,
+                  customSkills: draft.customSkills.filter(
+                    (skill) => skill.id !== selectedSkill.id,
+                  ),
+                });
+                setSelectedSkillId("");
+              }}
+            >
+              {t("agentSkillDelete")}
+            </Button>
+          )}
+        </>
+      )}
+
+      <Button
+        onClick={() => {
+          const index = draft.customSkills.length + 1;
+          const id = `custom-skill-${String(index)}`;
+          update({
+            ...draft,
+            customSkills: [
+              ...draft.customSkills,
+              {
+                id,
+                name: t("agentSkillNewName"),
+                whenToUse: t("agentSkillNewWhenToUse"),
+                body: t("agentSkillNewBody"),
+              },
+            ],
+          });
+          setSelectedSkillId(id);
+        }}
+      >
+        {t("agentSkillAdd")}
+      </Button>
+
+      {error != undefined && <Alert severity="error">{error}</Alert>}
+      {saved && <Alert severity="success">{t("agentPromptSaved")}</Alert>}
+
+      <Button onClick={() => void save()} variant="contained">
+        {t("agentPromptSave")}
+      </Button>
+    </Stack>
+  );
+}
+
+/**
+ * Memory is written by the agent itself, so this exists to keep the user in control of what was
+ * kept. Deletions apply immediately rather than through the credential draft/commit flow, because
+ * memories are ordinary configuration, not secrets.
+ */
+function AgentMemorySettings(): React.ReactElement {
+  const { t } = useTranslation("appSettings");
+  const appConfiguration = useAppConfiguration();
+  const [memories, setMemories] = useState<MemoryEntry[]>(() =>
+    readAgentMemories(appConfiguration),
+  );
+
+  useEffect(() => {
+    const listener = () => {
+      setMemories(readAgentMemories(appConfiguration));
+    };
+    appConfiguration.addChangeListener(AppSetting.AGENT_MEMORY, listener);
+    return () => {
+      appConfiguration.removeChangeListener(AppSetting.AGENT_MEMORY, listener);
+    };
+  }, [appConfiguration]);
+
+  return (
+    <Stack gap={1}>
+      <FormLabel>{t("agentMemory")}:</FormLabel>
+      <FormHelperText>{t("agentMemoryHelp")}</FormHelperText>
+      {memories.length === 0 ? (
+        <FormHelperText>{t("agentMemoryEmpty")}</FormHelperText>
+      ) : (
+        <>
+          <List dense disablePadding>
+            {memories.map((memory) => (
+              <ListItem
+                key={memory.id}
+                disableGutters
+                secondaryAction={
+                  <IconButton
+                    edge="end"
+                    aria-label={t("agentMemoryForget", { text: memory.text })}
+                    onClick={() => void removeAgentMemory(appConfiguration, memory.id)}
+                  >
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                }
+              >
+                <ListItemText primary={memory.text} />
+              </ListItem>
+            ))}
+          </List>
+          <Button
+            color="error"
+            onClick={() => void clearAgentMemories(appConfiguration)}
+            variant="outlined"
+          >
+            {t("agentMemoryClear")}
+          </Button>
+        </>
+      )}
     </Stack>
   );
 }

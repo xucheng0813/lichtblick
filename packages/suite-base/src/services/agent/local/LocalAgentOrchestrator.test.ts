@@ -13,7 +13,9 @@ import {
   LOCAL_AGENT_MAX_TOOL_RESULT_BYTES,
   LOCAL_AGENT_MAX_TOOL_ROUNDS,
   LOCAL_AGENT_MAX_USER_MESSAGE_BYTES,
+  LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES,
   LocalAgentOrchestrator,
+  summarizeWorkspace,
 } from "./LocalAgentOrchestrator";
 import type {
   ILlmProvider,
@@ -30,6 +32,7 @@ function makeVtdClient(): jest.Mocked<IVtdClient> {
     sliceStore: jest.fn(),
     sliceGet: jest.fn(),
     url: jest.fn(),
+    trigger: jest.fn(),
   };
 }
 
@@ -2204,5 +2207,510 @@ describe("LocalAgentOrchestrator", () => {
     await expect(
       orchestrator.sendMessage(second.sessionId, "after dispose", "disposed-2"),
     ).rejects.toThrow("Unknown local agent session");
+  });
+
+  it("serves skill bodies from load_skill and rejects unknown ids", async () => {
+    const rounds: ((onEvent: (event: LlmStreamEvent) => void) => void)[] = [
+      (onEvent) => {
+        onEvent({
+          type: "tool-call",
+          id: "skill-1",
+          name: "load_skill",
+          input: { skillId: "panel-catalog" },
+        });
+        onEvent({
+          type: "tool-call",
+          id: "skill-2",
+          name: "load_skill",
+          input: { skillId: "no-such-skill" },
+        });
+        onEvent({ type: "done", stopReason: "tool-use" });
+      },
+      (onEvent) => {
+        onEvent({ type: "text", delta: "Loaded." });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    ];
+    const history: LlmMessage[][] = [];
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (args, onEvent) => {
+        history.push(args.messages);
+        const round = rounds.shift();
+        if (round == undefined) {
+          throw new Error("Unexpected provider round");
+        }
+        round(onEvent);
+      },
+    );
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: { stream },
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    await orchestrator.sendMessage(sessionId, "which panel shows images?", "skills-1");
+    await waitUntil(() => rounds.length === 0 && history.length === 2);
+
+    const results = toolResults(history[1]?.at(-1));
+    const loaded = results.find((result) => result.toolCallId === "skill-1");
+    expect(String(loaded?.content)).toContain('<skill id="panel-catalog">');
+    const rejected = results.find((result) => result.toolCallId === "skill-2");
+    expect(rejected?.isError).toBe(true);
+    expect(JSON.stringify(rejected?.content)).toContain("must be one of");
+  });
+
+  it("stores memories, injects them next turn, and reports memory limits to the model", async () => {
+    const entries: { id: string; text: string; createdAt: string }[] = [];
+    const memoryStore = {
+      list: () => entries,
+      add: async (text: string) => {
+        if (text.includes("too much")) {
+          throw new Error("Memory is full; forget an entry first");
+        }
+        const entry = { id: `m${String(entries.length + 1)}`, text, createdAt: "2026-07-28" };
+        entries.push(entry);
+        return entry;
+      },
+      remove: async (id: string) => {
+        const index = entries.findIndex((entry) => entry.id === id);
+        if (index < 0) {
+          return false;
+        }
+        entries.splice(index, 1);
+        return true;
+      },
+    };
+    const rounds: ((onEvent: (event: LlmStreamEvent) => void) => void)[] = [
+      (onEvent) => {
+        onEvent({
+          type: "tool-call",
+          id: "mem-1",
+          name: "memory_write",
+          input: { text: "Usually reviews SN001" },
+        });
+        onEvent({
+          type: "tool-call",
+          id: "mem-2",
+          name: "memory_write",
+          input: { text: "way too much to keep" },
+        });
+        onEvent({ type: "done", stopReason: "tool-use" });
+      },
+      (onEvent) => {
+        onEvent({ type: "text", delta: "Noted." });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+      (onEvent) => {
+        onEvent({ type: "text", delta: "You usually review SN001." });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    ];
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (_args, onEvent) => {
+        const round = rounds.shift();
+        if (round == undefined) {
+          throw new Error("Unexpected provider round");
+        }
+        round(onEvent);
+      },
+    );
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: { stream },
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      memoryStore,
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    // The first turn's prompt is built before any memory exists.
+    await orchestrator.sendMessage(sessionId, "I always look at SN001", "mem-turn-1");
+    await waitUntil(() => stream.mock.calls.length === 2);
+    expect(stream.mock.calls[0]?.[0].system).not.toContain("SN001");
+    expect(entries).toHaveLength(1);
+
+    await orchestrator.sendMessage(sessionId, "which robot do I watch?", "mem-turn-2");
+    await waitUntil(() => stream.mock.calls.length === 3);
+    expect(stream.mock.calls[2]?.[0].system).toContain("[m1] Usually reviews SN001");
+  });
+
+  it("tells the model memory is unavailable rather than failing the turn", async () => {
+    const rounds: ((onEvent: (event: LlmStreamEvent) => void) => void)[] = [
+      (onEvent) => {
+        onEvent({
+          type: "tool-call",
+          id: "mem-1",
+          name: "memory_write",
+          input: { text: "something" },
+        });
+        onEvent({ type: "done", stopReason: "tool-use" });
+      },
+      (onEvent) => {
+        onEvent({ type: "text", delta: "Cannot remember that." });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    ];
+    const history: LlmMessage[][] = [];
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (args, onEvent) => {
+        history.push(args.messages);
+        const round = rounds.shift();
+        if (round == undefined) {
+          throw new Error("Unexpected provider round");
+        }
+        round(onEvent);
+      },
+    );
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: { stream },
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    await orchestrator.sendMessage(sessionId, "remember this", "mem-none");
+    await waitUntil(() => rounds.length === 0 && history.length === 2);
+
+    const result = toolResults(history[1]?.at(-1))[0];
+    expect(result?.isError).toBe(true);
+    expect(JSON.stringify(result?.content)).toContain("memory is not configured");
+  });
+
+  it("injects the loaded workspace into the system prompt without a catalog tool call", async () => {
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (_args, onEvent) => {
+        onEvent({ type: "text", delta: "ok" });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    );
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: { stream },
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({
+        topics: [
+          { name: "/points", schemaName: "sensor_msgs/PointCloud2" },
+          { name: "/camera/image_raw", schemaName: "sensor_msgs/Image" },
+        ],
+        datatypes: new Map(),
+      }),
+      getCurrentLayout: () => ({ configById: { "3D!main": {} } }),
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    await orchestrator.sendMessage(sessionId, "what is loaded?", "ws-1");
+    await waitUntil(() => stream.mock.calls.length === 1);
+
+    const system = stream.mock.calls[0]?.[0].system ?? "";
+    expect(system).toContain("Loaded data source with 2 topics.");
+    expect(system).toContain("sensor_msgs/PointCloud2: /points");
+    expect(system).toContain("Current layout panels: 3D!main");
+  });
+
+  it("keeps the turn alive when workspace state cannot be read", async () => {
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (_args, onEvent) => {
+        onEvent({ type: "text", delta: "ok" });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    );
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: { stream },
+      vtdClient: makeVtdClient(),
+      getCatalog: () => {
+        throw new Error("pipeline unavailable");
+      },
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    await orchestrator.sendMessage(sessionId, "still works?", "ws-2");
+    await waitUntil(() => stream.mock.calls.length === 1);
+
+    const system = stream.mock.calls[0]?.[0].system ?? "";
+    expect(system).toContain("built-in Lichtblick robotics data assistant");
+    expect(system).not.toContain("Loaded data source");
+  });
+});
+
+describe("LocalAgentOrchestrator history persistence", () => {
+  function textProvider(): {
+    provider: ILlmProvider;
+    stream: jest.Mock<Promise<void>, Parameters<ILlmProvider["stream"]>>;
+  } {
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (_args, onEvent) => {
+        onEvent({ type: "text", delta: "ok" });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    );
+    return { provider: { stream }, stream };
+  }
+
+  it("sends a restored transcript to the provider on the next turn", async () => {
+    const restored: LlmMessage[] = [
+      { role: "user", content: "earlier question" },
+      { role: "assistant", content: "earlier answer" },
+    ];
+    const { provider, stream } = textProvider();
+    const orchestrator = new LocalAgentOrchestrator({
+      provider,
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      restoreHistory: async () => restored,
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    await orchestrator.sendMessage(sessionId, "follow up", "restore-1");
+    await waitUntil(() => stream.mock.calls.length === 1);
+
+    const messages = stream.mock.calls[0]?.[0].messages ?? [];
+    expect(messages.slice(0, 2)).toEqual(restored);
+    expect(messages.at(-1)).toEqual({ role: "user", content: "follow up" });
+  });
+
+  it("keeps turn boundaries consistent so restored history is evicted first", async () => {
+    // One boundary covers the restored block, so eviction drops it as a unit and rebases the
+    // live turn's index rather than corrupting it.
+    const restored: LlmMessage[] = Array.from({ length: 4 }, (_unused, index) => ({
+      role: "user" as const,
+      content: `old ${String(index)}`,
+    }));
+    const { provider, stream } = textProvider();
+    const orchestrator = new LocalAgentOrchestrator({
+      provider,
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      restoreHistory: async () => restored,
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    for (let turn = 0; turn < LOCAL_AGENT_MAX_HISTORY_TURNS + 2; turn++) {
+      await orchestrator.sendMessage(sessionId, `turn ${String(turn)}`, `evict-${String(turn)}`);
+      await waitUntil(() => stream.mock.calls.length === turn + 1);
+    }
+
+    const messages = stream.mock.calls.at(-1)?.[0].messages ?? [];
+    expect(messages.some((message) => message.content === "old 0")).toBe(false);
+    expect(messages.at(-1)).toEqual({
+      role: "user",
+      content: `turn ${String(LOCAL_AGENT_MAX_HISTORY_TURNS + 1)}`,
+    });
+  });
+
+  it("starts clean when the stored transcript cannot be read or is too large", async () => {
+    const failing = textProvider();
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: failing.provider,
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      restoreHistory: async () => {
+        throw new Error("storage unavailable");
+      },
+    });
+    const { sessionId } = await orchestrator.createSession();
+    await orchestrator.sendMessage(sessionId, "hello", "restore-fail");
+    await waitUntil(() => failing.stream.mock.calls.length === 1);
+    expect(failing.stream.mock.calls[0]?.[0].messages).toEqual([
+      { role: "user", content: "hello" },
+    ]);
+
+    const oversized = textProvider();
+    const tooBig = new LocalAgentOrchestrator({
+      provider: oversized.provider,
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      restoreHistory: async () => [
+        { role: "user", content: "x".repeat(LOCAL_AGENT_MAX_HISTORY_BYTES + 1) },
+      ],
+    });
+    const second = await tooBig.createSession();
+    await tooBig.sendMessage(second.sessionId, "hello", "restore-big");
+    await waitUntil(() => oversized.stream.mock.calls.length === 1);
+    expect(oversized.stream.mock.calls[0]?.[0].messages).toEqual([
+      { role: "user", content: "hello" },
+    ]);
+  });
+
+  it("flushes once per completed turn, not once per tool round", async () => {
+    const onHistoryChanged = jest.fn();
+    const rounds: ((onEvent: (event: LlmStreamEvent) => void) => void)[] = [
+      (onEvent) => {
+        onEvent({
+          type: "tool-call",
+          id: "skill-1",
+          name: "load_skill",
+          input: { skillId: "vtd-query" },
+        });
+        onEvent({ type: "done", stopReason: "tool-use" });
+      },
+      (onEvent) => {
+        onEvent({
+          type: "tool-call",
+          id: "skill-2",
+          name: "load_skill",
+          input: { skillId: "vtd-slice" },
+        });
+        onEvent({ type: "done", stopReason: "tool-use" });
+      },
+      (onEvent) => {
+        onEvent({ type: "text", delta: "done" });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    ];
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (_args, onEvent) => {
+        const round = rounds.shift();
+        if (round == undefined) {
+          throw new Error("Unexpected provider round");
+        }
+        round(onEvent);
+      },
+    );
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: { stream },
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      onHistoryChanged,
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    await orchestrator.sendMessage(sessionId, "teach me", "flush-1");
+    await waitUntil(() => rounds.length === 0 && onHistoryChanged.mock.calls.length > 0);
+
+    expect(stream).toHaveBeenCalledTimes(3);
+    expect(onHistoryChanged).toHaveBeenCalledTimes(1);
+    expect(onHistoryChanged.mock.calls[0]?.[0]).toContainEqual({
+      role: "user",
+      content: "teach me",
+    });
+  });
+});
+
+describe("LocalAgentOrchestrator prompt customization", () => {
+  it("applies user instructions, skill overrides, and custom skills to the turn", async () => {
+    const rounds: ((onEvent: (event: LlmStreamEvent) => void) => void)[] = [
+      (onEvent) => {
+        onEvent({
+          type: "tool-call",
+          id: "skill-1",
+          name: "load_skill",
+          input: { skillId: "team-conventions" },
+        });
+        onEvent({
+          type: "tool-call",
+          id: "skill-2",
+          name: "load_skill",
+          input: { skillId: "vtd-query" },
+        });
+        onEvent({ type: "done", stopReason: "tool-use" });
+      },
+      (onEvent) => {
+        onEvent({ type: "text", delta: "ok" });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    ];
+    const history: LlmMessage[][] = [];
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (args, onEvent) => {
+        history.push(args.messages);
+        const round = rounds.shift();
+        if (round == undefined) {
+          throw new Error("Unexpected provider round");
+        }
+        round(onEvent);
+      },
+    );
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: { stream },
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      getPromptCustomization: () => ({
+        instructions: "Always answer in Chinese.",
+        skillOverrides: { "vtd-query": "my replacement body" },
+        customSkills: [
+          {
+            id: "team-conventions",
+            name: "Team conventions",
+            whenToUse: "When naming layouts.",
+            body: "Prefix layouts with the squad name.",
+          },
+        ],
+      }),
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    await orchestrator.sendMessage(sessionId, "hello", "custom-1");
+    await waitUntil(() => rounds.length === 0 && history.length === 2);
+
+    const request = stream.mock.calls[0]?.[0];
+    expect(request?.system).toContain("Always answer in Chinese.");
+    // A custom skill must be advertised in the index and accepted by the load_skill schema.
+    expect(request?.system).toContain("- team-conventions: When naming layouts.");
+    const loadSkill = request?.tools.find((tool) => tool.name === "load_skill");
+    expect(
+      (loadSkill?.inputSchema as { properties: { skillId: { enum: string[] } } }).properties.skillId
+        .enum,
+    ).toContain("team-conventions");
+
+    const results = toolResults(history[1]?.at(-1));
+    expect(String(results.find((r) => r.toolCallId === "skill-1")?.content)).toContain(
+      "Prefix layouts with the squad name.",
+    );
+    expect(String(results.find((r) => r.toolCallId === "skill-2")?.content)).toContain(
+      "my replacement body",
+    );
+  });
+
+  it("falls back to the built-ins when reading customization throws", async () => {
+    const stream = jest.fn<Promise<void>, Parameters<ILlmProvider["stream"]>>(
+      async (_args, onEvent) => {
+        onEvent({ type: "text", delta: "ok" });
+        onEvent({ type: "done", stopReason: "end" });
+      },
+    );
+    const orchestrator = new LocalAgentOrchestrator({
+      provider: { stream },
+      vtdClient: makeVtdClient(),
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      getPromptCustomization: () => {
+        throw new Error("storage unavailable");
+      },
+    });
+    const { sessionId } = await orchestrator.createSession();
+
+    await orchestrator.sendMessage(sessionId, "hello", "custom-2");
+    await waitUntil(() => stream.mock.calls.length === 1);
+
+    expect(stream.mock.calls[0]?.[0].system).toContain("- vtd-query:");
+  });
+});
+
+describe("summarizeWorkspace", () => {
+  it("reports an empty catalog rather than pretending data is loaded", () => {
+    expect(summarizeWorkspace({ topics: [], datatypes: new Map() })).toContain(
+      "No data source is loaded yet.",
+    );
+  });
+
+  it("groups topics under their schema", () => {
+    const summary = summarizeWorkspace({
+      topics: [
+        { name: "/a", schemaName: "pkg/Type" },
+        { name: "/b", schemaName: "pkg/Type" },
+        { name: "/c" },
+      ],
+      datatypes: new Map(),
+    });
+    expect(summary).toContain("pkg/Type: /a, /b");
+    expect(summary).toContain("(unknown schema): /c");
+  });
+
+  it("truncates a catalog too large for the prompt and says where to get the rest", () => {
+    const topics = Array.from({ length: 5000 }, (_unused, index) => ({
+      name: `/topic/${String(index)}`,
+      schemaName: "pkg/Type",
+    }));
+    const summary = summarizeWorkspace({ topics, datatypes: new Map() });
+    expect(summary.length).toBeLessThan(LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES + 200);
+    expect(summary).toContain("get_data_catalog");
   });
 });

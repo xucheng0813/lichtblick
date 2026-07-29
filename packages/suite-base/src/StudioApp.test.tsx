@@ -54,6 +54,13 @@ jest.mock("./components/SendNotificationToastAdapter", () => ({
   default: () => <div data-testid="notification-toast-adapter" />,
 }));
 
+// MultiProvider is mocked above, so the extension catalog context this component consumes is not
+// available here. Stubbed like its adapter siblings.
+jest.mock("./components/BundledExtensionInstaller", () => ({
+  __esModule: true,
+  BundledExtensionInstaller: () => <div data-testid="bundled-extension-installer" />,
+}));
+
 jest.mock("./providers/PanelCatalogProvider", () => ({
   __esModule: true,
   default: ({ children }: any) => <div data-testid="panel-catalog-provider">{children}</div>,

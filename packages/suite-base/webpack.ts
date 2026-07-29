@@ -269,6 +269,12 @@ export function makeConfig(
       ],
     },
     plugins: [
+      // @anthropic-ai/sdk's credential-profile helpers import node built-ins via the
+      // "node:" scheme, which webpack refuses to read; strip the prefix so those
+      // requests resolve through the browser fallbacks below (fs -> false, etc.)
+      new webpack.NormalModuleReplacementPlugin(/^node:/, (resource: { request: string }) => {
+        resource.request = resource.request.replace(/^node:/, "");
+      }),
       new webpack.ProvidePlugin({
         // since we avoid "import React from 'react'" we shim here when used globally
         React: "react",

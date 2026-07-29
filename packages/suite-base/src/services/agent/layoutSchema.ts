@@ -7,7 +7,20 @@ import type { LayoutData } from "@lichtblick/suite-base/context/CurrentLayoutCon
 
 import type { LayoutProposal } from "./types";
 
+/**
+ * Panel types contributed by the bundled robot visualization extensions.
+ *
+ * An extension panel's type is `<qualifiedName>.<registeredName>`, where qualifiedName is the
+ * extension's displayName. These are literal strings rather than a lookup because the layout
+ * allowlist is a security boundary evaluated against untrusted model output, and must not depend on
+ * what happens to be installed at the time.
+ */
+export const QUADRUPED_VIZ_PANEL_TYPE = "Quadruped Visualization.Quadruped Visualization";
+export const HUMANOID_VIZ_PANEL_TYPE = "Humanoid Visualization.Humanoid Visualization";
+
 export const ALLOWED_PANEL_TYPES = [
+  QUADRUPED_VIZ_PANEL_TYPE,
+  HUMANOID_VIZ_PANEL_TYPE,
   "3D",
   "Plot",
   "Image",
@@ -69,8 +82,19 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
 }
 
 function getPanelType(panelId: string): string | undefined {
-  const match = /^([^!\s]+)!([^!\s]+)$/.exec(panelId);
-  return match?.[1];
+  // The application derives a panel's type by splitting its id on the first "!", so the type may
+  // contain spaces and dots — extension panel types do. Only the suffix is shape-restricted here;
+  // the type itself is checked against the exact allowlist by the caller, so widening what may
+  // appear before the separator cannot admit an unlisted panel.
+  const separator = panelId.indexOf("!");
+  if (separator <= 0) {
+    return undefined;
+  }
+  const suffix = panelId.slice(separator + 1);
+  if (suffix.length === 0 || /[!\s]/u.test(suffix)) {
+    return undefined;
+  }
+  return panelId.slice(0, separator);
 }
 
 function validatePanelId(panelId: string, location: string): void {
