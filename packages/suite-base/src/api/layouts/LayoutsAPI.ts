@@ -97,6 +97,14 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
     return { status: "success", newLayout };
   }
 
+  public async setDescription(layoutId: string, description: string): Promise<boolean> {
+    const { data } = await HttpService.put<{ updated: boolean }>(
+      `${this.workspacePath}/${this.workspace}/${this.layoutPath}/${layoutId}/description`,
+      { description },
+    );
+    return data.updated;
+  }
+
   public async deleteLayout(id: string): Promise<boolean> {
     const deletedLayout = await HttpService.delete<RemoteLayout | undefined>(
       `${this.workspacePath}/${this.workspace}/layout/${id}`,

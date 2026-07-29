@@ -17,6 +17,7 @@ import { useLayoutSectionStyles } from "./LayoutSection.style";
 
 export default function LayoutSection({
   title,
+  descriptionEditingEnabled = false,
   disablePadding = false,
   expanded = true,
   emptyText,
@@ -34,8 +35,10 @@ export default function LayoutSection({
   onOverwrite,
   onRevert,
   onMakePersonalCopy,
+  onSetDescription,
 }: Readonly<{
   title: string | undefined;
+  descriptionEditingEnabled?: boolean;
   disablePadding?: boolean;
   expanded?: boolean;
   emptyText: string | undefined;
@@ -53,6 +56,7 @@ export default function LayoutSection({
   onOverwrite: (item: Layout) => void;
   onRevert: (item: Layout) => void;
   onMakePersonalCopy: (item: Layout) => void;
+  onSetDescription?: (layoutId: string, description: string) => Promise<boolean>;
 }>): React.JSX.Element {
   const { classes, cx } = useLayoutSectionStyles();
 
@@ -88,6 +92,7 @@ export default function LayoutSection({
             <LayoutRow
               key={layout.id}
               layout={layout}
+              descriptionEditingEnabled={descriptionEditingEnabled}
               anySelectedModifiedLayouts={anySelectedModifiedLayouts}
               multiSelectedIds={multiSelectedIds}
               selected={selectedId === layout.id}
@@ -100,6 +105,7 @@ export default function LayoutSection({
               onOverwrite={onOverwrite}
               onRevert={onRevert}
               onMakePersonalCopy={onMakePersonalCopy}
+              onSetDescription={onSetDescription}
             />
           ))}
         </List>
