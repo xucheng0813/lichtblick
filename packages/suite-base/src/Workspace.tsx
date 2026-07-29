@@ -120,6 +120,12 @@ import {
 } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
 import { createAgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
 import { readAgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import {
+  fetchAgentBootstrap,
+  getVizServerWorkspace,
+  mergeCustomizations,
+  readCachedAgentBootstrap,
+} from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
 import type { LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
 import { useAgentWorkspaceTools } from "@lichtblick/suite-base/services/agent/workspaceTools";
 import ICONS from "@lichtblick/suite-base/theme/icons";
@@ -928,10 +934,56 @@ function ConfiguredAgentWorkspaceIntegration({
       store,
     });
   }, []);
+  const vizServerWorkspace = getVizServerWorkspace();
+  const serverCustomizationRef = useRef(
+    vizServerWorkspace == undefined
+      ? undefined
+      : readCachedAgentBootstrap(vizServerWorkspace)?.prompt,
+  );
+  const [, setServerBootstrapRevision] = useState(0);
   const getPromptCustomization = useCallback(
-    () => readAgentPromptCustomization(appConfiguration),
+    () =>
+      mergeCustomizations(
+        serverCustomizationRef.current,
+        readAgentPromptCustomization(appConfiguration),
+      ),
     [appConfiguration],
   );
+  useEffect(() => {
+    if (vizServerWorkspace == undefined) {
+      serverCustomizationRef.current = undefined;
+      return undefined;
+    }
+    let disposed = false;
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) {
+        return;
+      }
+      refreshing = true;
+      try {
+        const cachedBootstrap = readCachedAgentBootstrap(vizServerWorkspace);
+        const knownVersion =
+          cachedBootstrap?.apiKeyOmitted === true ? undefined : cachedBootstrap?.version;
+        const bootstrap = await fetchAgentBootstrap(vizServerWorkspace, knownVersion);
+        if (!disposed && bootstrap.unchanged !== true) {
+          serverCustomizationRef.current = bootstrap.prompt;
+          setServerBootstrapRevision((revision) => revision + 1);
+        }
+      } catch {
+        // Cached or built-in settings remain active while the viz server is unavailable.
+      } finally {
+        refreshing = false;
+      }
+    };
+    serverCustomizationRef.current = readCachedAgentBootstrap(vizServerWorkspace)?.prompt;
+    void refresh();
+    const interval = setInterval(() => void refresh(), 5 * 60 * 1000);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
+  }, [vizServerWorkspace]);
   const restoreHistory = useMemo(() => persistence.restoreLlmHistory, [persistence]);
   const onHistoryChanged = useMemo(() => persistence.onLlmHistoryChanged, [persistence]);
   const agentClient = useLocalAgentClient(

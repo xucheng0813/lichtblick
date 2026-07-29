@@ -57,6 +57,7 @@ import {
   AgentSettingsDraft,
   commitAgentSettings,
   createAgentSettingsDraft,
+  getAgentConfigurationSource,
   selectAgentConfiguration,
   useAgentSettings,
   validateAgentConfiguration,
@@ -74,6 +75,11 @@ import {
   writeAgentPromptCustomization,
 } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import {
+  getVizServerWorkspace,
+  publishCustomization,
+  readCachedAgentBootstrap,
+} from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
 import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { LaunchPreferenceValue } from "@lichtblick/suite-base/types/LaunchPreferenceValue";
 import { TimeDisplayMethod } from "@lichtblick/suite-base/types/panels";
@@ -576,6 +582,7 @@ function AgentSettingsForm({
     { desktop },
   );
   const errors = validateAgentConfiguration(selectedConfiguration);
+  const configurationSource = getAgentConfigurationSource(snapshot, { desktop });
 
   const updateProviderSettings = useCallback((update: Partial<AgentSettingsDraft["anthropic"]>) => {
     setDirty(true);
@@ -678,6 +685,11 @@ function AgentSettingsForm({
       <Alert severity={Object.keys(errors).length === 0 ? "success" : "info"}>
         {Object.keys(errors).length === 0 ? t("agentConfigured") : t("agentNotConfigured")}
       </Alert>
+      <FormHelperText>
+        {configurationSource === "server"
+          ? "当前使用服务器默认配置"
+          : "当前使用本地配置"}
+      </FormHelperText>
       {(credentialBackendUnavailable ||
         migrationError instanceof AgentCredentialsBackendUnavailableError) && (
         <Alert severity="warning">{t("agentCredentialBackendUnavailable")}</Alert>
@@ -826,6 +838,13 @@ function AgentPromptSettings(): React.ReactElement {
   const [skillView, setSkillView] = useState<SkillView>("edit");
   const [error, setError] = useState<string>();
   const [saved, setSaved] = useState(false);
+  const workspace = getVizServerWorkspace();
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string>();
+  const [publishSucceeded, setPublishSucceeded] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | undefined>(() =>
+    workspace == undefined ? undefined : readCachedAgentBootstrap(workspace)?.syncedAt,
+  );
 
   const skills = useMemo(() => resolveSkills(draft), [draft]);
   const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
@@ -847,6 +866,24 @@ function AgentPromptSettings(): React.ReactElement {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setSaved(false);
+    }
+  };
+
+  const publish = async () => {
+    if (workspace == undefined) {
+      return;
+    }
+    setPublishing(true);
+    setPublishError(undefined);
+    setPublishSucceeded(false);
+    try {
+      const bootstrap = await publishCustomization(workspace, draft);
+      setLastSyncedAt(bootstrap.syncedAt);
+      setPublishSucceeded(true);
+    } catch (caught) {
+      setPublishError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -989,9 +1026,23 @@ function AgentPromptSettings(): React.ReactElement {
 
       {error != undefined && <Alert severity="error">{error}</Alert>}
       {saved && <Alert severity="success">{t("agentPromptSaved")}</Alert>}
+      {publishError != undefined && <Alert severity="error">发布失败：{publishError}</Alert>}
+      {publishSucceeded && <Alert severity="success">发布成功</Alert>}
+      {lastSyncedAt != undefined && (
+        <FormHelperText>
+          上次同步时间：{new Date(lastSyncedAt).toLocaleString("zh-CN")}
+        </FormHelperText>
+      )}
 
       <Button onClick={() => void save()} variant="contained">
         {t("agentPromptSave")}
+      </Button>
+      <Button
+        disabled={workspace == undefined || publishing}
+        onClick={() => void publish()}
+        variant="outlined"
+      >
+        {publishing ? "正在发布…" : "发布到服务器"}
       </Button>
     </Stack>
   );
