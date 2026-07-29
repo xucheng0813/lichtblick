@@ -25,10 +25,12 @@ import useAsyncFn from "react-use/lib/useAsyncFn";
 
 import Logger from "@lichtblick/log";
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
+import { LayoutsAPI } from "@lichtblick/suite-base/api/layouts/LayoutsAPI";
 import SignInPrompt from "@lichtblick/suite-base/components/LayoutBrowser/SignInPrompt";
 import { SidebarContent } from "@lichtblick/suite-base/components/SidebarContent";
 import Stack from "@lichtblick/suite-base/components/Stack";
 import { useAnalytics } from "@lichtblick/suite-base/context/AnalyticsContext";
+import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import {
   LayoutID,
   LayoutState,
@@ -51,6 +53,11 @@ import { usePrompt } from "@lichtblick/suite-base/hooks/usePrompt";
 import { defaultPlaybackConfig } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/reducers";
 import { AppEvent } from "@lichtblick/suite-base/services/IAnalytics";
 import { Layout, layoutIsShared } from "@lichtblick/suite-base/services/ILayoutStorage";
+import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspace,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 import LayoutSection from "./LayoutSection";
 import { useStyles } from "./index.style";
@@ -69,8 +76,14 @@ export default function LayoutBrowser({
   const { signIn } = useCurrentUser();
   const { enqueueSnackbar } = useSnackbar();
   const layoutManager = useLayoutManager();
+  const appConfiguration = useAppConfiguration();
   const [prompt, promptModal] = usePrompt();
   const analytics = useAnalytics();
+  const workspace = resolveWorkspace(appConfiguration);
+  const layoutsAPI = useMemo(
+    () => (resolveVizServerConfigured(workspace) ? new LayoutsAPI(workspace) : undefined),
+    [workspace],
+  );
 
   const currentLayoutId = useCurrentLayoutSelector(selectedLayoutIdSelector);
   const { onSelectLayout, state, dispatch } = useLayoutNavigation();
@@ -271,6 +284,30 @@ export default function LayoutBrowser({
     [analytics, layoutManager, onSelectLayout, setPersonalSectionExpanded],
   );
 
+  const onSetDescription = useCallback(
+    async (layoutId: string, description: string): Promise<boolean> => {
+      if (layoutsAPI == undefined) {
+        return false;
+      }
+      try {
+        const updated = await layoutsAPI.setDescription(layoutId, description);
+        if (!updated) {
+          enqueueSnackbar("描述保存失败", { variant: "error" });
+        }
+        return updated;
+      } catch (error) {
+        enqueueSnackbar(
+          error instanceof HttpError && error.status === 404
+            ? "布局尚未同步到服务器,请稍后重试"
+            : "描述保存失败",
+          { variant: "error" },
+        );
+        return false;
+      }
+    },
+    [enqueueSnackbar, layoutsAPI],
+  );
+
   const showSignInPrompt =
     signIn != undefined && !layoutManager.supportsSharing && !hideSignInPrompt;
 
@@ -349,6 +386,7 @@ export default function LayoutBrowser({
         )}
         <LayoutSection
           disablePadding={enableNewTopNav}
+          descriptionEditingEnabled={layoutsAPI != undefined}
           title={layoutManager.supportsSharing ? "Personal" : undefined}
           expanded={personalExpanded}
           onToggleExpanded={togglePersonalExpanded}
@@ -366,10 +404,12 @@ export default function LayoutBrowser({
           onOverwrite={onOverwriteLayout}
           onRevert={onRevertLayout}
           onMakePersonalCopy={onMakePersonalCopy}
+          onSetDescription={onSetDescription}
         />
         {layoutManager.supportsSharing && (
           <LayoutSection
             disablePadding={enableNewTopNav}
+            descriptionEditingEnabled={layoutsAPI != undefined}
             title="Organization"
             expanded={sharedExpanded}
             onToggleExpanded={toggleSharedExpanded}
@@ -387,6 +427,7 @@ export default function LayoutBrowser({
             onOverwrite={onOverwriteLayout}
             onRevert={onRevertLayout}
             onMakePersonalCopy={onMakePersonalCopy}
+            onSetDescription={onSetDescription}
           />
         )}
         {!enableNewTopNav && <Stack flexGrow={1} />}

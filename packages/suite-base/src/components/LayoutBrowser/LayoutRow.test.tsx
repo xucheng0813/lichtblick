@@ -111,6 +111,70 @@ describe("LayoutRow rendering", () => {
     expect(screen.getByTestId("delete-layout")).toBeInTheDocument();
   });
 
+  it("shows edit description only for a synced remote layout when viz-server is configured", () => {
+    const remoteLayout = {
+      ...defaultLayout,
+      externalId: "remote-layout",
+      syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+    };
+    let rendered = renderComponent({
+      layout: remoteLayout,
+      descriptionEditingEnabled: false,
+      onSetDescription: jest.fn(),
+    });
+    fireEvent.click(screen.getByTestId("layout-actions"));
+    expect(screen.queryByTestId("edit-layout-description")).not.toBeInTheDocument();
+    rendered.unmount();
+
+    rendered = renderComponent({
+      layout: { ...remoteLayout, externalId: undefined, syncInfo: undefined },
+      descriptionEditingEnabled: true,
+      onSetDescription: jest.fn(),
+    });
+    fireEvent.click(screen.getByTestId("layout-actions"));
+    expect(screen.queryByTestId("edit-layout-description")).not.toBeInTheDocument();
+    rendered.unmount();
+
+    renderComponent({
+      layout: remoteLayout,
+      descriptionEditingEnabled: true,
+      onSetDescription: jest.fn(),
+    });
+    fireEvent.click(screen.getByTestId("layout-actions"));
+    expect(screen.getByTestId("edit-layout-description")).toBeInTheDocument();
+  });
+
+  it("submits the description from the dialog with the layout id", async () => {
+    const onSetDescription = jest.fn().mockResolvedValue(true);
+    const remoteLayout = {
+      ...defaultLayout,
+      externalId: "remote-layout",
+      syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+    };
+    renderComponent({
+      layout: remoteLayout,
+      descriptionEditingEnabled: true,
+      onSetDescription,
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+    fireEvent.click(screen.getByTestId("edit-layout-description"));
+    fireEvent.change(screen.getByRole("textbox", { name: "布局描述" }), {
+      target: { value: "用于查看设备诊断数据" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(onSetDescription).toHaveBeenCalledWith(
+        remoteLayout.id,
+        "用于查看设备诊断数据",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "编辑布局描述" })).not.toBeInTheDocument();
+    });
+  });
+
   it("when rename menu item is clicked then text field for editing name appears", async () => {
     renderComponent();
     fireEvent.click(screen.getByTestId("layout-actions"));
