@@ -7,7 +7,7 @@
 // License, v2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { SnackbarProvider, useSnackbar } from "notistack";
 import { useEffect } from "react";
 
@@ -21,6 +21,7 @@ import {
   useCurrentLayoutSelector,
 } from "@lichtblick/suite-base/context/CurrentLayoutContext";
 import LayoutManagerContext from "@lichtblick/suite-base/context/LayoutManagerContext";
+import { RemoteLayoutStorageContext } from "@lichtblick/suite-base/context/RemoteLayoutStorageContext";
 import {
   UserProfileStorage,
   UserProfileStorageContext,
@@ -33,6 +34,8 @@ import {
   MAX_SUPPORTED_LAYOUT_VERSION,
 } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/constants";
 import { ILayoutManager } from "@lichtblick/suite-base/services/ILayoutManager";
+import { IRemoteLayoutStorage } from "@lichtblick/suite-base/services/IRemoteLayoutStorage";
+import LayoutBuilder from "@lichtblick/suite-base/testing/builders/LayoutBuilder";
 import { BasicBuilder } from "@lichtblick/test-builders";
 
 jest.mock("notistack", () => ({
@@ -85,15 +88,32 @@ function makeMockUserProfile() {
     setUserProfile: jest.fn().mockImplementation(mockThrow("setUserProfile")),
   };
 }
+type MockRemoteLayoutStorage = jest.Mocked<IRemoteLayoutStorage> & {
+  getDefaultLayout: jest.MockedFunction<NonNullable<IRemoteLayoutStorage["getDefaultLayout"]>>;
+};
+
+function makeMockRemoteLayoutStorage(): MockRemoteLayoutStorage {
+  return {
+    workspace: "test-workspace",
+    getLayouts: jest.fn(),
+    getDefaultLayout: jest.fn(),
+    getLayout: jest.fn(),
+    saveNewLayout: jest.fn(),
+    updateLayout: jest.fn(),
+    deleteLayout: jest.fn(),
+  };
+}
 
 function renderTest({
   mockLayoutManager,
   mockUserProfile,
   mockAppParameters = {},
+  mockRemoteLayoutStorage,
 }: {
   mockLayoutManager: ILayoutManager;
   mockUserProfile: UserProfileStorage;
   mockAppParameters?: Record<string, string>;
+  mockRemoteLayoutStorage?: IRemoteLayoutStorage;
 }) {
   const childMounted = new Condvar();
   const childMountedWait = childMounted.wait();
@@ -120,14 +140,16 @@ function renderTest({
         return (
           <AppParametersProvider appParameters={mockAppParameters}>
             <SnackbarProvider>
-              <LayoutManagerContext.Provider value={mockLayoutManager}>
-                <UserProfileStorageContext.Provider value={mockUserProfile}>
-                  <CurrentLayoutProvider loaders={[]}>
-                    {children}
-                    <CurrentLayoutSyncAdapter />
-                  </CurrentLayoutProvider>
-                </UserProfileStorageContext.Provider>
-              </LayoutManagerContext.Provider>
+              <RemoteLayoutStorageContext.Provider value={mockRemoteLayoutStorage}>
+                <LayoutManagerContext.Provider value={mockLayoutManager}>
+                  <UserProfileStorageContext.Provider value={mockUserProfile}>
+                    <CurrentLayoutProvider loaders={[]}>
+                      {children}
+                      <CurrentLayoutSyncAdapter />
+                    </CurrentLayoutProvider>
+                  </UserProfileStorageContext.Provider>
+                </LayoutManagerContext.Provider>
+              </RemoteLayoutStorageContext.Provider>
             </SnackbarProvider>
           </AppParametersProvider>
         );
@@ -203,6 +225,99 @@ describe("CurrentLayoutProvider", () => {
         },
       },
     ]);
+  });
+
+  it("restores the local selection before URL and cloud defaults", async () => {
+    const currentLayout = LayoutBuilder.layout({
+      id: LayoutBuilder.layoutId("local-layout"),
+      name: "Local layout",
+    });
+    const urlLayout = LayoutBuilder.layout({
+      id: LayoutBuilder.layoutId("url-layout"),
+      name: "URL layout",
+    });
+    const mockRemoteLayoutStorage = makeMockRemoteLayoutStorage();
+    mockRemoteLayoutStorage.getDefaultLayout.mockResolvedValue(LayoutBuilder.remoteLayout());
+    const selected = new Condvar();
+
+    mockLayoutManager.getLayouts.mockResolvedValue([currentLayout, urlLayout]);
+    mockLayoutManager.getLayout.mockImplementation(async (id) => {
+      if (id === currentLayout.id) {
+        selected.notifyAll();
+        return currentLayout;
+      }
+      return undefined;
+    });
+    mockUserProfile.getUserProfile.mockResolvedValue({
+      currentLayoutId: currentLayout.id,
+    });
+
+    renderTest({
+      mockLayoutManager,
+      mockUserProfile,
+      mockAppParameters: { defaultLayout: urlLayout.name },
+      mockRemoteLayoutStorage,
+    });
+    await act(async () => {
+      await selected.wait();
+    });
+
+    expect(mockLayoutManager.getLayout).toHaveBeenCalledWith(currentLayout.id);
+    expect(mockRemoteLayoutStorage.getDefaultLayout).not.toHaveBeenCalled();
+  });
+
+  it("does not create a layout when the cloud workspace has no default", async () => {
+    const mockRemoteLayoutStorage = makeMockRemoteLayoutStorage();
+    const requested = new Condvar();
+    mockRemoteLayoutStorage.getDefaultLayout.mockImplementation(async () => {
+      requested.notifyAll();
+      return undefined;
+    });
+
+    renderTest({
+      mockLayoutManager,
+      mockUserProfile,
+      mockRemoteLayoutStorage,
+    });
+    await act(async () => {
+      await requested.wait();
+    });
+
+    expect(mockLayoutManager.saveNewLayout).not.toHaveBeenCalled();
+    expect(mockLayoutManager.getLayout).not.toHaveBeenCalled();
+  });
+
+  it("selects the cloud default after the same layout id appears in the local cache", async () => {
+    const mockRemoteLayoutStorage = makeMockRemoteLayoutStorage();
+    const remoteDefault = LayoutBuilder.remoteLayout();
+    const cachedDefault = LayoutBuilder.layout({ id: remoteDefault.id });
+    const selected = new Condvar();
+    mockRemoteLayoutStorage.getDefaultLayout.mockResolvedValue(remoteDefault);
+    mockUserProfile.setUserProfile.mockResolvedValue(undefined);
+    mockLayoutManager.getLayouts
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([cachedDefault]);
+    mockLayoutManager.getLayout.mockImplementation(async (id) => {
+      if (id === cachedDefault.id) {
+        selected.notifyAll();
+        return cachedDefault;
+      }
+      return undefined;
+    });
+
+    const { all } = renderTest({
+      mockLayoutManager,
+      mockUserProfile,
+      mockRemoteLayoutStorage,
+    });
+    await act(async () => {
+      await selected.wait();
+    });
+
+    await waitFor(() => {
+      expect(all.at(-1)?.layoutState.selectedLayout?.id).toBe(remoteDefault.id);
+    });
+    expect(mockLayoutManager.saveNewLayout).not.toHaveBeenCalled();
   });
 
   it("refuses to load an incompatible layout", async () => {
