@@ -144,6 +144,23 @@ describe("LayoutRow rendering", () => {
     expect(screen.getByTestId("edit-layout-description")).toBeInTheDocument();
   });
 
+  it("shows edit description for a remote personal layout without sync info", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-personal-layout",
+        permission: "CREATOR_WRITE",
+        syncInfo: undefined,
+      },
+      descriptionEditingEnabled: true,
+      onSetDescription: jest.fn(),
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.getByTestId("edit-layout-description")).toBeInTheDocument();
+  });
+
   it("submits the description from the dialog with the layout id", async () => {
     const onSetDescription = jest.fn().mockResolvedValue(true);
     const remoteLayout = {
