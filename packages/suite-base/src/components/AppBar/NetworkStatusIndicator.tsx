@@ -6,7 +6,10 @@ import { Tooltip, Typography } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import { useNetworkState } from "react-use";
 
-import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspaceBestEffort,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 import { useStyles } from "./NetworkStatusIndicator.style";
 
@@ -15,15 +18,8 @@ export function NetworkStatusIndicator(): React.JSX.Element | undefined {
   const { t } = useTranslation("appBar");
   const { online = true } = useNetworkState();
 
-  const url: URL = React.useMemo(() => new URL(window.location.href), []);
-  const workspace: string | undefined = React.useMemo(
-    () => url.searchParams.get("workspace") ?? undefined,
-    [url],
-  );
-  const hasRemoteConfig: boolean = React.useMemo(
-    () => workspace != undefined && APP_CONFIG.apiUrl != undefined,
-    [workspace],
-  );
+  const workspace: string | undefined = resolveWorkspaceBestEffort();
+  const hasRemoteConfig: boolean = resolveVizServerConfigured(workspace);
 
   if (!hasRemoteConfig || online) {
     return undefined;

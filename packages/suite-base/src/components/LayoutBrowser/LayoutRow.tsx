@@ -27,11 +27,16 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { useMountedState } from "react-use";
 
 import { useLayoutManager } from "@lichtblick/suite-base/context/LayoutManagerContext";
 import { useConfirm } from "@lichtblick/suite-base/hooks/useConfirm";
-import { Layout, layoutIsShared } from "@lichtblick/suite-base/services/ILayoutStorage";
+import {
+  Layout,
+  layoutIsReadOnly,
+  layoutIsShared,
+} from "@lichtblick/suite-base/services/ILayoutStorage";
 
 import { EditLayoutDescriptionDialog } from "./EditLayoutDescriptionDialog";
 import { StyledListItem, StyledMenuItem } from "./LayoutRow.style";
@@ -43,6 +48,7 @@ function canEditLayoutDescription(
 ): boolean {
   return (
     enabled &&
+    !layoutIsReadOnly(layout) &&
     layout.externalId != undefined &&
     layout.syncInfo?.status !== "remotely-deleted"
   );
@@ -81,6 +87,7 @@ export default React.memo(function LayoutRow({
   onMakePersonalCopy: (item: Layout) => void;
   onSetDescription?: (layoutId: string, description: string) => Promise<boolean>;
 }): React.JSX.Element {
+  const { t } = useTranslation("layoutBrowser");
   const isMounted = useMountedState();
   const [confirm, confirmModal] = useConfirm();
   const layoutManager = useLayoutManager();
@@ -98,6 +105,7 @@ export default React.memo(function LayoutRow({
   const deletedOnServer = layout.syncInfo?.status === "remotely-deleted";
   const hasModifications = layout.working != undefined;
   const multiSelection = multiSelectedIds.length > 1;
+  const readOnly = layoutIsReadOnly(layout);
 
   useLayoutEffect(() => {
     const onlineListener = () => {
@@ -111,7 +119,9 @@ export default React.memo(function LayoutRow({
   }, [layoutManager]);
 
   const overwriteAction = useCallback(() => {
-    onOverwrite(layout);
+    if (!layoutIsReadOnly(layout)) {
+      onOverwrite(layout);
+    }
   }, [layout, onOverwrite]);
 
   const confirmRevert = useCallback(async () => {
@@ -128,13 +138,18 @@ export default React.memo(function LayoutRow({
   }, [confirm, layout, multiSelection, onRevert]);
 
   const renameAction = useCallback(() => {
+    if (layoutIsReadOnly(layout)) {
+      return;
+    }
     setNameFieldValue(layout.name);
     setEditingName(true);
   }, [layout]);
 
   const editDescriptionAction = useCallback(() => {
-    setEditingDescription(true);
-  }, []);
+    if (!layoutIsReadOnly(layout)) {
+      setEditingDescription(true);
+    }
+  }, [layout]);
 
   const duplicateAction = useCallback(() => {
     if (layoutIsShared(layout)) {
@@ -145,7 +160,9 @@ export default React.memo(function LayoutRow({
   }, [layout, onDuplicate, onMakePersonalCopy]);
 
   const shareAction = useCallback(() => {
-    onShare(layout);
+    if (!layoutIsReadOnly(layout)) {
+      onShare(layout);
+    }
   }, [layout, onShare]);
 
   const exportAction = useCallback(() => {
@@ -156,6 +173,10 @@ export default React.memo(function LayoutRow({
     (event: React.FormEvent) => {
       event.preventDefault();
       if (!editingName) {
+        return;
+      }
+      if (layoutIsReadOnly(layout)) {
+        setEditingName(false);
         return;
       }
       const newName = nameFieldValue;
@@ -183,6 +204,9 @@ export default React.memo(function LayoutRow({
   const nameInputRef = useRef<HTMLInputElement>(ReactNull);
 
   const confirmDelete = useCallback(() => {
+    if (layoutIsReadOnly(layout)) {
+      return;
+    }
     const layoutWarning =
       !multiSelection && layoutIsShared(layout)
         ? "Organization members will no longer be able to access this layout. "
@@ -229,15 +253,19 @@ export default React.memo(function LayoutRow({
       text: "Rename",
       onClick: renameAction,
       "data-testid": "rename-layout",
-      disabled: (layoutIsShared(layout) && !isOnline) || multiSelection,
-      secondaryText: layoutIsShared(layout) && !isOnline ? "Offline" : undefined,
+      disabled: readOnly || (layoutIsShared(layout) && !isOnline) || multiSelection,
+      secondaryText: readOnly
+        ? t("readOnlyLayout")
+        : layoutIsShared(layout) && !isOnline
+          ? "Offline"
+          : undefined,
     },
     canEditLayoutDescription(layout, { enabled: descriptionEditingEnabled }) &&
       onSetDescription != undefined &&
       !multiSelection && {
         type: "item",
         key: "edit-description",
-        text: "编辑描述",
+        text: t("editDescription"),
         onClick: editDescriptionAction,
         "data-testid": "edit-layout-description",
       },
@@ -259,8 +287,8 @@ export default React.memo(function LayoutRow({
         key: "share",
         text: "Share with team…",
         onClick: shareAction,
-        disabled: !isOnline || multiSelection,
-        secondaryText: !isOnline ? "Offline" : undefined,
+        disabled: readOnly || !isOnline || multiSelection,
+        secondaryText: readOnly ? t("readOnlyLayout") : !isOnline ? "Offline" : undefined,
       },
     {
       type: "item",
@@ -277,6 +305,8 @@ export default React.memo(function LayoutRow({
       text: "Delete",
       onClick: confirmDelete,
       "data-testid": "delete-layout",
+      disabled: readOnly,
+      secondaryText: readOnly ? t("readOnlyLayout") : undefined,
     },
   ];
 
@@ -287,8 +317,12 @@ export default React.memo(function LayoutRow({
         key: "overwrite",
         text: "Save changes",
         onClick: overwriteAction,
-        disabled: deletedOnServer || (layoutIsShared(layout) && !isOnline),
-        secondaryText: layoutIsShared(layout) && !isOnline ? "Offline" : undefined,
+        disabled: readOnly || deletedOnServer || (layoutIsShared(layout) && !isOnline),
+        secondaryText: readOnly
+          ? t("readOnlyLayout")
+          : layoutIsShared(layout) && !isOnline
+            ? "Offline"
+            : undefined,
       },
       {
         type: "item",
@@ -448,9 +482,17 @@ export default React.memo(function LayoutRow({
                     handleClose();
                   }}
                 >
-                  <Typography variant="inherit" color={item.key === "delete" ? "error" : undefined}>
-                    {item.text}
-                  </Typography>
+                  <ListItemText
+                    primary={
+                      <Typography
+                        variant="inherit"
+                        color={item.key === "delete" ? "error" : undefined}
+                      >
+                        {item.text}
+                      </Typography>
+                    }
+                    secondary={item.secondaryText}
+                  />
                 </StyledMenuItem>
               );
             case "header":

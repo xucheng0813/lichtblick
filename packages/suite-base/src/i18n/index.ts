@@ -10,9 +10,10 @@ import LanguageDetector, { DetectorOptions } from "i18next-browser-languagedetec
 import { initReactI18next } from "react-i18next";
 
 import * as en from "./en";
+import * as zh from "./zh";
 import { SESSION_STORAGE_I18N_LANGUAGE } from "../constants/browserStorageKeys";
 
-export const translations = { en };
+export const translations = { en, zh };
 
 export type Language = keyof typeof translations;
 

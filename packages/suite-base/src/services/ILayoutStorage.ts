@@ -85,6 +85,10 @@ export function layoutIsShared(
   return layoutPermissionIsShared(layout.permission);
 }
 
+export function layoutIsReadOnly(layout: Layout): boolean {
+  return layout.permission === "ORG_READ";
+}
+
 export function layoutAppearsDeleted(layout: Layout): boolean {
   return (
     layout.syncInfo?.status === "locally-deleted" ||

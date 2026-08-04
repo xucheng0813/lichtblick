@@ -16,6 +16,7 @@ export * from "./gauge";
 export * from "./general";
 export * from "./httpErrors";
 export * from "./incompatibleLayoutVersion";
+export * from "./layoutBrowser";
 export * from "./log";
 export * from "./openDialog";
 export * from "./panelConfigVersionGuard";

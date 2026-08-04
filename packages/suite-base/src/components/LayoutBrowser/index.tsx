@@ -21,6 +21,7 @@ import * as _ from "lodash-es";
 import moment from "moment";
 import { useSnackbar } from "notistack";
 import { useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import useAsyncFn from "react-use/lib/useAsyncFn";
 
 import Logger from "@lichtblick/log";
@@ -52,7 +53,11 @@ import { useLayoutTransfer } from "@lichtblick/suite-base/hooks/useLayoutTransfe
 import { usePrompt } from "@lichtblick/suite-base/hooks/usePrompt";
 import { defaultPlaybackConfig } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/reducers";
 import { AppEvent } from "@lichtblick/suite-base/services/IAnalytics";
-import { Layout, layoutIsShared } from "@lichtblick/suite-base/services/ILayoutStorage";
+import {
+  Layout,
+  layoutIsReadOnly,
+  layoutIsShared,
+} from "@lichtblick/suite-base/services/ILayoutStorage";
 import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
 import {
   resolveVizServerConfigured,
@@ -75,6 +80,7 @@ export default function LayoutBrowser({
   const { classes } = useStyles();
   const { signIn } = useCurrentUser();
   const { enqueueSnackbar } = useSnackbar();
+  const { t } = useTranslation("layoutBrowser");
   const layoutManager = useLayoutManager();
   const appConfiguration = useAppConfiguration();
   const [prompt, promptModal] = usePrompt();
@@ -83,6 +89,10 @@ export default function LayoutBrowser({
   const layoutsAPI = useMemo(
     () => (resolveVizServerConfigured(workspace) ? new LayoutsAPI(workspace) : undefined),
     [workspace],
+  );
+  const descriptionEditingEnabled = useCallback(
+    (layout: Layout) => layoutsAPI != undefined && !layoutIsReadOnly(layout),
+    [layoutsAPI],
   );
 
   const currentLayoutId = useCurrentLayoutSelector(selectedLayoutIdSelector);
@@ -292,20 +302,20 @@ export default function LayoutBrowser({
       try {
         const updated = await layoutsAPI.setDescription(layoutId, description);
         if (!updated) {
-          enqueueSnackbar("描述保存失败", { variant: "error" });
+          enqueueSnackbar(t("descriptionSaveFailed"), { variant: "error" });
         }
         return updated;
       } catch (error) {
         enqueueSnackbar(
           error instanceof HttpError && error.status === 404
-            ? "布局尚未同步到服务器,请稍后重试"
-            : "描述保存失败",
+            ? t("layoutNotSyncedToServer")
+            : t("descriptionSaveFailed"),
           { variant: "error" },
         );
         return false;
       }
     },
-    [enqueueSnackbar, layoutsAPI],
+    [enqueueSnackbar, layoutsAPI, t],
   );
 
   const showSignInPrompt =
@@ -386,7 +396,7 @@ export default function LayoutBrowser({
         )}
         <LayoutSection
           disablePadding={enableNewTopNav}
-          descriptionEditingEnabled={layoutsAPI != undefined}
+          descriptionEditingEnabled={descriptionEditingEnabled}
           title={layoutManager.supportsSharing ? "Personal" : undefined}
           expanded={personalExpanded}
           onToggleExpanded={togglePersonalExpanded}
@@ -409,7 +419,7 @@ export default function LayoutBrowser({
         {layoutManager.supportsSharing && (
           <LayoutSection
             disablePadding={enableNewTopNav}
-            descriptionEditingEnabled={layoutsAPI != undefined}
+            descriptionEditingEnabled={descriptionEditingEnabled}
             title="Organization"
             expanded={sharedExpanded}
             onToggleExpanded={toggleSharedExpanded}

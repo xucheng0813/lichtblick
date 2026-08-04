@@ -22,10 +22,17 @@ import { createRoot } from "react-dom/client";
 import DocumentDropListener from "@lichtblick/suite-base/components/DocumentDropListener";
 import ThemeProvider from "@lichtblick/suite-base/theme/ThemeProvider";
 
-jest.mock("@lichtblick/suite-base/constants/config", () => ({
-  APP_CONFIG: {
-    apiUrl: "https://api.example.com",
-  },
+let mockWorkspace: string | undefined;
+let mockHttpBaseUrl: string | undefined = "https://api.example.com";
+
+jest.mock("@lichtblick/suite-base/services/http/httpBaseUrl", () => ({
+  getHttpBaseUrl: () => mockHttpBaseUrl,
+}));
+
+jest.mock("@lichtblick/suite-base/util/vizServerParams", () => ({
+  resolveWorkspaceBestEffort: () => mockWorkspace,
+  resolveVizServerConfigured: (workspace: string | undefined) =>
+    workspace != undefined && workspace !== "" && mockHttpBaseUrl != undefined,
 }));
 
 describe("<DocumentDropListener>", () => {
@@ -33,6 +40,8 @@ describe("<DocumentDropListener>", () => {
   let windowDragoverHandler: typeof jest.fn;
 
   beforeEach(() => {
+    mockWorkspace = undefined;
+    mockHttpBaseUrl = "https://api.example.com";
     windowDragoverHandler = jest.fn();
     window.addEventListener("dragover", windowDragoverHandler);
 
@@ -88,8 +97,9 @@ describe("<DocumentDropListener> enhanced functionality", () => {
     const wrapper = document.createElement("div");
     document.body.appendChild(wrapper);
 
+    let root: ReturnType<typeof createRoot> | undefined;
     expect(() => {
-      const root = createRoot(wrapper);
+      root = createRoot(wrapper);
       root.render(
         <div>
           <SnackbarProvider>
@@ -104,6 +114,7 @@ describe("<DocumentDropListener> enhanced functionality", () => {
       );
     }).not.toThrow();
 
+    root?.unmount();
     wrapper.remove();
   });
 });
@@ -111,21 +122,23 @@ describe("<DocumentDropListener> enhanced functionality", () => {
 describe("<DocumentDropListener> onDrop useCallback", () => {
   let wrapper: HTMLDivElement;
   let onDropSpy: jest.Mock;
+  let root: ReturnType<typeof createRoot>;
 
   beforeEach(() => {
     onDropSpy = jest.fn();
     wrapper = document.createElement("div");
     document.body.appendChild(wrapper);
+    root = createRoot(wrapper);
   });
 
   afterEach(() => {
+    root.unmount();
     wrapper.remove();
     jest.clearAllMocks();
   });
 
   it("should not call onDrop when no dataTransfer is present", async () => {
     // Given
-    const root = createRoot(wrapper);
     root.render(
       <SnackbarProvider>
         <ThemeProvider isDark={false}>
@@ -147,7 +160,6 @@ describe("<DocumentDropListener> onDrop useCallback", () => {
 
   it("should not call onDrop when no allowedExtensions are provided", async () => {
     // Given
-    const root = createRoot(wrapper);
     root.render(
       <SnackbarProvider>
         <ThemeProvider isDark={false}>
@@ -173,5 +185,79 @@ describe("<DocumentDropListener> onDrop useCallback", () => {
 
     // Then
     expect(onDropSpy).not.toHaveBeenCalled();
+  });
+
+  it("shows the namespace selection modal for a layout drop when workspace is configured via app settings", async () => {
+    // Given - workspace configured via app settings (no ?workspace= URL parameter)
+    mockWorkspace = "configured-workspace";
+    mockHttpBaseUrl = "https://api.example.com";
+
+    root.render(
+      <SnackbarProvider>
+        <ThemeProvider isDark={false}>
+          <DocumentDropListener allowedExtensions={[".json"]} onDrop={onDropSpy} />
+        </ThemeProvider>
+      </SnackbarProvider>,
+    );
+
+    // Wait for React to commit and attach the document listeners
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // When - drop a layout file
+    const dropEvent = new MouseEvent("drop", { bubbles: true, cancelable: true });
+    (dropEvent as any).dataTransfer = {
+      items: [
+        {
+          getAsFile: () => new File(["content"], "test.json", { type: "application/json" }),
+          webkitGetAsEntry: () => ({ isFile: true }),
+        },
+      ],
+    };
+
+    await act(async () => {
+      document.dispatchEvent(dropEvent);
+    });
+
+    // Then - the drop is not handled as a local open, the namespace modal is shown instead
+    expect(onDropSpy).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Choose Installation Location");
+  });
+
+  it("does not show the namespace selection modal when no workspace is configured", async () => {
+    // Given - no workspace configured anywhere
+    mockWorkspace = undefined;
+    mockHttpBaseUrl = undefined;
+
+    root.render(
+      <SnackbarProvider>
+        <ThemeProvider isDark={false}>
+          <DocumentDropListener allowedExtensions={[".json"]} onDrop={onDropSpy} />
+        </ThemeProvider>
+      </SnackbarProvider>,
+    );
+
+    // Wait for React to commit and attach the document listeners
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // When - drop a layout file
+    const dropEvent = new MouseEvent("drop", { bubbles: true, cancelable: true });
+    (dropEvent as any).dataTransfer = {
+      items: [
+        {
+          getAsFile: () => new File(["content"], "test.json", { type: "application/json" }),
+          webkitGetAsEntry: () => ({ isFile: true }),
+        },
+      ],
+    };
+
+    await act(async () => {
+      document.dispatchEvent(dropEvent);
+    });
+
+    // Then - the file is opened locally without the namespace modal
+    expect(onDropSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ namespace: "local" }),
+    );
+    expect(document.body.textContent).not.toContain("Choose Installation Location");
   });
 });

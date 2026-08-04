@@ -4,17 +4,22 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-
 import "@testing-library/jest-dom";
+import { useTranslation } from "react-i18next";
+
 import { LayoutID } from "@lichtblick/suite-base/context/CurrentLayoutContext";
 import * as LayoutManagerContext from "@lichtblick/suite-base/context/LayoutManagerContext";
 import * as useConfirmModule from "@lichtblick/suite-base/hooks/useConfirm";
+import { layoutBrowser as layoutBrowserZh } from "@lichtblick/suite-base/i18n/zh/layoutBrowser";
 import LayoutBuilder from "@lichtblick/suite-base/testing/builders/LayoutBuilder";
 import { BasicBuilder } from "@lichtblick/test-builders";
 
 import LayoutRow from "./LayoutRow";
 
 // Mocks
+jest.mock("react-i18next", () => ({
+  useTranslation: jest.fn(),
+}));
 jest.mock("@lichtblick/suite-base/context/LayoutManagerContext", () => ({
   useLayoutManager: jest.fn(),
 }));
@@ -50,12 +55,20 @@ const mockConfirm = jest.fn();
 const mockConfirmModal = <div data-testid="confirm-modal" />;
 (LayoutManagerContext.useLayoutManager as jest.Mock).mockReturnValue(mockLayoutManager);
 (useConfirmModule.useConfirm as jest.Mock).mockReturnValue([mockConfirm, mockConfirmModal]);
+(useTranslation as jest.Mock).mockReturnValue({
+  t: (key: string, options?: { layoutName?: string }) =>
+    (layoutBrowserZh as Record<string, string>)[key]?.replace(
+      "{{layoutName}}",
+      options?.layoutName ?? "{{layoutName}}",
+    ) ?? key,
+});
 
 const layoutId = BasicBuilder.string();
 const layoutName = BasicBuilder.string();
 const defaultLayout = LayoutBuilder.layout({
   id: layoutId as LayoutID,
   name: layoutName,
+  permission: "CREATOR_WRITE",
 });
 
 const renderComponent = (props = {}) =>
@@ -201,6 +214,60 @@ describe("LayoutRow rendering", () => {
       expect(input).toBeInTheDocument();
     });
   });
+
+  it("disables write actions for an ORG_READ layout", () => {
+    const readOnlyLayout = {
+      ...defaultLayout,
+      externalId: "read-only-layout",
+      permission: "ORG_READ" as const,
+      working: defaultLayout.baseline,
+      syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+    };
+    renderComponent({
+      layout: readOnlyLayout,
+      descriptionEditingEnabled: true,
+      onSetDescription: jest.fn(),
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.getByTestId("rename-layout")).toBeDisabled();
+    expect(screen.getByTestId("delete-layout")).toBeDisabled();
+    expect(screen.getByText("Save changes").closest("button")).toBeDisabled();
+    expect(screen.queryByTestId("edit-layout-description")).not.toBeInTheDocument();
+    expect(screen.queryByText("Share with team…")).not.toBeInTheDocument();
+    expect(screen.getByTestId("duplicate-layout")).toBeEnabled();
+    expect(screen.getAllByText("只读布局")).toHaveLength(3);
+  });
+
+  it.each(["CREATOR_WRITE", "ORG_WRITE"] as const)(
+    "keeps write actions enabled for a %s layout",
+    (permission) => {
+      const writableLayout = {
+        ...defaultLayout,
+        externalId: "writable-layout",
+        permission,
+        working: defaultLayout.baseline,
+        syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+      };
+      renderComponent({
+        layout: writableLayout,
+        descriptionEditingEnabled: true,
+        onSetDescription: jest.fn(),
+      });
+
+      fireEvent.click(screen.getByTestId("layout-actions"));
+
+      expect(screen.getByTestId("rename-layout")).toBeEnabled();
+      expect(screen.getByTestId("delete-layout")).toBeEnabled();
+      expect(screen.getByText("Save changes").closest("button")).toBeEnabled();
+      expect(screen.getByTestId("edit-layout-description")).toBeInTheDocument();
+      expect(screen.queryByText("只读布局")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Share with team…")?.closest("button")?.hasAttribute("disabled"),
+      ).toBe(permission === "CREATOR_WRITE" ? false : undefined);
+    },
+  );
 
   it("when delete menu item is clicked then confirm modal is triggered", async () => {
     mockConfirm.mockResolvedValue("ok");

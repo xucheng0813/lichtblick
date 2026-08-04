@@ -51,6 +51,14 @@ describe("i18n module", () => {
       // Then
       expect(languages).toContain("en");
     });
+
+    it("When checking Language type, Then it should include 'zh' as valid language", () => {
+      // Given When
+      const languages = Object.keys(translations) as Language[];
+
+      // Then
+      expect(languages).toContain("zh");
+    });
   });
 
   describe("initI18n function", () => {
@@ -132,6 +140,15 @@ describe("i18n module", () => {
         // Then
         expect(i18n.hasResourceBundle("en", "general")).toBe(true);
         expect(i18n.getResourceBundle("en", "general")).toBeDefined();
+      });
+
+      it("When initI18n is called, Then it should load Chinese translations correctly", async () => {
+        // Given When
+        await initI18n();
+
+        // Then
+        expect(i18n.hasResourceBundle("zh", "layoutBrowser")).toBe(true);
+        expect(i18n.getResourceBundle("zh", "layoutBrowser")).toBeDefined();
       });
 
       it("When initI18n is called, Then it should set correct fallback language", async () => {

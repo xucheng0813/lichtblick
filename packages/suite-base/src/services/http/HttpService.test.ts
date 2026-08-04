@@ -58,7 +58,7 @@ describe("HttpService", () => {
       await httpService.get("layouts");
 
       expect(mockFetch).toHaveBeenLastCalledWith(
-        "http://viz.example.com:9903/lichtblick/layouts?",
+        "http://viz.example.com:9903/lichtblick/layouts",
         expect.any(Object),
       );
 
@@ -66,7 +66,7 @@ describe("HttpService", () => {
       await httpService.get("layouts");
 
       expect(mockFetch).toHaveBeenLastCalledWith(
-        "http://other.example.com/lichtblick/layouts?",
+        "http://other.example.com/lichtblick/layouts",
         expect.any(Object),
       );
     });
@@ -89,7 +89,7 @@ describe("HttpService", () => {
 
       const result = await httpService.get("test");
 
-      expect(mockFetch).toHaveBeenCalledWith("https://api.example.com/test?", {
+      expect(mockFetch).toHaveBeenCalledWith("https://api.example.com/test", {
         headers: {
           "Content-Type": "application/json",
           "Api-Version": "1.0",
@@ -471,7 +471,7 @@ describe("HttpService", () => {
         },
       );
 
-      expect(mockFetch).toHaveBeenCalledWith("https://api.example.com/test?", {
+      expect(mockFetch).toHaveBeenCalledWith("https://api.example.com/test", {
         headers: {
           "Content-Type": "application/json",
           "Api-Version": "1.0",
@@ -557,7 +557,7 @@ describe("HttpService", () => {
       );
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://api.example.com/test?",
+        "https://api.example.com/test",
         expect.objectContaining({
           cache: "no-cache",
           redirect: "follow",
@@ -580,7 +580,7 @@ describe("HttpService", () => {
       await httpService.get("test");
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://api.example.com/test?",
+        "https://api.example.com/test",
         expect.objectContaining({
           credentials: "same-origin",
         }),
@@ -651,7 +651,7 @@ describe("HttpService", () => {
       const result = await httpService.get("text-endpoint");
       expect(result.data).toBe("plain text response");
       expect(result.timestamp).toBeDefined();
-      expect(result.path).toBe("text-endpoint?");
+      expect(result.path).toBe("text-endpoint");
     });
 
     it("should handle ArrayBuffer responses", async () => {
@@ -677,7 +677,7 @@ describe("HttpService", () => {
 
       expect(result.data).toBe(mockArrayBuffer);
       expect(result.timestamp).toBeDefined();
-      expect(result.path).toBe("binary-data?");
+      expect(result.path).toBe("binary-data");
       expect(result.data).toBeInstanceOf(ArrayBuffer);
       expect((result.data as ArrayBuffer).byteLength).toBe(8);
     });
@@ -698,7 +698,7 @@ describe("HttpService", () => {
       await httpService.get("/api/users");
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://api.example.com//api/users?",
+        "https://api.example.com//api/users",
         expect.any(Object),
       );
     });
@@ -716,7 +716,7 @@ describe("HttpService", () => {
 
       await httpService.get("test", {});
 
-      expect(mockFetch).toHaveBeenCalledWith("https://api.example.com/test?", expect.any(Object));
+      expect(mockFetch).toHaveBeenCalledWith("https://api.example.com/test", expect.any(Object));
     });
 
     it("should handle undefined query parameters", async () => {
@@ -732,7 +732,7 @@ describe("HttpService", () => {
 
       await httpService.get("test", undefined);
 
-      expect(mockFetch).toHaveBeenCalledWith("https://api.example.com/test?", expect.any(Object));
+      expect(mockFetch).toHaveBeenCalledWith("https://api.example.com/test", expect.any(Object));
     });
 
     it("should handle special characters in query parameters", async () => {
