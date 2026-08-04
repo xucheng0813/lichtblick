@@ -7,6 +7,8 @@ import {
   WorkspaceLayoutResponse,
 } from "@lichtblick/suite-base/api/layouts/types";
 import { LayoutID } from "@lichtblick/suite-base/context/CurrentLayoutContext";
+import { ISO8601Timestamp } from "@lichtblick/suite-base/services/ILayoutStorage";
+import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
 import HttpService from "@lichtblick/suite-base/services/http/HttpService";
 import { BasicBuilder } from "@lichtblick/test-builders";
 
@@ -119,8 +121,53 @@ describe("LayoutsAPI", () => {
   });
 
   describe("getLayout", () => {
-    it("should throw not implemented error", async () => {
-      await expect(layoutsAPI.getLayout()).rejects.toThrow("Method not implemented.");
+    const mockLayoutData: LayoutApiData = {
+      id: "external-1",
+      layoutId: "layout-1" as LayoutID,
+      name: "Layout 1",
+      data: {
+        configById: {},
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+      permission: "CREATOR_WRITE",
+      from: "viz-server",
+      workspace: mockWorkspace,
+      createdAt: "2023-01-01T00:00:00.000Z",
+      updatedAt: "2023-01-02T00:00:00.000Z",
+    };
+
+    it("should return the layout matching the client layout id", async () => {
+      const mockGet = jest.fn().mockResolvedValue(createMockHttpResponse([mockLayoutData]));
+      jest.mocked(HttpService).get = mockGet;
+
+      await expect(layoutsAPI.getLayout(mockLayoutData.layoutId)).resolves.toEqual({
+        id: mockLayoutData.layoutId,
+        externalId: mockLayoutData.id,
+        name: mockLayoutData.name,
+        data: mockLayoutData.data,
+        permission: mockLayoutData.permission,
+        savedAt: mockLayoutData.updatedAt,
+      });
+      expect(mockGet).toHaveBeenCalledWith(`workspaces/${mockWorkspace}/layouts`);
+    });
+
+    it("should return undefined when the client layout id is not found", async () => {
+      const mockGet = jest.fn().mockResolvedValue(createMockHttpResponse([mockLayoutData]));
+      jest.mocked(HttpService).get = mockGet;
+
+      await expect(layoutsAPI.getLayout("missing-layout" as LayoutID)).resolves.toBeUndefined();
+      expect(mockGet).toHaveBeenCalledWith(`workspaces/${mockWorkspace}/layouts`);
+    });
+
+    it("should propagate errors from getLayouts", async () => {
+      const mockError = new Error("Layouts unavailable");
+      const mockGet = jest.fn().mockRejectedValue(mockError);
+      jest.mocked(HttpService).get = mockGet;
+
+      await expect(layoutsAPI.getLayout(mockLayoutData.layoutId)).rejects.toBe(mockError);
+      expect(mockGet).toHaveBeenCalledWith(`workspaces/${mockWorkspace}/layouts`);
     });
   });
 
@@ -174,6 +221,12 @@ describe("LayoutsAPI", () => {
   });
 
   describe("updateLayout", () => {
+    const mockConflictUpdateRequest = {
+      id: "123" as LayoutID,
+      externalId: "external-123",
+      savedAt: "2023-01-01T00:00:00.000Z" as ISO8601Timestamp,
+    };
+
     it("should update layout and return success response", async () => {
       const mockUpdateRequest = {
         id: "123" as any,
@@ -215,6 +268,39 @@ describe("LayoutsAPI", () => {
       expect(result.status).toBe("success");
       // Type narrowing for success case
       expect((result as any).newLayout?.name).toBe("Updated Layout");
+    });
+
+    it("should return conflict when the layout no longer exists", async () => {
+      const mockPut = jest
+        .fn()
+        .mockRejectedValue(new HttpError("Not Found", 404, "Not Found"));
+      jest.mocked(HttpService).put = mockPut;
+
+      await expect(layoutsAPI.updateLayout(mockConflictUpdateRequest)).resolves.toEqual({
+        status: "conflict",
+      });
+      expect(mockPut).toHaveBeenCalledWith("layouts/external-123", {
+        name: undefined,
+        data: undefined,
+        permission: undefined,
+      });
+    });
+
+    it("should rethrow non-404 HTTP errors", async () => {
+      const mockError = new HttpError(
+        "Internal Server Error",
+        500,
+        "Internal Server Error",
+      );
+      const mockPut = jest.fn().mockRejectedValue(mockError);
+      jest.mocked(HttpService).put = mockPut;
+
+      await expect(layoutsAPI.updateLayout(mockConflictUpdateRequest)).rejects.toBe(mockError);
+      expect(mockPut).toHaveBeenCalledWith("layouts/external-123", {
+        name: undefined,
+        data: undefined,
+        permission: undefined,
+      });
     });
   });
 

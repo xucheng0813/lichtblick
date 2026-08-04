@@ -22,8 +22,11 @@ import Logger from "@lichtblick/log";
 import DropOverlay from "@lichtblick/suite-base/components/DropOverlay";
 import { NamespaceSelectionModal } from "@lichtblick/suite-base/components/NamespaceSelectionModal";
 import { AllowedFileExtensions } from "@lichtblick/suite-base/constants/allowedFileExtensions";
-import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import { Namespace } from "@lichtblick/suite-base/types";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspaceBestEffort,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 const log = Logger.getLogger(__filename);
 
@@ -51,9 +54,8 @@ export default function DocumentDropListener(props: DocumentDropListenerProps): 
   const { enqueueSnackbar } = useSnackbar();
 
   const shouldShowNamespaceModal = useCallback((files: File[]): boolean => {
-    const url = new URL(window.location.href);
-    const workspace = url.searchParams.get("workspace");
-    if (!workspace || !APP_CONFIG.apiUrl) {
+    const workspace = resolveWorkspaceBestEffort();
+    if (!resolveVizServerConfigured(workspace)) {
       return false;
     }
 

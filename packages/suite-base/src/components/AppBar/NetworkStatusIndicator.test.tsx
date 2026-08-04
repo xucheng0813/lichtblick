@@ -9,28 +9,35 @@ import { NetworkStatusIndicator } from "@lichtblick/suite-base/components/AppBar
 import { BasicBuilder } from "@lichtblick/test-builders";
 
 const API_URL = "https://api.test.com";
-let mockApiUrl: string | undefined = API_URL;
+let mockWorkspace: string | undefined;
+let mockHttpBaseUrl: string | undefined = API_URL;
 
 jest.mock("react-use", () => ({
   useNetworkState: jest.fn(),
 }));
 
-jest.mock("@lichtblick/suite-base/constants/config", () => ({
-  APP_CONFIG: {
-    // eslint-disable-next-line no-restricted-syntax
-    get apiUrl() {
-      return mockApiUrl;
-    },
-  },
+jest.mock("@lichtblick/suite-base/services/http/httpBaseUrl", () => ({
+  getHttpBaseUrl: () => mockHttpBaseUrl,
 }));
 
-const setMockApiUrl = (url: string | undefined) => {
-  mockApiUrl = url;
+jest.mock("@lichtblick/suite-base/util/vizServerParams", () => ({
+  resolveWorkspaceBestEffort: () => mockWorkspace,
+  resolveVizServerConfigured: (workspace: string | undefined) =>
+    workspace != undefined && workspace !== "" && mockHttpBaseUrl != undefined,
+}));
+
+const setMockWorkspace = (workspace: string | undefined) => {
+  mockWorkspace = workspace;
 };
 
+const setMockHttpBaseUrl = (url: string | undefined) => {
+  mockHttpBaseUrl = url;
+};
+
+const mockT = jest.fn();
 jest.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: jest.fn(),
+    t: mockT,
   }),
 }));
 
@@ -39,7 +46,8 @@ describe("NetworkStatusIndicator", () => {
   const originalURL = global.URL;
 
   beforeEach(() => {
-    setMockApiUrl(API_URL);
+    setMockWorkspace(undefined);
+    setMockHttpBaseUrl(API_URL);
   });
 
   afterEach(() => {
@@ -59,9 +67,10 @@ describe("NetworkStatusIndicator", () => {
     }) as any;
   };
 
-  it("should not render when no workspace parameter is present", () => {
+  it("should not render when no workspace is configured", () => {
     mockURL(API_URL);
-    (useNetworkState as jest.Mock).mockReturnValue({ online: true });
+    setMockWorkspace(undefined);
+    (useNetworkState as jest.Mock).mockReturnValue({ online: false });
 
     const { container } = render(<NetworkStatusIndicator />);
 
@@ -71,6 +80,7 @@ describe("NetworkStatusIndicator", () => {
   it("should not render when online", () => {
     const url = `${API_URL}/?workspace=${BasicBuilder.string()}`;
     mockURL(url);
+    setMockWorkspace(BasicBuilder.string());
     (useNetworkState as jest.Mock).mockReturnValue({ online: true });
 
     const { container } = render(<NetworkStatusIndicator />);
@@ -78,13 +88,27 @@ describe("NetworkStatusIndicator", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("should render when offline", () => {
+  it("should render when offline with a workspace from the URL", () => {
     const url = `${API_URL}/?workspace=${BasicBuilder.string()}`;
     mockURL(url);
+    setMockWorkspace(BasicBuilder.string());
     (useNetworkState as jest.Mock).mockReturnValue({ online: false });
 
     const { container } = render(<NetworkStatusIndicator />);
 
     expect(container.firstChild).not.toBeNull();
+  });
+
+  it("should render when offline with a workspace configured via app settings", () => {
+    mockURL(API_URL);
+    setMockWorkspace("configured-workspace");
+    (useNetworkState as jest.Mock).mockReturnValue({ online: false });
+
+    const { container } = render(<NetworkStatusIndicator />);
+
+    expect(container.firstChild).not.toBeNull();
+    expect(mockT).toHaveBeenCalledWith("networkStatusOfflineDescription", {
+      workspace: "configured-workspace",
+    });
   });
 });

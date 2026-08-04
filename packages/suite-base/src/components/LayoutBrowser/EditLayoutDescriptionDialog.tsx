@@ -16,6 +16,7 @@ import {
   TextField,
 } from "@mui/material";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export function EditLayoutDescriptionDialog({
   layoutName,
@@ -28,6 +29,7 @@ export function EditLayoutDescriptionDialog({
   onClose: () => void;
   onSave: (description: string) => Promise<boolean>;
 }): React.JSX.Element {
+  const { t } = useTranslation("layoutBrowser");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -51,19 +53,17 @@ export function EditLayoutDescriptionDialog({
 
   return (
     <Dialog open={open} onClose={saving ? undefined : onClose} fullWidth maxWidth="sm">
-      <DialogTitle>编辑布局描述</DialogTitle>
+      <DialogTitle>{t("editDescriptionTitle")}</DialogTitle>
       <DialogContent>
-        <DialogContentText>
-          说明“{layoutName}”是做什么的。描述会用于生成智能助手技能。
-        </DialogContentText>
+        <DialogContentText>{t("editDescriptionText", { layoutName })}</DialogContentText>
         <TextField
           autoFocus
           fullWidth
           multiline
           minRows={4}
           margin="normal"
-          label="布局描述"
-          placeholder="例如：用于查看设备诊断数据和故障趋势"
+          label={t("descriptionLabel")}
+          placeholder={t("descriptionPlaceholder")}
           value={description}
           disabled={saving}
           onChange={(event) => {
@@ -73,7 +73,7 @@ export function EditLayoutDescriptionDialog({
       </DialogContent>
       <DialogActions>
         <Button disabled={saving} onClick={onClose}>
-          取消
+          {t("cancel")}
         </Button>
         <Button
           variant="contained"
@@ -83,7 +83,7 @@ export function EditLayoutDescriptionDialog({
           }}
         >
           {saving && <CircularProgress size={16} />}
-          保存
+          {t("save")}
         </Button>
       </DialogActions>
     </Dialog>

@@ -5,6 +5,7 @@
 
 import { act, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import { useTranslation } from "react-i18next";
 
 import { LayoutSelectionState } from "@lichtblick/suite-base/components/LayoutBrowser/types";
 import { useAnalytics } from "@lichtblick/suite-base/context/AnalyticsContext";
@@ -22,6 +23,7 @@ import { useAppConfigurationValue } from "@lichtblick/suite-base/hooks/useAppCon
 import { useConfirm } from "@lichtblick/suite-base/hooks/useConfirm";
 import { useLayoutNavigation } from "@lichtblick/suite-base/hooks/useLayoutNavigation";
 import { usePrompt } from "@lichtblick/suite-base/hooks/usePrompt";
+import { layoutBrowser as layoutBrowserZh } from "@lichtblick/suite-base/i18n/zh/layoutBrowser";
 import { Layout } from "@lichtblick/suite-base/services/ILayoutStorage";
 import MockLayoutManager from "@lichtblick/suite-base/services/LayoutManager/MockLayoutManager";
 import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
@@ -32,6 +34,10 @@ import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAp
 import { BasicBuilder } from "@lichtblick/test-builders";
 
 import LayoutBrowser from "./index";
+
+jest.mock("react-i18next", () => ({
+  useTranslation: jest.fn(),
+}));
 
 jest.mock("notistack", () => ({
   useSnackbar: jest.fn().mockReturnValue({ enqueueSnackbar: jest.fn() }),
@@ -129,6 +135,9 @@ describe("LayoutBrowser", () => {
   const ids = [BasicBuilder.string(), BasicBuilder.string()];
 
   beforeEach(() => {
+    (useTranslation as jest.Mock).mockReturnValue({
+      t: (key: string) => (layoutBrowserZh as Record<string, string>)[key] ?? key,
+    });
     globalThis.history.replaceState({}, "", "/");
     setHttpBaseUrl(undefined);
     dispatchMock = jest.fn();
@@ -172,7 +181,7 @@ describe("LayoutBrowser", () => {
     expect(screen.getByTestId("sidebar-content")).toBeInTheDocument();
   });
 
-  it("enables layout description editing when workspace and viz-server are configured", () => {
+  it("enables layout description editing per writable layout when viz-server is configured", () => {
     globalThis.history.replaceState({}, "", "/?workspace=test-workspace");
     setHttpBaseUrl("http://viz.example.com:9903/lichtblick");
     const originalLayoutSectionMock = jest.requireMock("./LayoutSection").default;
@@ -187,9 +196,20 @@ describe("LayoutBrowser", () => {
     try {
       render(<LayoutBrowser />);
       expect(capturedProps.length).toBeGreaterThan(0);
-      expect(
-        capturedProps.every((props) => props.descriptionEditingEnabled === true),
-      ).toBe(true);
+      for (const props of capturedProps) {
+        const descriptionEditingEnabled = props.descriptionEditingEnabled as (
+          layout: Layout,
+        ) => boolean;
+        expect(descriptionEditingEnabled(LayoutBuilder.layout({ permission: "CREATOR_WRITE" }))).toBe(
+          true,
+        );
+        expect(descriptionEditingEnabled(LayoutBuilder.layout({ permission: "ORG_WRITE" }))).toBe(
+          true,
+        );
+        expect(descriptionEditingEnabled(LayoutBuilder.layout({ permission: "ORG_READ" }))).toBe(
+          false,
+        );
+      }
     } finally {
       jest.requireMock("./LayoutSection").default = originalLayoutSectionMock;
     }

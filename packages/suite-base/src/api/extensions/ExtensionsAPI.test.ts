@@ -133,6 +133,22 @@ describe("ExtensionsAPI", () => {
       // Then
       expect(result).toBeUndefined();
     });
+
+    // Contract (docs 3.3): the server signals "not found" with HTTP 200 + data:null,
+    // NOT with a 404. The client must map that to undefined.
+    it("should return undefined when server responds 200 with data:null (not-found semantics, not 404)", async () => {
+      // Given
+      const mockHttpService = jest.mocked(HttpService);
+      const mockGet = jest.fn().mockResolvedValue(createMockHttpResponse(null));
+      mockHttpService.get = mockGet;
+
+      // When
+      const result = await extensionsAPI.get("nonexistent");
+
+      // Then
+      expect(mockGet).toHaveBeenCalledWith("extensions/nonexistent");
+      expect(result).toBeUndefined();
+    });
   });
 
   describe("createOrUpdate", () => {
@@ -215,6 +231,77 @@ describe("ExtensionsAPI", () => {
       // empty strings are omitted
       expect(formData.get("description")).toBeNull();
       expect(formData.get("homepage")).toBeNull();
+    });
+
+    // Contract (docs 3.4): per-field FormData assertions.
+    it("should send FormData fields matching the server contract (docs 3.4)", async () => {
+      // Given
+      const emptyOptionalFields: readonly string[] = [
+        "changelog",
+        "description",
+        "displayName",
+        "homepage",
+        "license",
+        "qualifiedName",
+        "readme",
+      ];
+      const extension: ExtensionInfoWorkspace = ExtensionBuilder.extensionInfoWorkspace({
+        workspace,
+        info: {
+          ...ExtensionBuilder.extensionInfo(),
+          id: "ext-contract-test",
+          name: "contract-name",
+          publisher: "contract-publisher",
+          version: "1.2.3",
+          keywords: ["example"],
+          changelog: "",
+          description: "",
+          displayName: "",
+          homepage: "",
+          license: "",
+          qualifiedName: "",
+          readme: "",
+        },
+      });
+      const mockFile = new File([BasicBuilder.string()], "test.foxe", {
+        type: "application/octet-stream",
+      });
+      const mockApiResponse: CreateOrUpdateResponse = {
+        extension: {
+          ...extension.info,
+          createdAt: BasicBuilder.datetime(),
+          updatedAt: BasicBuilder.datetime(),
+          fileId: BasicBuilder.string(),
+          extensionId: extension.info.id,
+          scope: extension.info.namespace!,
+        },
+      };
+      const mockHttpService = jest.mocked(HttpService);
+      const mockPost = jest.fn().mockResolvedValue(createMockHttpResponse(mockApiResponse));
+      mockHttpService.post = mockPost;
+
+      // When
+      await extensionsAPI.createOrUpdate(extension, mockFile);
+
+      // Then
+      const formData: FormData = mockPost.mock.calls[0][1];
+      // `file` is required and present as-is
+      expect(formData.get("file")).toBe(mockFile);
+      // required metadata is always present
+      expect(formData.get("extensionId")).toBe("ext-contract-test");
+      expect(formData.get("name")).toBe("contract-name");
+      expect(formData.get("publisher")).toBe("contract-publisher");
+      expect(formData.get("version")).toBe("1.2.3");
+      // keywords is a JSON string array, stored as-is
+      expect(formData.get("keywords")).toBe('["example"]');
+      // replace is a boolean string
+      expect(formData.get("replace")).toBe("true");
+      // scope is always org
+      expect(formData.get("scope")).toBe("org");
+      // optional fields with empty-string values are omitted from the FormData
+      for (const field of emptyOptionalFields) {
+        expect(formData.get(field)).toBeNull();
+      }
     });
   });
 
