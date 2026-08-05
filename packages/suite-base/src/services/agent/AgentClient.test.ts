@@ -40,7 +40,9 @@ function eventStreamResponse(chunks: readonly string[]): Response {
     ok: true,
     status: 200,
     statusText: "OK",
-    headers: new Headers({ "content-type": "text/event-stream; charset=utf-8" }),
+    headers: new Headers({
+      "content-type": "text/event-stream; charset=utf-8",
+    }),
     body,
   } as Response;
 }
@@ -69,7 +71,9 @@ describe("AgentClient", () => {
   });
 
   it("accepts an HttpService-style data envelope when creating a session", async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ data: { sessionId: "session-2" } }));
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ data: { sessionId: "session-2" } }),
+    );
 
     await expect(new AgentClient("").createSession()).resolves.toEqual({
       sessionId: "session-2",
@@ -92,28 +96,54 @@ describe("AgentClient", () => {
   });
 
   it("rejects an empty sendMessage requestId before making a request", async () => {
-    await expect(new AgentClient("").sendMessage("session-1", "hello", "")).rejects.toThrow(
-      "requestId must be a non-empty string",
-    );
+    await expect(
+      new AgentClient("").sendMessage("session-1", "hello", ""),
+    ).rejects.toThrow("requestId must be a non-empty string");
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it.each([
     [true, "confirm"],
     [false, "cancel"],
-  ])("posts tool-run confirmation action (approve=%s)", async (approve, action) => {
+  ])(
+    "posts tool-run confirmation action (approve=%s)",
+    async (approve, action) => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({}));
+      const client = new AgentClient("https://agent.example.com");
+      const controller = new AbortController();
+
+      await client.confirmToolRun(
+        "session-1",
+        "tool/1",
+        { approve },
+        controller.signal,
+      );
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `https://agent.example.com/agent/tool-runs/tool%2F1/${action}`,
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ sessionId: "session-1" }),
+          signal: controller.signal,
+        }),
+      );
+    },
+  );
+
+  it("forwards session-scoped tool confirmation without changing the default request", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({}));
     const client = new AgentClient("https://agent.example.com");
-    const controller = new AbortController();
 
-    await client.confirmToolRun("session-1", "tool/1", { approve }, controller.signal);
+    await client.confirmToolRun("session-1", "tool-1", {
+      approve: true,
+      scope: "session",
+    });
 
     expect(mockFetch).toHaveBeenCalledWith(
-      `https://agent.example.com/agent/tool-runs/tool%2F1/${action}`,
+      "https://agent.example.com/agent/tool-runs/tool-1/confirm",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ sessionId: "session-1" }),
-        signal: controller.signal,
+        body: JSON.stringify({ sessionId: "session-1", scope: "session" }),
       }),
     );
   });
@@ -139,9 +169,9 @@ describe("AgentClient", () => {
   });
 
   it("rejects an empty catalog-ready requestId before making a request", async () => {
-    await expect(new AgentClient("").notifyCatalogReady("session-1", "")).rejects.toThrow(
-      "requestId must be a non-empty string",
-    );
+    await expect(
+      new AgentClient("").notifyCatalogReady("session-1", ""),
+    ).rejects.toThrow("requestId must be a non-empty string");
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -161,7 +191,13 @@ describe("AgentClient", () => {
 
     expect(events).toEqual([
       { seq: 1, requestId: "r1", type: "message-start", messageId: "m1" },
-      { seq: 2, requestId: "r1", type: "token", messageId: "m1", delta: "hello" },
+      {
+        seq: 2,
+        requestId: "r1",
+        type: "token",
+        messageId: "m1",
+        delta: "hello",
+      },
       { seq: 3, requestId: "r1", type: "message-end", messageId: "m1" },
       { seq: 4, requestId: "r1", type: "done" },
     ]);
@@ -183,7 +219,9 @@ describe("AgentClient", () => {
     );
     const events: AgentEvent[] = [];
 
-    await new AgentClient("").subscribeEvents("session-1", (event) => events.push(event));
+    await new AgentClient("").subscribeEvents("session-1", (event) =>
+      events.push(event),
+    );
 
     expect(events).toEqual([
       { seq: 1, type: "error", error: "backend unavailable" },
@@ -202,7 +240,9 @@ describe("AgentClient", () => {
     );
     const events: AgentEvent[] = [];
 
-    await new AgentClient("").subscribeEvents("session-1", (event) => events.push(event));
+    await new AgentClient("").subscribeEvents("session-1", (event) =>
+      events.push(event),
+    );
 
     expect(events).toEqual([
       { seq: 1, requestId: "r1", type: "token", messageId: "m1", delta: "ok" },
@@ -229,7 +269,9 @@ describe("AgentClient", () => {
     );
     const events: AgentEvent[] = [];
 
-    await new AgentClient("").subscribeEvents("session-1", (event) => events.push(event));
+    await new AgentClient("").subscribeEvents("session-1", (event) =>
+      events.push(event),
+    );
 
     expect(events).toEqual([{ seq: 1, requestId: "r1", type: "done" }]);
   });
@@ -256,7 +298,9 @@ describe("AgentClient", () => {
       );
       const events: AgentEvent[] = [];
 
-      await new AgentClient("").subscribeEvents("session-1", (event) => events.push(event));
+      await new AgentClient("").subscribeEvents("session-1", (event) =>
+        events.push(event),
+      );
 
       expect(events).toEqual([{ seq: 1, requestId: "r1", type: "done" }]);
     },
@@ -271,7 +315,9 @@ describe("AgentClient", () => {
     );
     const events: AgentEvent[] = [];
 
-    await new AgentClient("").subscribeEvents("session-1", (event) => events.push(event));
+    await new AgentClient("").subscribeEvents("session-1", (event) =>
+      events.push(event),
+    );
 
     expect(events).toEqual([{ seq: maxSeq, requestId: "r1", type: "done" }]);
   });
@@ -280,16 +326,16 @@ describe("AgentClient", () => {
     "rejects lastSeq=%s before opening a connection",
     async (lastSeq) => {
       await expect(
-        new AgentClient("").subscribeEvents("session-1", jest.fn(), undefined, { lastSeq }),
+        new AgentClient("").subscribeEvents("session-1", jest.fn(), undefined, {
+          lastSeq,
+        }),
       ).rejects.toThrow("lastSeq must be a non-negative safe integer");
       expect(mockFetch).not.toHaveBeenCalled();
     },
   );
 
   it("accepts Number.MAX_SAFE_INTEGER as lastSeq", async () => {
-    mockFetch.mockResolvedValueOnce(
-      eventStreamResponse([]),
-    );
+    mockFetch.mockResolvedValueOnce(eventStreamResponse([]));
 
     await new AgentClient("https://agent.example.com").subscribeEvents(
       "session-1",
@@ -338,7 +384,9 @@ describe("AgentClient", () => {
     const events: AgentEvent[] = [];
 
     await expect(
-      new AgentClient("").subscribeEvents("session-1", (event) => events.push(event)),
+      new AgentClient("").subscribeEvents("session-1", (event) =>
+        events.push(event),
+      ),
     ).resolves.toEqual({ reason: "eof" });
     expect(events).toHaveLength(2);
   });
@@ -355,7 +403,10 @@ describe("AgentClient", () => {
 
   it("rejects an incomplete SSE frame that grows beyond one MiB across chunks", async () => {
     mockFetch.mockResolvedValueOnce(
-      eventStreamResponse([`data: ${"x".repeat(600 * 1024)}`, "x".repeat(600 * 1024)]),
+      eventStreamResponse([
+        `data: ${"x".repeat(600 * 1024)}`,
+        "x".repeat(600 * 1024),
+      ]),
     );
 
     await expect(
@@ -368,9 +419,8 @@ describe("AgentClient", () => {
       `data: {"seq":${seq},"requestId":"r1","type":"token","messageId":"m1","delta":"${"x".repeat(
         10 * 1024,
       )}"}\n\n`;
-    const oversizedChunk = Array.from(
-      { length: 110 },
-      (_, index) => smallFrame(index + 1),
+    const oversizedChunk = Array.from({ length: 110 }, (_, index) =>
+      smallFrame(index + 1),
     ).join("");
     expect(new TextEncoder().encode(oversizedChunk).byteLength).toBeGreaterThan(
       AGENT_SSE_MAX_EVENT_BYTES,
@@ -389,10 +439,14 @@ describe("AgentClient", () => {
     const client = new AgentClient("");
 
     await expect(
-      client.subscribeEvents("session-1", (event) => oneChunkEvents.push(event)),
+      client.subscribeEvents("session-1", (event) =>
+        oneChunkEvents.push(event),
+      ),
     ).resolves.toEqual({ reason: "eof" });
     await expect(
-      client.subscribeEvents("session-1", (event) => splitChunkEvents.push(event)),
+      client.subscribeEvents("session-1", (event) =>
+        splitChunkEvents.push(event),
+      ),
     ).resolves.toEqual({ reason: "eof" });
     expect(oneChunkEvents).toEqual(splitChunkEvents);
     expect(oneChunkEvents).toHaveLength(110);
@@ -408,7 +462,9 @@ describe("AgentClient", () => {
 
     await expect(
       new AgentClient("").subscribeEvents("session-1", () => {}),
-    ).rejects.toThrow(`${AGENT_SSE_MAX_CONNECTION_EVENTS} event connection limit`);
+    ).rejects.toThrow(
+      `${AGENT_SSE_MAX_CONNECTION_EVENTS} event connection limit`,
+    );
   });
 
   it("resets cumulative event budgets for each physical connection", async () => {
@@ -422,17 +478,22 @@ describe("AgentClient", () => {
       .mockResolvedValueOnce(eventStreamResponse([frames]));
     const client = new AgentClient("");
 
-    await expect(client.subscribeEvents("session-1", jest.fn())).resolves.toEqual({
+    await expect(
+      client.subscribeEvents("session-1", jest.fn()),
+    ).resolves.toEqual({
       reason: "eof",
     });
-    await expect(client.subscribeEvents("session-1", jest.fn())).resolves.toEqual({
+    await expect(
+      client.subscribeEvents("session-1", jest.fn()),
+    ).resolves.toEqual({
       reason: "eof",
     });
   });
 
   it("rejects a connection after its cumulative byte budget", async () => {
     const payload = "x".repeat(900 * 1024);
-    const chunkCount = Math.ceil(AGENT_SSE_MAX_CONNECTION_BYTES / (900 * 1024)) + 1;
+    const chunkCount =
+      Math.ceil(AGENT_SSE_MAX_CONNECTION_BYTES / (900 * 1024)) + 1;
     const chunks = Array.from(
       { length: chunkCount },
       (_, index) =>
@@ -442,7 +503,9 @@ describe("AgentClient", () => {
 
     await expect(
       new AgentClient("").subscribeEvents("session-1", () => {}),
-    ).rejects.toThrow(`${AGENT_SSE_MAX_CONNECTION_BYTES} byte connection limit`);
+    ).rejects.toThrow(
+      `${AGENT_SSE_MAX_CONNECTION_BYTES} byte connection limit`,
+    );
   });
 
   it("rejects when an event stream receives no bytes before the idle timeout", async () => {
@@ -470,11 +533,19 @@ describe("AgentClient", () => {
     const setTimeoutSpy = jest.spyOn(global, "setTimeout");
     mockFetch.mockResolvedValueOnce(eventStreamResponse([]));
 
-    await new AgentClient("").subscribeEvents("session-1", jest.fn(), undefined, {
-      idleTimeoutMs: 3_000_000_000,
-    });
+    await new AgentClient("").subscribeEvents(
+      "session-1",
+      jest.fn(),
+      undefined,
+      {
+        idleTimeoutMs: 3_000_000_000,
+      },
+    );
 
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2_147_483_647);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      2_147_483_647,
+    );
     setTimeoutSpy.mockRestore();
   });
 
@@ -493,7 +564,9 @@ describe("AgentClient", () => {
     { seq: 1, requestId: "", type: "done" },
     { seq: 1, requestId: "", type: "error", error: "request failed" },
   ])("rejects an empty requestId in request-scoped events", async (event) => {
-    mockFetch.mockResolvedValueOnce(eventStreamResponse([`data: ${JSON.stringify(event)}\n\n`]));
+    mockFetch.mockResolvedValueOnce(
+      eventStreamResponse([`data: ${JSON.stringify(event)}\n\n`]),
+    );
 
     await expect(
       new AgentClient("").subscribeEvents("session-1", jest.fn()),
@@ -524,7 +597,9 @@ describe("AgentClient", () => {
       sessionId: null,
     },
   ])("rejects null in optional event fields", async (event) => {
-    mockFetch.mockResolvedValueOnce(eventStreamResponse([`data: ${JSON.stringify(event)}\n\n`]));
+    mockFetch.mockResolvedValueOnce(
+      eventStreamResponse([`data: ${JSON.stringify(event)}\n\n`]),
+    );
 
     await expect(
       new AgentClient("").subscribeEvents("session-1", jest.fn()),
@@ -532,7 +607,8 @@ describe("AgentClient", () => {
   });
 
   it("aborts an active event subscription", async () => {
-    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let streamController:
+      ReadableStreamDefaultController<Uint8Array> | undefined;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         streamController = controller;
@@ -565,20 +641,23 @@ describe("AgentClient", () => {
       'data: {"seq":1,"requestId":"r1","type":"message-end","messageId":"m1"}\n\n',
     ],
     ["done", 'data: {"seq":1,"requestId":"r1","type":"done"}\n\n'],
-  ])("rejects caller abort even after a terminal %s event", async (_name, frame) => {
-    const controller = new AbortController();
-    mockFetch.mockResolvedValueOnce(eventStreamResponse([frame]));
+  ])(
+    "rejects caller abort even after a terminal %s event",
+    async (_name, frame) => {
+      const controller = new AbortController();
+      mockFetch.mockResolvedValueOnce(eventStreamResponse([frame]));
 
-    await expect(
-      new AgentClient("").subscribeEvents(
-        "session-1",
-        () => {
-          controller.abort();
-        },
-        controller.signal,
-      ),
-    ).rejects.toMatchObject({ name: "AbortError" });
-  });
+      await expect(
+        new AgentClient("").subscribeEvents(
+          "session-1",
+          () => {
+            controller.abort();
+          },
+          controller.signal,
+        ),
+      ).rejects.toMatchObject({ name: "AbortError" });
+    },
+  );
 
   it("throws HttpError with response details for non-successful requests", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ error: "invalid" }, 400));

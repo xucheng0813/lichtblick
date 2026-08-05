@@ -330,6 +330,12 @@ export function makeConfig(
         module: /node_modules\/@protobufjs\/inquire\/index\.js$/,
         message: /Critical dependency: the request of a dependency is an expression/,
       },
+      {
+        // pi-ai lazily requires Node-only auth helpers (OAuth flows, env API key
+        // resolution) behind dynamic imports; the browser bundle never executes them.
+        module: /node_modules\/@earendil-works\/pi-ai\/dist\//,
+        message: /Critical dependency: the request of a dependency is an expression/,
+      },
     ],
   };
 }
