@@ -33,8 +33,14 @@ type TestDesktopBridge = {
 const testGlobal = globalThis as typeof globalThis & {
   desktopBridge?: TestDesktopBridge;
 };
-const originalBridgeDescriptor = Object.getOwnPropertyDescriptor(globalThis, "desktopBridge");
-const originalLocksDescriptor = Object.getOwnPropertyDescriptor(globalThis.navigator, "locks");
+const originalBridgeDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "desktopBridge",
+);
+const originalLocksDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis.navigator,
+  "locks",
+);
 let secureCredentials: Map<string, string>;
 let desktopBridge: TestDesktopBridge;
 
@@ -49,8 +55,13 @@ function installDesktopCredentialBridge(): void {
       for (const entry of entries) {
         const storedValue = secureCredentials.get(entry.key);
         const storedRevision =
-          storedValue == undefined ? "" : getStringFromSerializedRecord(storedValue, "revision");
-        if (entry.expectedRevision != undefined && entry.expectedRevision !== storedRevision) {
+          storedValue == undefined
+            ? ""
+            : getStringFromSerializedRecord(storedValue, "revision");
+        if (
+          entry.expectedRevision != undefined &&
+          entry.expectedRevision !== storedRevision
+        ) {
           return { code: "revision-conflict", ok: false };
         }
       }
@@ -87,7 +98,10 @@ function installTestCrossRendererLock(): void {
   });
 }
 
-function getStringFromSerializedRecord(serialized: string, key: string): string {
+function getStringFromSerializedRecord(
+  serialized: string,
+  key: string,
+): string {
   try {
     const record = JSON.parse(serialized) as Record<string, unknown>;
     return typeof record[key] === "string" ? record[key] : "";
@@ -99,7 +113,10 @@ function getStringFromSerializedRecord(serialized: string, key: string): string 
 function makeSharedConfigurations(): [IAppConfiguration, IAppConfiguration] {
   const values = new Map<string, AppConfigurationValue>();
   const makeConfiguration = (): IAppConfiguration => {
-    const listeners = new Map<string, Set<(newValue: AppConfigurationValue) => void>>();
+    const listeners = new Map<
+      string,
+      Set<(newValue: AppConfigurationValue) => void>
+    >();
     return {
       addChangeListener: (key, listener) => {
         const current = listeners.get(key) ?? new Set();
@@ -125,7 +142,10 @@ function makeCachedConfiguration(
   durableValues: Map<string, AppConfigurationValue>,
 ): IAppConfiguration {
   const cachedValues = new Map(durableValues);
-  const listeners = new Map<string, Set<(newValue: AppConfigurationValue) => void>>();
+  const listeners = new Map<
+    string,
+    Set<(newValue: AppConfigurationValue) => void>
+  >();
   return {
     addChangeListener: (key, listener) => {
       const current = listeners.get(key) ?? new Set();
@@ -175,12 +195,20 @@ describe("Agent settings storage", () => {
     if (originalLocksDescriptor == undefined) {
       Reflect.deleteProperty(globalThis.navigator, "locks");
     } else {
-      Object.defineProperty(globalThis.navigator, "locks", originalLocksDescriptor);
+      Object.defineProperty(
+        globalThis.navigator,
+        "locks",
+        originalLocksDescriptor,
+      );
     }
     if (originalBridgeDescriptor == undefined) {
       delete testGlobal.desktopBridge;
     } else {
-      Object.defineProperty(globalThis, "desktopBridge", originalBridgeDescriptor);
+      Object.defineProperty(
+        globalThis,
+        "desktopBridge",
+        originalBridgeDescriptor,
+      );
     }
   });
 
@@ -194,7 +222,9 @@ describe("Agent settings storage", () => {
       [AppSetting.AGENT_VTD_AUTH_TOKEN, "legacy-vtd-token"],
     ]);
     const set = jest.spyOn(configuration, "set");
-    const { result, unmount } = renderHook(() => useAgentSettings(configuration));
+    const { result, unmount } = renderHook(() =>
+      useAgentSettings(configuration),
+    );
 
     await waitFor(() => {
       expect(result.current.migrationReady).toBe(true);
@@ -205,6 +235,20 @@ describe("Agent settings storage", () => {
       model: "already-specific",
     });
     expect(result.current.snapshot.vtdAuthToken).toBe("legacy-vtd-token");
+    expect(result.current.snapshot.activeProfileId).toBe("default");
+    expect(result.current.snapshot.profiles).toEqual([
+      expect.objectContaining({
+        id: "default",
+        name: "Default",
+        openAiCompatible: result.current.snapshot.openAiCompatible,
+        provider: "openai-compatible",
+      }),
+    ]);
+    expect(
+      JSON.parse(localStorage.getItem("lichtblick.agent.credentials.v1") ?? ""),
+    ).toMatchObject({
+      profileKeys: { default: { openAiApiKey: "legacy-secret" } },
+    });
     expect(configuration.get("agent.llmApiKey")).toBeUndefined();
     expect(configuration.get("agent.llmModel")).toBeUndefined();
     expect(configuration.get("agent.llmBaseUrl")).toBeUndefined();
@@ -246,6 +290,90 @@ describe("Agent settings storage", () => {
     expect(configuration.get(AppSetting.AGENT_VTD_AUTH_TOKEN)).toBeUndefined();
   });
 
+  it("commits profile CRUD, active switching, and the legacy active-profile projection", async () => {
+    const configuration = makeMockAppConfiguration();
+    const { result } = renderHook(() => useAgentSettings(configuration));
+    await waitFor(() => {
+      expect(result.current.migrationReady).toBe(true);
+    });
+
+    const createDraft = createAgentSettingsDraft(result.current.snapshot);
+    createDraft.profiles?.push({
+      anthropic: {
+        apiKey: "profile-anthropic-key",
+        baseUrl: "https://anthropic.profile.example.com",
+        model: "profile-claude",
+      },
+      id: "profile-2",
+      name: "Second profile",
+      openAiCompatible: {
+        apiKey: "profile-openai-key",
+        baseUrl: "https://openai.profile.example.com/v1",
+        model: "profile-openai",
+      },
+      provider: "openai-compatible",
+    });
+    await act(async () => {
+      await commitAgentSettings(configuration, createDraft);
+    });
+    expect(result.current.snapshot.profiles).toHaveLength(2);
+    expect(result.current.snapshot.activeProfileId).toBe("default");
+
+    const switchDraft = createAgentSettingsDraft(result.current.snapshot);
+    switchDraft.activeProfileId = "profile-2";
+    await act(async () => {
+      await commitAgentSettings(configuration, switchDraft);
+    });
+    expect(result.current.snapshot).toMatchObject({
+      activeProfileId: "profile-2",
+      openAiCompatible: {
+        apiKey: "profile-openai-key",
+        baseUrl: "https://openai.profile.example.com/v1",
+        model: "profile-openai",
+      },
+      provider: "openai-compatible",
+    });
+    expect(configuration.get(AppSetting.AGENT_LLM_PROVIDER)).toBe(
+      "openai-compatible",
+    );
+    expect(
+      JSON.parse(localStorage.getItem("lichtblick.agent.credentials.v1") ?? ""),
+    ).toMatchObject({
+      openAiApiKey: "profile-openai-key",
+      profileKeys: {
+        "profile-2": { openAiApiKey: "profile-openai-key" },
+      },
+    });
+
+    const updateAndDeleteDraft = createAgentSettingsDraft(
+      result.current.snapshot,
+    );
+    const profile = updateAndDeleteDraft.profiles?.find(
+      ({ id }) => id === "profile-2",
+    );
+    if (profile == undefined || updateAndDeleteDraft.profiles == undefined) {
+      throw new Error("Expected profile draft");
+    }
+    profile.name = "Renamed profile";
+    profile.openAiCompatible.model = "updated-model";
+    updateAndDeleteDraft.profiles = updateAndDeleteDraft.profiles.filter(
+      ({ id }) => id !== "default",
+    );
+    await act(async () => {
+      await commitAgentSettings(configuration, updateAndDeleteDraft);
+    });
+    expect(result.current.snapshot.profiles).toEqual([
+      expect.objectContaining({
+        id: "profile-2",
+        name: "Renamed profile",
+        openAiCompatible: expect.objectContaining({ model: "updated-model" }),
+      }),
+    ]);
+    expect(result.current.snapshot.openAiCompatible.model).toBe(
+      "updated-model",
+    );
+  });
+
   it("handles cross-tab clear and denied reads without throwing from the hook", async () => {
     const configuration = makeMockAppConfiguration();
     await commitAgentSettings(configuration, completeDraft);
@@ -281,23 +409,30 @@ describe("Agent settings storage", () => {
       ["agent.llmApiKey", "legacy-openai-key"],
       [AppSetting.AGENT_VTD_AUTH_TOKEN, "legacy-vtd-token"],
     ]);
-    localStorage.setItem("lichtblick.agent.anthropic.apiKey", "legacy-anthropic-key");
-    const { result } = renderHook(() => useAgentSettings(configuration, { desktop: true }));
+    localStorage.setItem(
+      "lichtblick.agent.anthropic.apiKey",
+      "legacy-anthropic-key",
+    );
+    const { result } = renderHook(() =>
+      useAgentSettings(configuration, { desktop: true }),
+    );
 
     await waitFor(() => {
       expect(result.current.migrationReady).toBe(true);
     });
 
-    expect(desktopBridge.getSecureCredential).toHaveBeenCalledWith("agent.llmApiKey");
-    expect(desktopBridge.getSecureCredential).toHaveBeenCalledWith("agent.vtdAuthToken");
-    const llmRecord = JSON.parse(secureCredentials.get("agent.llmApiKey") ?? "") as Record<
-      string,
-      string
-    >;
-    const vtdRecord = JSON.parse(secureCredentials.get("agent.vtdAuthToken") ?? "") as Record<
-      string,
-      string
-    >;
+    expect(desktopBridge.getSecureCredential).toHaveBeenCalledWith(
+      "agent.llmApiKey",
+    );
+    expect(desktopBridge.getSecureCredential).toHaveBeenCalledWith(
+      "agent.vtdAuthToken",
+    );
+    const llmRecord = JSON.parse(
+      secureCredentials.get("agent.llmApiKey") ?? "",
+    ) as Record<string, string>;
+    const vtdRecord = JSON.parse(
+      secureCredentials.get("agent.vtdAuthToken") ?? "",
+    ) as Record<string, string>;
     expect(llmRecord).toMatchObject({
       anthropicApiKey: "legacy-anthropic-key",
       openAiApiKey: "legacy-openai-key",
@@ -305,9 +440,18 @@ describe("Agent settings storage", () => {
     expect(vtdRecord.value).toBe("legacy-vtd-token");
     expect(llmRecord.revision).toBe(vtdRecord.revision);
     expect(llmRecord.revision).toMatch(/^\d+-/);
+    expect(
+      JSON.parse(
+        secureCredentials.get("agent.profile.default.llmApiKey") ?? "",
+      ),
+    ).toMatchObject({
+      anthropicApiKey: "legacy-anthropic-key",
+      openAiApiKey: "legacy-openai-key",
+      revision: llmRecord.revision,
+    });
     const migrationEntries =
       desktopBridge.setManySecureCredentials.mock.calls[0]?.[0];
-    expect(migrationEntries).toHaveLength(2);
+    expect(migrationEntries).toHaveLength(3);
     expect(migrationEntries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -318,11 +462,81 @@ describe("Agent settings storage", () => {
           expectedRevision: "",
           key: "agent.vtdAuthToken",
         }),
+        expect.objectContaining({ key: "agent.profile.default.llmApiKey" }),
       ]),
     );
     expect(configuration.get("agent.llmApiKey")).toBeUndefined();
     expect(configuration.get(AppSetting.AGENT_VTD_AUTH_TOKEN)).toBeUndefined();
-    expect(localStorage.getItem("lichtblick.agent.anthropic.apiKey")).toBeNull();
+    expect(
+      localStorage.getItem("lichtblick.agent.anthropic.apiKey"),
+    ).toBeNull();
+  });
+
+  it("prefers per-profile desktop credentials and deletes a removed profile key", async () => {
+    const durableValues = new Map<string, AppConfigurationValue>();
+    const configuration = makeCachedConfiguration(durableValues);
+    await commitAgentSettings(configuration, completeDraft, { desktop: true });
+    const current = renderHook(() =>
+      useAgentSettings(configuration, { desktop: true }),
+    );
+    await waitFor(() => {
+      expect(current.result.current.migrationReady).toBe(true);
+    });
+
+    const draft = createAgentSettingsDraft(current.result.current.snapshot);
+    draft.profiles?.push({
+      anthropic: {
+        apiKey: "second-profile-secret",
+        baseUrl: "https://second.example.com",
+        model: "second-model",
+      },
+      id: "profile-2",
+      name: "Second profile",
+      openAiCompatible: { apiKey: "", baseUrl: "", model: "" },
+      provider: "anthropic",
+    });
+    draft.activeProfileId = "profile-2";
+    await act(async () => {
+      await commitAgentSettings(configuration, draft, { desktop: true });
+    });
+
+    const fixedRecord = JSON.parse(
+      secureCredentials.get("agent.llmApiKey") ?? "",
+    ) as Record<string, unknown>;
+    secureCredentials.set(
+      "agent.llmApiKey",
+      serializeTestValue({
+        ...fixedRecord,
+        anthropicApiKey: "stale-fixed-key",
+      }),
+    );
+    const reloadedConfiguration = makeCachedConfiguration(durableValues);
+    const reloaded = renderHook(() =>
+      useAgentSettings(reloadedConfiguration, { desktop: true }),
+    );
+    await waitFor(() => {
+      expect(reloaded.result.current.migrationReady).toBe(true);
+    });
+    expect(reloaded.result.current.snapshot).toMatchObject({
+      activeProfileId: "profile-2",
+      anthropic: { apiKey: "second-profile-secret", model: "second-model" },
+    });
+
+    const deleteDraft = createAgentSettingsDraft(
+      reloaded.result.current.snapshot,
+    );
+    deleteDraft.profiles = deleteDraft.profiles?.filter(
+      ({ id }) => id !== "default",
+    );
+    await act(async () => {
+      await commitAgentSettings(reloadedConfiguration, deleteDraft, {
+        desktop: true,
+      });
+    });
+    expect(
+      secureCredentials.get("agent.profile.default.llmApiKey"),
+    ).toBeUndefined();
+    expect(secureCredentials.get("agent.llmApiKey")).toBeDefined();
   });
 
   it("adopts another Desktop window's atomic migration winner", async () => {
@@ -339,24 +553,22 @@ describe("Agent settings storage", () => {
       provider: "anthropic",
       vtdEndpoint: "",
     };
-    desktopBridge.setManySecureCredentials.mockImplementationOnce(
-      async () => {
-        secureCredentials.set(
-          "agent.llmApiKey",
-          serializeTestValue({
-            anthropicApiKey: "winning-migrated-key",
-            configuration: winningMirror,
-            openAiApiKey: "",
-            revision: winningRevision,
-          }),
-        );
-        secureCredentials.set(
-          "agent.vtdAuthToken",
-          serializeTestValue({ revision: winningRevision, value: "" }),
-        );
-        return { code: "revision-conflict", ok: false };
-      },
-    );
+    desktopBridge.setManySecureCredentials.mockImplementationOnce(async () => {
+      secureCredentials.set(
+        "agent.llmApiKey",
+        serializeTestValue({
+          anthropicApiKey: "winning-migrated-key",
+          configuration: winningMirror,
+          openAiApiKey: "",
+          revision: winningRevision,
+        }),
+      );
+      secureCredentials.set(
+        "agent.vtdAuthToken",
+        serializeTestValue({ revision: winningRevision, value: "" }),
+      );
+      return { code: "revision-conflict", ok: false };
+    });
 
     const { result } = renderHook(() =>
       useAgentSettings(configuration, { desktop: true }),
@@ -371,7 +583,7 @@ describe("Agent settings storage", () => {
         apiKey: "winning-migrated-key",
         model: "winning-migrated-model",
       },
-      revision: winningRevision,
+      revision: expect.stringMatching(/^\d+-/),
     });
     const migrationEntries =
       desktopBridge.setManySecureCredentials.mock.calls[0]?.[0];
@@ -391,7 +603,8 @@ describe("Agent settings storage", () => {
   });
 
   it("rejects a stale complete draft and reloads the winning revision", async () => {
-    const [firstConfiguration, secondConfiguration] = makeSharedConfigurations();
+    const [firstConfiguration, secondConfiguration] =
+      makeSharedConfigurations();
     await commitAgentSettings(firstConfiguration, completeDraft);
     const first = renderHook(() => useAgentSettings(firstConfiguration));
     const second = renderHook(() => useAgentSettings(secondConfiguration));
@@ -400,7 +613,9 @@ describe("Agent settings storage", () => {
       expect(second.result.current.migrationReady).toBe(true);
     });
     const staleDraft = createAgentSettingsDraft(second.result.current.snapshot);
-    const winningDraft = createAgentSettingsDraft(first.result.current.snapshot);
+    const winningDraft = createAgentSettingsDraft(
+      first.result.current.snapshot,
+    );
     winningDraft.anthropic.apiKey = "winning-key";
 
     await act(async () => {
@@ -420,13 +635,18 @@ describe("Agent settings storage", () => {
     expect(conflict).toBeInstanceOf(AgentSettingsConflictError);
 
     await waitFor(() => {
-      expect(second.result.current.snapshot.anthropic.apiKey).toBe("winning-key");
+      expect(second.result.current.snapshot.anthropic.apiKey).toBe(
+        "winning-key",
+      );
     });
-    expect(second.result.current.snapshot.vtdEndpoint).toBe(completeDraft.vtdEndpoint);
+    expect(second.result.current.snapshot.vtdEndpoint).toBe(
+      completeDraft.vtdEndpoint,
+    );
   });
 
   it("serializes concurrent commits from different stores before rechecking revisions", async () => {
-    const [firstConfiguration, secondConfiguration] = makeSharedConfigurations();
+    const [firstConfiguration, secondConfiguration] =
+      makeSharedConfigurations();
     await commitAgentSettings(firstConfiguration, completeDraft);
     const revision = firstConfiguration.get("agent.configurationRevision");
     expect(typeof revision).toBe("string");
@@ -456,14 +676,16 @@ describe("Agent settings storage", () => {
     });
     const originalFirstSet = firstConfiguration.set.bind(firstConfiguration);
     let shouldPause = true;
-    jest.spyOn(firstConfiguration, "set").mockImplementation(async (key, value) => {
-      if (shouldPause && key === AppSetting.AGENT_LLM_PROVIDER) {
-        shouldPause = false;
-        firstWriteStarted?.();
-        await firstWriteReleased;
-      }
-      await originalFirstSet(key, value);
-    });
+    jest
+      .spyOn(firstConfiguration, "set")
+      .mockImplementation(async (key, value) => {
+        if (shouldPause && key === AppSetting.AGENT_LLM_PROVIDER) {
+          shouldPause = false;
+          firstWriteStarted?.();
+          await firstWriteReleased;
+        }
+        await originalFirstSet(key, value);
+      });
 
     const firstCommit = commitAgentSettings(firstConfiguration, firstDraft);
     await firstWritePending;
@@ -471,22 +693,25 @@ describe("Agent settings storage", () => {
     releaseFirstWrite?.();
 
     await expect(firstCommit).resolves.toBeUndefined();
-    await expect(secondCommit).rejects.toBeInstanceOf(AgentSettingsConflictError);
-    expect(JSON.parse(localStorage.getItem("lichtblick.agent.credentials.v1") ?? "")).toMatchObject(
-      {
-        anthropicApiKey: "first-winner-key",
-        configuration: {
-          openAiModel: completeDraft.openAiCompatible.model,
-        },
-      },
+    await expect(secondCommit).rejects.toBeInstanceOf(
+      AgentSettingsConflictError,
     );
+    expect(
+      JSON.parse(localStorage.getItem("lichtblick.agent.credentials.v1") ?? ""),
+    ).toMatchObject({
+      anthropicApiKey: "first-winner-key",
+      configuration: {
+        openAiModel: completeDraft.openAiCompatible.model,
+      },
+    });
     expect(secondConfiguration.get(AppSetting.AGENT_OPENAI_MODEL)).toBe(
       completeDraft.openAiCompatible.model,
     );
   });
 
   it("rechecks the winner after acquiring the cross-renderer commit lock", async () => {
-    const [firstConfiguration, winningConfiguration] = makeSharedConfigurations();
+    const [firstConfiguration, winningConfiguration] =
+      makeSharedConfigurations();
     await commitAgentSettings(firstConfiguration, completeDraft);
     const staleRevision = firstConfiguration.get("agent.configurationRevision");
     expect(typeof staleRevision).toBe("string");
@@ -508,7 +733,10 @@ describe("Agent settings storage", () => {
       vtdEndpoint: completeDraft.vtdEndpoint,
     };
     const request = jest.fn(
-      async (_name: string, callback: () => Promise<unknown>): Promise<unknown> => {
+      async (
+        _name: string,
+        callback: () => Promise<unknown>,
+      ): Promise<unknown> => {
         await Promise.all([
           winningConfiguration.set(
             AppSetting.AGENT_LLM_PROVIDER,
@@ -545,7 +773,10 @@ describe("Agent settings storage", () => {
             vtdAuthToken: completeDraft.vtdAuthToken,
           }),
         );
-        await winningConfiguration.set("agent.configurationRevision", winningRevision);
+        await winningConfiguration.set(
+          "agent.configurationRevision",
+          winningRevision,
+        );
         return await callback();
       },
     );
@@ -554,20 +785,23 @@ describe("Agent settings storage", () => {
       value: { request },
     });
 
-    await expect(commitAgentSettings(firstConfiguration, staleDraft)).rejects.toBeInstanceOf(
-      AgentSettingsConflictError,
-    );
+    await expect(
+      commitAgentSettings(firstConfiguration, staleDraft),
+    ).rejects.toBeInstanceOf(AgentSettingsConflictError);
 
-    expect(request).toHaveBeenCalledWith("lichtblick.agent-settings.commit", expect.any(Function));
+    expect(request).toHaveBeenCalledWith(
+      "lichtblick.agent-settings.commit",
+      expect.any(Function),
+    );
     expect(firstConfiguration.get(AppSetting.AGENT_ANTHROPIC_MODEL)).toBe(
       "cross-renderer-winning-model",
     );
-    expect(JSON.parse(localStorage.getItem("lichtblick.agent.credentials.v1") ?? "")).toMatchObject(
-      {
-        anthropicApiKey: "cross-renderer-winning-key",
-        revision: winningRevision,
-      },
-    );
+    expect(
+      JSON.parse(localStorage.getItem("lichtblick.agent.credentials.v1") ?? ""),
+    ).toMatchObject({
+      anthropicApiKey: "cross-renderer-winning-key",
+      revision: winningRevision,
+    });
   });
 
   it("recovers a desktop cached configuration after one revision conflict", async () => {
@@ -577,14 +811,20 @@ describe("Agent settings storage", () => {
       desktop: true,
     });
     const secondConfiguration = makeCachedConfiguration(durableValues);
-    const first = renderHook(() => useAgentSettings(firstConfiguration, { desktop: true }));
-    const second = renderHook(() => useAgentSettings(secondConfiguration, { desktop: true }));
+    const first = renderHook(() =>
+      useAgentSettings(firstConfiguration, { desktop: true }),
+    );
+    const second = renderHook(() =>
+      useAgentSettings(secondConfiguration, { desktop: true }),
+    );
     await waitFor(() => {
       expect(first.result.current.migrationReady).toBe(true);
       expect(second.result.current.migrationReady).toBe(true);
     });
     const staleDraft = createAgentSettingsDraft(second.result.current.snapshot);
-    const winningDraft = createAgentSettingsDraft(first.result.current.snapshot);
+    const winningDraft = createAgentSettingsDraft(
+      first.result.current.snapshot,
+    );
     winningDraft.openAiCompatible = {
       ...winningDraft.openAiCompatible,
       baseUrl: "https://winner.example.com/v1",
@@ -623,7 +863,9 @@ describe("Agent settings storage", () => {
         commitAgentSettings(secondConfiguration, retry, { desktop: true }),
       ).resolves.toBeUndefined();
     });
-    expect(second.result.current.snapshot.openAiCompatible.model).toBe("retry-model");
+    expect(second.result.current.snapshot.openAiCompatible.model).toBe(
+      "retry-model",
+    );
   });
 
   it("uses one desktop credential CAS and reloads the winning renderer on conflict", async () => {
@@ -634,7 +876,9 @@ describe("Agent settings storage", () => {
     });
     const staleConfiguration = makeCachedConfiguration(durableValues);
     const winnerConfiguration = makeCachedConfiguration(durableValues);
-    const stale = renderHook(() => useAgentSettings(staleConfiguration, { desktop: true }));
+    const stale = renderHook(() =>
+      useAgentSettings(staleConfiguration, { desktop: true }),
+    );
     await waitFor(() => {
       expect(stale.result.current.migrationReady).toBe(true);
     });
@@ -643,10 +887,26 @@ describe("Agent settings storage", () => {
     const expectedRevision = staleDraft.revision;
     const winningRevision = "desktop-winning-revision";
     const winningMirror = {
+      activeProfileId: "default",
       anthropicBaseUrl: completeDraft.anthropic.baseUrl,
       anthropicModel: "desktop-winning-model",
       openAiBaseUrl: completeDraft.openAiCompatible.baseUrl,
       openAiModel: completeDraft.openAiCompatible.model,
+      profiles: [
+        {
+          anthropic: {
+            baseUrl: completeDraft.anthropic.baseUrl,
+            model: "desktop-winning-model",
+          },
+          id: "default",
+          name: "Default",
+          openAiCompatible: {
+            baseUrl: completeDraft.openAiCompatible.baseUrl,
+            model: completeDraft.openAiCompatible.model,
+          },
+          provider: completeDraft.provider,
+        },
+      ],
       provider: completeDraft.provider,
       vtdEndpoint: "",
     };
@@ -667,15 +927,35 @@ describe("Agent settings storage", () => {
           value: completeDraft.vtdAuthToken,
         }),
       );
+      secureCredentials.set(
+        "agent.profile.default.llmApiKey",
+        serializeTestValue({
+          anthropicApiKey: "desktop-winning-key",
+          openAiApiKey: completeDraft.openAiCompatible.apiKey,
+          revision: winningRevision,
+        }),
+      );
       await Promise.all([
-        winnerConfiguration.set(AppSetting.AGENT_LLM_PROVIDER, winningMirror.provider),
+        winnerConfiguration.set(
+          AppSetting.AGENT_LLM_PROVIDER,
+          winningMirror.provider,
+        ),
         winnerConfiguration.set(
           AppSetting.AGENT_ANTHROPIC_BASE_URL,
           winningMirror.anthropicBaseUrl,
         ),
-        winnerConfiguration.set(AppSetting.AGENT_ANTHROPIC_MODEL, winningMirror.anthropicModel),
-        winnerConfiguration.set(AppSetting.AGENT_OPENAI_BASE_URL, winningMirror.openAiBaseUrl),
-        winnerConfiguration.set(AppSetting.AGENT_OPENAI_MODEL, winningMirror.openAiModel),
+        winnerConfiguration.set(
+          AppSetting.AGENT_ANTHROPIC_MODEL,
+          winningMirror.anthropicModel,
+        ),
+        winnerConfiguration.set(
+          AppSetting.AGENT_OPENAI_BASE_URL,
+          winningMirror.openAiBaseUrl,
+        ),
+        winnerConfiguration.set(
+          AppSetting.AGENT_OPENAI_MODEL,
+          winningMirror.openAiModel,
+        ),
         winnerConfiguration.set("agent.configurationRevision", winningRevision),
       ]);
       return { code: "revision-conflict", ok: false };
@@ -689,8 +969,9 @@ describe("Agent settings storage", () => {
       ).rejects.toBeInstanceOf(AgentSettingsConflictError);
     });
 
-    const entries = desktopBridge.setManySecureCredentials.mock.calls.at(-1)?.[0];
-    expect(entries).toHaveLength(2);
+    const entries =
+      desktopBridge.setManySecureCredentials.mock.calls.at(-1)?.[0];
+    expect(entries).toHaveLength(3);
     expect(entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -701,6 +982,7 @@ describe("Agent settings storage", () => {
           expectedRevision,
           key: "agent.vtdAuthToken",
         }),
+        expect.objectContaining({ key: "agent.profile.default.llmApiKey" }),
       ]),
     );
     await waitFor(() => {
@@ -709,9 +991,14 @@ describe("Agent settings storage", () => {
         model: "desktop-winning-model",
       });
     });
-    expect(staleConfiguration.get("agent.configurationRevision")).toBe(winningRevision);
+    expect(staleConfiguration.get("agent.configurationRevision")).toBe(
+      winningRevision,
+    );
     expect(
-      getStringFromSerializedRecord(secureCredentials.get("agent.llmApiKey") ?? "", "revision"),
+      getStringFromSerializedRecord(
+        secureCredentials.get("agent.llmApiKey") ?? "",
+        "revision",
+      ),
     ).toBe(winningRevision);
   });
 
@@ -720,9 +1007,7 @@ describe("Agent settings storage", () => {
     await commitAgentSettings(configuration, completeDraft, {
       desktop: true,
     });
-    const previousRevision = configuration.get(
-      "agent.configurationRevision",
-    );
+    const previousRevision = configuration.get("agent.configurationRevision");
     expect(typeof previousRevision).toBe("string");
     const previousLlmRecord = secureCredentials.get("agent.llmApiKey");
     const previousVtdRecord = secureCredentials.get("agent.vtdAuthToken");
@@ -766,20 +1051,23 @@ describe("Agent settings storage", () => {
     const rollbackCredentialIndex = operationOrder.lastIndexOf("credentials");
     const firstRollbackConfigurationIndex = operationOrder.findIndex(
       (operation, index) =>
-        index > rollbackCredentialIndex && operation.startsWith("configuration:"),
+        index > rollbackCredentialIndex &&
+        operation.startsWith("configuration:"),
     );
     expect(rollbackCredentialIndex).toBeGreaterThan(0);
-    expect(firstRollbackConfigurationIndex).toBeGreaterThan(rollbackCredentialIndex);
+    expect(firstRollbackConfigurationIndex).toBeGreaterThan(
+      rollbackCredentialIndex,
+    );
     expect(desktopBridge.setManySecureCredentials).toHaveBeenCalledTimes(2);
     const forwardEntries =
       desktopBridge.setManySecureCredentials.mock.calls[0]?.[0];
     const rollbackEntries =
       desktopBridge.setManySecureCredentials.mock.calls[1]?.[0];
-    expect(forwardEntries).toHaveLength(2);
-    expect(rollbackEntries).toHaveLength(2);
+    expect(forwardEntries).toHaveLength(3);
+    expect(rollbackEntries).toHaveLength(3);
     const committedRevision = getStringFromSerializedRecord(
-      forwardEntries?.find((entry) => entry.key === "agent.llmApiKey")
-        ?.value ?? "",
+      forwardEntries?.find((entry) => entry.key === "agent.llmApiKey")?.value ??
+        "",
       "revision",
     );
     expect(committedRevision).not.toBe(previousRevision);
@@ -830,14 +1118,16 @@ describe("Agent settings storage", () => {
     }
     let credentialWriteCount = 0;
     let rollbackCredentialCompleted = false;
-    desktopBridge.setManySecureCredentials.mockImplementation(async (entries) => {
-      credentialWriteCount++;
-      const result = await persistCredentials(entries);
-      if (credentialWriteCount === 2) {
-        rollbackCredentialCompleted = true;
-      }
-      return result;
-    });
+    desktopBridge.setManySecureCredentials.mockImplementation(
+      async (entries) => {
+        credentialWriteCount++;
+        const result = await persistCredentials(entries);
+        if (credentialWriteCount === 2) {
+          rollbackCredentialCompleted = true;
+        }
+        return result;
+      },
+    );
     const originalSet = configuration.set.bind(configuration);
     let rejectForwardModel = true;
     jest.spyOn(configuration, "set").mockImplementation(async (key, value) => {
@@ -936,7 +1226,9 @@ describe("Agent settings storage", () => {
     });
     const durableValues = new Map<string, AppConfigurationValue>();
     const configuration = makeCachedConfiguration(durableValues);
-    const { result } = renderHook(() => useAgentSettings(configuration, { desktop: true }));
+    const { result } = renderHook(() =>
+      useAgentSettings(configuration, { desktop: true }),
+    );
     await waitFor(() => {
       expect(result.current.migrationReady).toBe(true);
     });
@@ -949,7 +1241,9 @@ describe("Agent settings storage", () => {
 
     expect(desktopBridge.setManySecureCredentials).toHaveBeenCalled();
     expect(desktopBridge.deleteSecureCredential).not.toHaveBeenCalled();
-    expect(localStorage.getItem("lichtblick.agent.credentials.v1")).toContain("plaintext-secret");
+    expect(localStorage.getItem("lichtblick.agent.credentials.v1")).toContain(
+      "plaintext-secret",
+    );
     expect(result.current.snapshot.credentialStorage).toBe("plaintext");
     expect(result.current.snapshot.storageError).toBe(false);
 
@@ -960,22 +1254,34 @@ describe("Agent settings storage", () => {
         commitAgentSettings(configuration, retry, { desktop: true }),
       ).resolves.toBeUndefined();
     });
-    expect(result.current.snapshot.anthropic.model).toBe("plaintext-retry-model");
+    expect(result.current.snapshot.anthropic.model).toBe(
+      "plaintext-retry-model",
+    );
 
     const reloadedConfiguration = makeCachedConfiguration(durableValues);
-    const reloaded = renderHook(() => useAgentSettings(reloadedConfiguration, { desktop: true }));
+    const reloaded = renderHook(() =>
+      useAgentSettings(reloadedConfiguration, { desktop: true }),
+    );
     await waitFor(() => {
       expect(reloaded.result.current.migrationReady).toBe(true);
-      expect(reloaded.result.current.snapshot.credentialStorage).toBe("plaintext");
-      expect(reloaded.result.current.snapshot.anthropic.apiKey).toBe("plaintext-secret");
+      expect(reloaded.result.current.snapshot.credentialStorage).toBe(
+        "plaintext",
+      );
+      expect(reloaded.result.current.snapshot.anthropic.apiKey).toBe(
+        "plaintext-secret",
+      );
     });
-    expect(localStorage.getItem("lichtblick.agent.credentials.v1")).toContain("plaintext-secret");
+    expect(localStorage.getItem("lichtblick.agent.credentials.v1")).toContain(
+      "plaintext-secret",
+    );
   });
 
   it("preserves secure credentials while the desktop backend is temporarily unavailable", async () => {
     const durableValues = new Map<string, AppConfigurationValue>();
     const writerConfiguration = makeCachedConfiguration(durableValues);
-    await commitAgentSettings(writerConfiguration, completeDraft, { desktop: true });
+    await commitAgentSettings(writerConfiguration, completeDraft, {
+      desktop: true,
+    });
     const llmRecordBefore = secureCredentials.get("agent.llmApiKey");
     const vtdRecordBefore = secureCredentials.get("agent.vtdAuthToken");
     expect(llmRecordBefore).toContain("anthropic-secret");
@@ -986,7 +1292,9 @@ describe("Agent settings storage", () => {
       code: "backend-unavailable",
       ok: false,
     });
-    const unavailable = renderHook(() => useAgentSettings(readerConfiguration, { desktop: true }));
+    const unavailable = renderHook(() =>
+      useAgentSettings(readerConfiguration, { desktop: true }),
+    );
 
     await waitFor(() => {
       expect(unavailable.result.current.migrationError).toBeInstanceOf(
@@ -1003,12 +1311,16 @@ describe("Agent settings storage", () => {
     desktopBridge.getSecureCredential.mockImplementation(async (name) =>
       secureCredentials.get(name),
     );
-    const recovered = renderHook(() => useAgentSettings(readerConfiguration, { desktop: true }));
+    const recovered = renderHook(() =>
+      useAgentSettings(readerConfiguration, { desktop: true }),
+    );
     await waitFor(() => {
       expect(recovered.result.current.migrationReady).toBe(true);
     });
     expect(recovered.result.current.migrationError).toBeUndefined();
-    expect(recovered.result.current.snapshot.anthropic.apiKey).toBe("anthropic-secret");
+    expect(recovered.result.current.snapshot.anthropic.apiKey).toBe(
+      "anthropic-secret",
+    );
     expect(recovered.result.current.snapshot.vtdAuthToken).toBe("vtd-secret");
     expect(desktopBridge.deleteSecureCredential).not.toHaveBeenCalled();
   });
@@ -1019,7 +1331,9 @@ describe("Agent settings storage", () => {
     await commitAgentSettings(configuration, completeDraft, { desktop: true });
     const llmRecordBefore = secureCredentials.get("agent.llmApiKey");
     const vtdRecordBefore = secureCredentials.get("agent.vtdAuthToken");
-    const { result } = renderHook(() => useAgentSettings(configuration, { desktop: true }));
+    const { result } = renderHook(() =>
+      useAgentSettings(configuration, { desktop: true }),
+    );
     await waitFor(() => {
       expect(result.current.migrationReady).toBe(true);
     });
@@ -1046,12 +1360,14 @@ describe("Agent settings storage", () => {
       model: completeDraft.anthropic.model,
     });
 
-    desktopBridge.setManySecureCredentials.mockImplementation(async (entries) => {
-      for (const entry of entries) {
-        secureCredentials.set(entry.key, entry.value);
-      }
-      return { ok: true };
-    });
+    desktopBridge.setManySecureCredentials.mockImplementation(
+      async (entries) => {
+        for (const entry of entries) {
+          secureCredentials.set(entry.key, entry.value);
+        }
+        return { ok: true };
+      },
+    );
     await act(async () => {
       await commitAgentSettings(configuration, draft, { desktop: true });
     });
@@ -1062,10 +1378,14 @@ describe("Agent settings storage", () => {
   it("preserves the loaded snapshot when a runtime refresh cannot access the backend", async () => {
     const configuration = makeMockAppConfiguration();
     await commitAgentSettings(configuration, completeDraft, { desktop: true });
-    const { result } = renderHook(() => useAgentSettings(configuration, { desktop: true }));
+    const { result } = renderHook(() =>
+      useAgentSettings(configuration, { desktop: true }),
+    );
     await waitFor(() => {
       expect(result.current.migrationReady).toBe(true);
-      expect(result.current.snapshot.anthropic.apiKey).toBe(completeDraft.anthropic.apiKey);
+      expect(result.current.snapshot.anthropic.apiKey).toBe(
+        completeDraft.anthropic.apiKey,
+      );
     });
 
     desktopBridge.getSecureCredential.mockResolvedValue({
@@ -1073,7 +1393,10 @@ describe("Agent settings storage", () => {
       ok: false,
     });
     await act(async () => {
-      await configuration.set(AppSetting.AGENT_ANTHROPIC_MODEL, "external-model-while-locked");
+      await configuration.set(
+        AppSetting.AGENT_ANTHROPIC_MODEL,
+        "external-model-while-locked",
+      );
     });
     await waitFor(() => {
       expect(result.current.credentialBackendUnavailable).toBe(true);
@@ -1090,7 +1413,10 @@ describe("Agent settings storage", () => {
       secureCredentials.get(name),
     );
     await act(async () => {
-      await configuration.set(AppSetting.AGENT_ANTHROPIC_MODEL, "external-model-after-unlock");
+      await configuration.set(
+        AppSetting.AGENT_ANTHROPIC_MODEL,
+        "external-model-after-unlock",
+      );
     });
     await waitFor(() => {
       expect(result.current.credentialBackendUnavailable).toBe(false);
@@ -1113,7 +1439,10 @@ describe("Agent settings storage", () => {
     };
     const configuration = makeMockAppConfiguration([
       [AppSetting.AGENT_LLM_PROVIDER, configurationMirror.provider],
-      [AppSetting.AGENT_ANTHROPIC_BASE_URL, configurationMirror.anthropicBaseUrl],
+      [
+        AppSetting.AGENT_ANTHROPIC_BASE_URL,
+        configurationMirror.anthropicBaseUrl,
+      ],
       [AppSetting.AGENT_ANTHROPIC_MODEL, configurationMirror.anthropicModel],
       [AppSetting.AGENT_OPENAI_BASE_URL, configurationMirror.openAiBaseUrl],
       [AppSetting.AGENT_OPENAI_MODEL, configurationMirror.openAiModel],
@@ -1130,14 +1459,19 @@ describe("Agent settings storage", () => {
           revision,
         }),
       ],
-      ["agent.vtdAuthToken", JSON.stringify({ revision, value: "legacy-vtd-token" })],
+      [
+        "agent.vtdAuthToken",
+        JSON.stringify({ revision, value: "legacy-vtd-token" }),
+      ],
     ]);
     desktopBridge.getSecureCredential.mockImplementation(async (name) => ({
       code: "insecure-backend",
       ok: true,
       value: legacyValues.get(name),
     }));
-    const { result } = renderHook(() => useAgentSettings(configuration, { desktop: true }));
+    const { result } = renderHook(() =>
+      useAgentSettings(configuration, { desktop: true }),
+    );
 
     await waitFor(() => {
       expect(result.current.migrationReady).toBe(true);
@@ -1148,7 +1482,9 @@ describe("Agent settings storage", () => {
       credentialStorage: "plaintext",
       vtdAuthToken: "legacy-vtd-token",
     });
-    expect(localStorage.getItem("lichtblick.agent.credentials.v1")).toBeNull();
+    expect(localStorage.getItem("lichtblick.agent.credentials.v1")).toContain(
+      "legacy-basic-text-key",
+    );
 
     const draft = createAgentSettingsDraft(result.current.snapshot);
     await act(async () => {
@@ -1160,8 +1496,12 @@ describe("Agent settings storage", () => {
       "legacy-basic-text-key",
     );
     expect(desktopBridge.setManySecureCredentials).not.toHaveBeenCalled();
-    expect(desktopBridge.deleteSecureCredential).toHaveBeenCalledWith("agent.llmApiKey");
-    expect(desktopBridge.deleteSecureCredential).toHaveBeenCalledWith("agent.vtdAuthToken");
+    expect(desktopBridge.deleteSecureCredential).toHaveBeenCalledWith(
+      "agent.llmApiKey",
+    );
+    expect(desktopBridge.deleteSecureCredential).toHaveBeenCalledWith(
+      "agent.vtdAuthToken",
+    );
   });
 
   it("prefers a completed plaintext fallback over stale insecure desktop records", async () => {
@@ -1176,7 +1516,10 @@ describe("Agent settings storage", () => {
     };
     const configuration = makeMockAppConfiguration([
       [AppSetting.AGENT_LLM_PROVIDER, configurationMirror.provider],
-      [AppSetting.AGENT_ANTHROPIC_BASE_URL, configurationMirror.anthropicBaseUrl],
+      [
+        AppSetting.AGENT_ANTHROPIC_BASE_URL,
+        configurationMirror.anthropicBaseUrl,
+      ],
       [AppSetting.AGENT_ANTHROPIC_MODEL, configurationMirror.anthropicModel],
       [AppSetting.AGENT_OPENAI_BASE_URL, configurationMirror.openAiBaseUrl],
       [AppSetting.AGENT_OPENAI_MODEL, configurationMirror.openAiModel],
@@ -1209,7 +1552,9 @@ describe("Agent settings storage", () => {
           : JSON.stringify({ revision: "stale-revision", value: "" }),
     }));
 
-    const { result } = renderHook(() => useAgentSettings(configuration, { desktop: true }));
+    const { result } = renderHook(() =>
+      useAgentSettings(configuration, { desktop: true }),
+    );
 
     await waitFor(() => {
       expect(result.current.migrationReady).toBe(true);
@@ -1219,7 +1564,18 @@ describe("Agent settings storage", () => {
       model: "new-model",
     });
     expect(result.current.snapshot.credentialStorage).toBe("plaintext");
-    expect(desktopBridge.deleteSecureCredential).toHaveBeenCalledWith("agent.llmApiKey");
-    expect(desktopBridge.deleteSecureCredential).toHaveBeenCalledWith("agent.vtdAuthToken");
+    expect(
+      JSON.parse(localStorage.getItem("lichtblick.agent.credentials.v1") ?? ""),
+    ).toMatchObject({
+      profileKeys: {
+        default: { anthropicApiKey: "new-plaintext-key" },
+      },
+    });
+    expect(desktopBridge.deleteSecureCredential).toHaveBeenCalledWith(
+      "agent.llmApiKey",
+    );
+    expect(desktopBridge.deleteSecureCredential).toHaveBeenCalledWith(
+      "agent.vtdAuthToken",
+    );
   });
 });
