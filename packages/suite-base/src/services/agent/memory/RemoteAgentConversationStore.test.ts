@@ -18,6 +18,7 @@ const conversation: StoredConversation = {
   updatedAt: "2026-07-29T00:00:00.000Z",
   uiMessages: [{ id: "message-1" }],
   llmHistory: [{ role: "user", content: "inspect this recording" }],
+  profileName: "Diagnostics",
 };
 
 function createRejectedDeferred(): {
@@ -88,6 +89,29 @@ describe("RemoteAgentConversationStore", () => {
     expect(http.get).toHaveBeenCalledWith("workspaces/workspace%2Fa/conversations/conversation-1");
     expect(local.save).toHaveBeenCalledWith(conversation);
     expect(local.load).not.toHaveBeenCalled();
+  });
+
+  it("passes the pi history format marker through remote and local snapshots", async () => {
+    const { http, local, store } = createStores();
+    const piConversation: StoredConversation = {
+      ...conversation,
+      llmHistory: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "inspect this recording" }],
+          timestamp: Date.parse("2026-08-04T09:30:00.000Z"),
+        },
+      ],
+      llmHistoryFormat: "pi/v1",
+    };
+    http.get.mockResolvedValue({
+      data: { ...piConversation, title: "inspect this recording" },
+      path: "",
+      timestamp: "",
+    });
+
+    await expect(store.load(piConversation.conversationId)).resolves.toEqual(piConversation);
+    expect(local.save).toHaveBeenCalledWith(piConversation);
   });
 
   it("falls back to IndexedDB for HTTP and network failures", async () => {
@@ -218,6 +242,7 @@ describe("RemoteAgentConversationStore", () => {
           title: "inspect this recording",
           updatedAt: conversation.updatedAt,
           messageCount: 1,
+          profileName: conversation.profileName,
         },
       ],
       total: 1,

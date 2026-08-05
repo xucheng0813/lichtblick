@@ -134,10 +134,16 @@ export function ConversationList({
               >
                 <ListItemText
                   primary={conversation.title || t("conversationList.untitled")}
-                  secondary={t("conversationList.metadata", {
-                    count: conversation.messageCount,
-                    time: formatRelativeTime(conversation.updatedAt, locale),
-                  })}
+                  secondary={t(
+                    conversation.profileName == undefined
+                      ? "conversationList.metadata"
+                      : "conversationList.profileMetadata",
+                    {
+                      count: conversation.messageCount,
+                      profileName: conversation.profileName,
+                      time: formatRelativeTime(conversation.updatedAt, locale),
+                    },
+                  )}
                   slotProps={{
                     primary: { noWrap: true },
                     secondary: { noWrap: true },

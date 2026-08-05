@@ -47,14 +47,17 @@ describe("AgentCatalogWatcher", () => {
       cancelWaiting: jest.fn(),
       confirmToolRun: jest.fn(),
       dismissProposal: jest.fn(),
+      getVtdTopics: jest.fn(),
+      loadVtdRecord: jest.fn(),
       notifyCatalogReady,
       reset: jest.fn(),
-    newConversation: jest.fn(),
+      newConversation: jest.fn(),
       startNewConversation: jest.fn(),
       switchConversation: jest.fn(),
       deleteConversation: jest.fn(),
       refreshConversations: jest.fn(),
       sendMessage: jest.fn(),
+      sliceVtdRecord: jest.fn(),
     };
   }
 
@@ -205,10 +208,7 @@ describe("AgentCatalogWatcher", () => {
       </AgentChatContext.Provider>,
     );
 
-    expect(notifyCatalogReady.mock.calls).toEqual([
-      ["request-1"],
-      ["request-2"],
-    ]);
+    expect(notifyCatalogReady.mock.calls).toEqual([["request-1"], ["request-2"]]);
   });
 
   it("does not treat a manual switch to a different data source as the Agent request", () => {
@@ -271,10 +271,7 @@ describe("AgentCatalogWatcher", () => {
     });
 
     expect(notifyCatalogReady).toHaveBeenCalledWith("request-1");
-    const warningCalls = (mockLogger as unknown as { warn: jest.Mock }).warn.mock
-      .calls;
-    expect(warningCalls).toContainEqual([
-      expect.stringContaining("Agent chat is disabled"),
-    ]);
+    const warningCalls = (mockLogger as unknown as { warn: jest.Mock }).warn.mock.calls;
+    expect(warningCalls).toContainEqual([expect.stringContaining("Agent chat is disabled")]);
   });
 });

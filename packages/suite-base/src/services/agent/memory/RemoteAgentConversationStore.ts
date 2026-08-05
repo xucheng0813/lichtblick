@@ -20,6 +20,7 @@ export type ConversationSummary = {
   title: string;
   updatedAt: string;
   messageCount: number;
+  profileName?: string;
 };
 
 export type ConversationListPage = {
@@ -77,6 +78,12 @@ export class RemoteAgentConversationStore {
         updatedAt: response.data.updatedAt,
         uiMessages: response.data.uiMessages,
         llmHistory: response.data.llmHistory,
+        ...(response.data.llmHistoryFormat == undefined
+          ? {}
+          : { llmHistoryFormat: response.data.llmHistoryFormat }),
+        ...(response.data.profileName == undefined
+          ? {}
+          : { profileName: response.data.profileName }),
       };
       await this.#local.save(conversation);
       return conversation;

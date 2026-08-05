@@ -3,6 +3,8 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+
 import type { LlmMessage } from "@lichtblick/suite-base/services/agent/local/types";
 
 import { AgentConversationStore } from "./AgentConversationStore";
@@ -13,6 +15,13 @@ import {
 } from "./agentConversationPersistence";
 
 const history: LlmMessage[] = [{ role: "user", content: "find SN001" }];
+const piHistory: AgentMessage[] = [
+  {
+    role: "user",
+    content: [{ type: "text", text: "find SN001" }],
+    timestamp: Date.parse("2026-08-04T09:30:00.000Z"),
+  },
+];
 
 describe("getOrCreateConversationId", () => {
   beforeEach(() => {
@@ -52,7 +61,94 @@ describe("createAgentConversationPersistence", () => {
 
     const persistence = createAgentConversationPersistence({ conversationId: "c1", makeId: () => "next", store });
     await expect(persistence.restoreLlmHistory()).resolves.toEqual(history);
+    await expect(persistence.restorePiLlmHistory()).resolves.toEqual([]);
     await expect(persistence.restoreUiMessages()).resolves.toHaveLength(1);
+  });
+
+  it("round-trips pi history with its format marker and the UI transcript", async () => {
+    const store = new AgentConversationStore();
+    const persistence = createAgentConversationPersistence({
+      conversationId: "pi-conversation",
+      makeId: () => "next",
+      store,
+    });
+    await persistence.restorePiLlmHistory();
+
+    persistence.onPiLlmHistoryChanged(piHistory);
+    persistence.onUiMessagesChanged([{ id: "ui-message", content: "find SN001" }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(await store.load("pi-conversation")).toMatchObject({
+      llmHistory: piHistory,
+      llmHistoryFormat: "pi/v1",
+      uiMessages: [{ id: "ui-message", content: "find SN001" }],
+    });
+    const restored = createAgentConversationPersistence({
+      conversationId: "pi-conversation",
+      makeId: () => "next",
+      store,
+    });
+    await expect(restored.restorePiLlmHistory()).resolves.toEqual(piHistory);
+    await expect(restored.restoreLlmHistory()).resolves.toEqual([]);
+    await expect(restored.restoreUiMessages()).resolves.toEqual([
+      { id: "ui-message", content: "find SN001" },
+    ]);
+  });
+
+  it("round-trips the last profile used by a conversation", async () => {
+    const store = new AgentConversationStore();
+    const persistence = createAgentConversationPersistence({
+      conversationId: "profile-conversation",
+      makeId: () => "next",
+      store,
+    });
+    await persistence.restoreUiMessages();
+
+    persistence.setProfileName("Diagnostics");
+    persistence.onUiMessagesChanged([{ id: "message-1" }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await store.load("profile-conversation")).toMatchObject({
+      profileName: "Diagnostics",
+    });
+
+    const restored = createAgentConversationPersistence({
+      conversationId: "profile-conversation",
+      makeId: () => "next",
+      store,
+    });
+    await restored.restoreUiMessages();
+    restored.onUiMessagesChanged([{ id: "message-2" }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await store.load("profile-conversation")).toMatchObject({
+      profileName: "Diagnostics",
+    });
+
+    restored.setProfileName("Planning");
+    restored.onUiMessagesChanged([{ id: "message-3" }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await store.load("profile-conversation")).toMatchObject({
+      profileName: "Planning",
+    });
+  });
+
+  it("discards unversioned LLM history for pi without losing UI messages", async () => {
+    const store = new AgentConversationStore();
+    await store.save({
+      conversationId: "legacy-conversation",
+      updatedAt: "2026-08-04T09:30:00.000Z",
+      llmHistory: history,
+      uiMessages: [{ id: "legacy-ui-message", content: "still visible" }],
+    });
+    const persistence = createAgentConversationPersistence({
+      conversationId: "legacy-conversation",
+      makeId: () => "next",
+      store,
+    });
+
+    await expect(persistence.restorePiLlmHistory()).resolves.toEqual([]);
+    await expect(persistence.restoreUiMessages()).resolves.toEqual([
+      { id: "legacy-ui-message", content: "still visible" },
+    ]);
   });
 
   it("returns empty transcripts for an unknown conversation", async () => {

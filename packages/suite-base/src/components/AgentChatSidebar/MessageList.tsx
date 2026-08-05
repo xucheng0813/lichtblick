@@ -2,29 +2,43 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { Button, Typography } from "@mui/material";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { AgentMarkdown } from "@lichtblick/suite-base/components/AgentMarkdown";
-import { ChatMessage, LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
+import type { AgentChatStatus } from "@lichtblick/suite-base/context/AgentChatContext";
+import {
+  ChatMessage,
+  LayoutProposal,
+} from "@lichtblick/suite-base/services/agent/types";
+import { VtdRecord } from "@lichtblick/suite-base/services/vtd/types";
 
 import { useStyles } from "./AgentChatSidebar.style";
 import { LayoutPreviewCard } from "./LayoutPreviewCard";
-import { ToolRunCard } from "./ToolRunCard";
+import { ToolRunGroup } from "./ToolRunGroup";
+import { parseVtdSearchResult, VtdRecordListCard } from "./VtdRecordListCard";
 
 type MessageListProps = {
   messages: readonly ChatMessage[];
   pendingProposal?: LayoutProposal;
   pendingProposalMessageId?: string;
   pendingProposalRequestId?: string;
+  onLoadVtdRecord: (id: string) => Promise<void>;
+  status?: AgentChatStatus;
 };
 
 const MESSAGE_WINDOW_SIZE = 100;
 
 const MessageItem = memo(function MemoizedMessageItem({
+  isProcessing,
   message,
+  onLoadVtdRecord,
+  vtdRecords,
 }: {
+  isProcessing: boolean;
   message: ChatMessage;
+  onLoadVtdRecord: (id: string) => Promise<void>;
+  vtdRecords?: VtdRecord[];
 }): React.JSX.Element {
   const { classes, cx } = useStyles();
   const { t } = useTranslation("agentChat");
@@ -46,10 +60,25 @@ const MessageItem = memo(function MemoizedMessageItem({
       >
         {isUser ? t("you") : t("assistant")}
       </Typography>
-      <AgentMarkdown>{message.content}</AgentMarkdown>
-      {message.toolRuns?.map((toolRun) => (
-        <ToolRunCard key={toolRun.id} toolRun={toolRun} />
-      ))}
+      {!isProcessing && <AgentMarkdown>{message.content}</AgentMarkdown>}
+      {message.toolRuns != undefined && message.toolRuns.length > 0 && (
+        <ToolRunGroup toolRuns={message.toolRuns} />
+      )}
+      {isProcessing && (
+        <Typography
+          color="text.secondary"
+          data-testid="agent-chat-processing"
+          variant="body2"
+        >
+          {t("processing")}
+        </Typography>
+      )}
+      {vtdRecords != undefined && (
+        <VtdRecordListCard
+          records={vtdRecords}
+          onLoadRecord={onLoadVtdRecord}
+        />
+      )}
     </div>
   );
 });
@@ -60,10 +89,40 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
     pendingProposal,
     pendingProposalMessageId,
     pendingProposalRequestId,
+    onLoadVtdRecord,
+    status = "idle",
   } = props;
   const { classes } = useStyles();
   const { t } = useTranslation("agentChat");
-  const [oldestVisibleMessageId, setOldestVisibleMessageId] = useState<string>();
+  const [oldestVisibleMessageId, setOldestVisibleMessageId] =
+    useState<string>();
+  const mergedVtdSearch = useMemo(() => {
+    const recordsById = new Map<string, VtdRecord>();
+    let lastMessageId: string | undefined;
+    for (const message of messages) {
+      let messageHasResult = false;
+      for (const toolRun of message.toolRuns ?? []) {
+        if (toolRun.name !== "vtd_search") {
+          continue;
+        }
+        const result = parseVtdSearchResult(toolRun.result);
+        if (result == undefined) {
+          continue;
+        }
+        messageHasResult = true;
+        for (const record of result.records) {
+          recordsById.set(record.id, record);
+        }
+      }
+      if (messageHasResult) {
+        lastMessageId = message.id;
+      }
+    }
+    return {
+      lastMessageId,
+      records: [...recordsById.values()],
+    };
+  }, [messages]);
   const anchorIndex =
     oldestVisibleMessageId == undefined
       ? -1
@@ -87,8 +146,18 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
   }
 
   const oldestVisibleIndex =
-    anchorIndex === -1 ? Math.max(0, messages.length - MESSAGE_WINDOW_SIZE) : anchorIndex;
+    anchorIndex === -1
+      ? Math.max(0, messages.length - MESSAGE_WINDOW_SIZE)
+      : anchorIndex;
   const visibleMessages = messages.slice(oldestVisibleIndex);
+  const latestMessage = messages.at(-1);
+  const processingMessageId =
+    (status === "streaming" || status === "waiting-for-catalog") &&
+    latestMessage?.role === "assistant" &&
+    latestMessage.toolRuns != undefined &&
+    latestMessage.toolRuns.length > 0
+      ? latestMessage.id
+      : undefined;
 
   return (
     <div className={classes.messageList}>
@@ -108,7 +177,17 @@ export function MessageList(props: MessageListProps): React.JSX.Element {
         </Button>
       )}
       {visibleMessages.map((message) => (
-        <MessageItem key={message.id} message={message} />
+        <MessageItem
+          isProcessing={message.id === processingMessageId}
+          key={message.id}
+          message={message}
+          onLoadVtdRecord={onLoadVtdRecord}
+          vtdRecords={
+            message.id === mergedVtdSearch.lastMessageId
+              ? mergedVtdSearch.records
+              : undefined
+          }
+        />
       ))}
       {pendingProposal != undefined && (
         <LayoutPreviewCard
