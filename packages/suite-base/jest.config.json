@@ -2,7 +2,7 @@
   "//": "Note: we use babel-jest rather than ts-jest for performance reasons.",
   "testMatch": ["<rootDir>/src/**/*.test.ts(x)?"],
   "transform": {
-    "\\.jsx?$": ["babel-jest", { "rootMode": "upward" }],
+    "\\.m?jsx?$": ["babel-jest", { "rootMode": "upward" }],
     "\\.tsx?$": "<rootDir>/src/test/transformers/typescriptTransformerWithRawImports.js",
     "\\.ne$": "<rootDir>/src/test/transformers/neTransformer.js",
     "\\.(bin|template|wasm)$": "<rootDir>/src/test/transformers/rawTransformer.js"
@@ -19,6 +19,9 @@
   "setupFilesAfterEnv": ["<rootDir>/src/test/setupTestFramework.ts"],
   "restoreMocks": true,
   "moduleNameMapper": {
+    "^@earendil-works/pi-agent-core$": "<rootDir>/../../node_modules/@earendil-works/pi-agent-core/dist/index.js",
+    "^@earendil-works/pi-ai$": "<rootDir>/../../node_modules/@earendil-works/pi-ai/dist/index.js",
+    "^@earendil-works/pi-ai/(.*)$": "<rootDir>/../../node_modules/@earendil-works/pi-ai/dist/$1.js",
     "\\.svg$": "<rootDir>/src/test/mocks/MockSvg.tsx",
     "\\.css$": "<rootDir>/src/test/mocks/MockCss.ts",
     "react-monaco-editor": "<rootDir>/src/test/stubs/MonacoEditor.tsx",

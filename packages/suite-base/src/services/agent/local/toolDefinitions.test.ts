@@ -14,6 +14,7 @@ describe("LOCAL_AGENT_TOOL_DEFINITIONS", () => {
       "vtd_trigger",
       "vtd_detail",
       "vtd_topics",
+      "request_batch_consent",
       "vtd_slice_store",
       "vtd_presign",
       "open_data_source",
@@ -26,6 +27,24 @@ describe("LOCAL_AGENT_TOOL_DEFINITIONS", () => {
       );
       expect(tool.description.length).toBeGreaterThan(0);
     }
+  });
+
+  it("defines a side-effect-free batch consent plan schema", () => {
+    const consent = LOCAL_AGENT_TOOL_DEFINITIONS.find(
+      (tool) => tool.name === "request_batch_consent",
+    );
+
+    expect(consent?.description).toContain("side-effect-free confirmation card");
+    expect(consent?.inputSchema).toEqual(
+      expect.objectContaining({
+        required: ["action", "summary", "itemCount"],
+        properties: expect.objectContaining({
+          action: expect.objectContaining({ type: "string", minLength: 1 }),
+          summary: expect.objectContaining({ type: "string", minLength: 1 }),
+          itemCount: expect.objectContaining({ type: "integer", minimum: 1 }),
+        }),
+      }),
+    );
   });
 
   it("keeps nanoseconds as decimal strings and slice storage confirmation explicit", () => {
@@ -48,5 +67,73 @@ describe("LOCAL_AGENT_TOOL_DEFINITIONS", () => {
         }),
       }),
     );
+  });
+
+  it("requires VTD search times to be absolute local date-time values", () => {
+    const search = LOCAL_AGENT_TOOL_DEFINITIONS.find(
+      (tool) => tool.name === "vtd_search",
+    );
+    const properties = (
+      search?.inputSchema as {
+        properties?: Record<string, { description?: string }>;
+      }
+    ).properties;
+
+    for (const field of [
+      "start",
+      "end",
+      "at",
+      "triggerTime",
+      "queryStart",
+      "queryEnd",
+      "queryTime",
+    ]) {
+      expect(properties?.[field]?.description).toContain(
+        "YYYY-MM-DD[ HH:MM:SS]",
+      );
+      expect(properties?.[field]?.description).toContain(
+        "relative times to absolute values",
+      );
+    }
+  });
+
+  it("tells the model that vtd_search results are shown as an interactive list card", () => {
+    const search = LOCAL_AGENT_TOOL_DEFINITIONS.find(
+      (tool) => tool.name === "vtd_search",
+    );
+    expect(search?.description).toContain("interactive list card");
+    expect(search?.description).toContain("keep textual summaries brief");
+  });
+
+  it("describes data-coverage search fields for looking at a time window", () => {
+    const search = LOCAL_AGENT_TOOL_DEFINITIONS.find(
+      (tool) => tool.name === "vtd_search",
+    );
+    const properties = (
+      search?.inputSchema as {
+        properties?: Record<string, { description?: string }>;
+      }
+    ).properties;
+
+    expect(properties?.queryStart?.description).toContain(
+      "Data-coverage interval lower bound",
+    );
+    expect(properties?.queryEnd?.description).toContain(
+      "Data-coverage interval upper bound",
+    );
+    expect(properties?.queryStart?.description).toContain(
+      "data at a specific time or interval",
+    );
+    expect(properties?.queryEnd?.description).toContain(
+      "data at a specific time or interval",
+    );
+  });
+
+  it("documents loading multiple data-source URLs together in one call", () => {
+    const openDataSource = LOCAL_AGENT_TOOL_DEFINITIONS.find(
+      (tool) => tool.name === "open_data_source",
+    );
+    expect(openDataSource?.description).toContain("multiple URLs in one call");
+    expect(openDataSource?.description).toContain("load them together");
   });
 });

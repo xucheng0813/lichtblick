@@ -194,6 +194,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.115.0",
+    "@earendil-works/pi-agent-core": "0.83.0",
+    "@earendil-works/pi-ai": "0.83.0",
     "remark-gfm": "4.0.1"
   }
 }

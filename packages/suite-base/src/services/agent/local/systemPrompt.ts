@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { buildSkillIndex, type Skill } from "./skills";
+import type { PanelInventoryEntry } from "../panelInventory";
+import type { CatalogSnapshot } from "./types";
 
 export const LOCAL_AGENT_SYSTEM_PROMPT = `You are the built-in Lichtblick robotics data assistant.
 
@@ -53,18 +55,117 @@ export type SystemPromptContext = {
   instructions?: string;
   /** Long-term memories, already rendered. Omitted from the prompt when empty. */
   memories?: string;
+  /** Current instant as an ISO 8601 string. Omitted from the prompt when empty. */
+  now?: string;
+  /** Runtime panel inventory. Omitted from the prompt when empty. */
+  panels?: readonly PanelInventoryEntry[];
   /** Effective skill set, built-ins plus user customization. Defaults to the built-ins. */
   skills?: readonly Skill[];
+  /** Browser IANA timezone. Omitted from the prompt when empty. */
+  timezone?: string;
   /** Bounded summary of the loaded data source and current layout. Omitted when empty. */
   workspace?: string;
 };
 
-/**
- * Assembles the system prompt: the static contract, the skill index, then whatever dynamic context
- * this turn has. Sections are omitted rather than emitted empty so the model is never shown an
- * empty heading it might try to fill.
- */
-export function buildSystemPrompt(context: SystemPromptContext = {}): string {
+export const LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES = 4096;
+export const LOCAL_AGENT_MAX_PANEL_INVENTORY_BYTES = 4096;
+
+function truncateUtf8(value: string, maxBytes: number, suffix: string): string {
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(value);
+  if (encoded.length <= maxBytes) {
+    return value;
+  }
+
+  const suffixBytes = encoder.encode(suffix);
+  let end = Math.max(0, maxBytes - suffixBytes.length);
+  while (end > 0 && (encoded[end]! & 0xc0) === 0x80) {
+    end--;
+  }
+  return `${new TextDecoder().decode(encoded.subarray(0, end))}${suffix}`;
+}
+
+function inline(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function renderPanelInventory(panels: readonly PanelInventoryEntry[]): string | undefined {
+  if (panels.length === 0) {
+    return undefined;
+  }
+
+  const section = [
+    "Available panels:",
+    ...panels.map((panel) => {
+      const schemas =
+        panel.schemas == undefined || panel.schemas.length === 0
+          ? ""
+          : ` (schemas: ${panel.schemas.map(inline).join(", ")})`;
+      return `- ${inline(panel.type)}: ${inline(panel.description)}${schemas}`;
+    }),
+  ].join("\n");
+  return truncateUtf8(
+    section,
+    LOCAL_AGENT_MAX_PANEL_INVENTORY_BYTES,
+    "\n… truncated.",
+  );
+}
+
+function readStringField(value: unknown, field: string): string | undefined {
+  if (typeof value !== "object" || value == undefined) {
+    return undefined;
+  }
+  const candidate = (value as Record<string, unknown>)[field];
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+}
+
+/** Builds the bounded per-turn orientation that pi injects outside the cached system prompt. */
+export function summarizeWorkspace(catalog: CatalogSnapshot, layout?: unknown): string {
+  const lines: string[] = [];
+  const topicCount = catalog.topics.length;
+  if (topicCount === 0) {
+    lines.push("No data source is loaded yet.");
+  } else {
+    lines.push(`Loaded data source with ${String(topicCount)} topics.`);
+    const bySchema = new Map<string, string[]>();
+    for (const topic of catalog.topics) {
+      const name = readStringField(topic, "name");
+      if (name == undefined) {
+        continue;
+      }
+      const schema = readStringField(topic, "schemaName") ?? "(unknown schema)";
+      const names = bySchema.get(schema);
+      if (names == undefined) {
+        bySchema.set(schema, [name]);
+      } else {
+        names.push(name);
+      }
+    }
+    if (bySchema.size > 0) {
+      lines.push("Topics by schema:");
+      for (const [schema, names] of bySchema) {
+        lines.push(`  ${schema}: ${names.join(", ")}`);
+      }
+    }
+  }
+
+  const panelIds =
+    typeof layout === "object" && layout != undefined
+      ? Object.keys((layout as { configById?: Record<string, unknown> }).configById ?? {})
+      : [];
+  if (panelIds.length > 0) {
+    lines.push(`Current layout panels: ${panelIds.join(", ")}`);
+  }
+
+  const summary = lines.join("\n");
+  if (summary.length <= LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES) {
+    return summary;
+  }
+  return `${summary.slice(0, LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES)}\n… truncated; call get_data_catalog for the full topic list.`;
+}
+
+/** Builds the provider-cacheable part of the prompt. */
+export function buildStaticSystemPrompt(context: SystemPromptContext = {}): string {
   const sections = [
     LOCAL_AGENT_SYSTEM_PROMPT,
     `${SKILL_INSTRUCTIONS}\n${buildSkillIndex(context.skills)}`,
@@ -86,6 +187,13 @@ instructions, and prefer what the user says now if they conflict:\n${context.mem
     );
   }
 
+  return sections.join("\n\n");
+}
+
+/** Builds context that can change every turn and must not invalidate the static system cache. */
+export function buildDynamicContext(context: SystemPromptContext = {}): string {
+  const sections: string[] = [];
+
   if (context.workspace != undefined && context.workspace.length > 0) {
     sections.push(
       `Current Lichtblick workspace state. This is provided automatically each turn, so you do not
@@ -94,5 +202,40 @@ ${context.workspace}`,
     );
   }
 
+  const panelInventory = renderPanelInventory(context.panels ?? []);
+  if (panelInventory != undefined) {
+    sections.push(panelInventory);
+  }
+
+  if (
+    context.now != undefined &&
+    context.now.trim().length > 0 &&
+    context.timezone != undefined &&
+    context.timezone.trim().length > 0
+  ) {
+    const localTime = new Date(context.now).toLocaleString("sv-SE", {
+      timeZone: context.timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    // Keep the per-turn clock last so all preceding prompt text remains provider-cacheable.
+    sections.push(
+      `Current time: ${context.now} (browser timezone: ${context.timezone}, local: ${localTime})`,
+    );
+  }
+
   return sections.join("\n\n");
+}
+
+/**
+ * Single-string composition retained for callers that do not need pi's cache-friendly split.
+ */
+export function buildSystemPrompt(context: SystemPromptContext = {}): string {
+  return [buildStaticSystemPrompt(context), buildDynamicContext(context)]
+    .filter((section) => section.length > 0)
+    .join("\n\n");
 }
