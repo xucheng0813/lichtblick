@@ -33,11 +33,14 @@ const actions: AgentChatState["actions"] = {
   confirmToolRun: jest.fn(),
   deleteConversation,
   dismissProposal: jest.fn(),
+  getVtdTopics: jest.fn(),
+  loadVtdRecord: jest.fn(),
   newConversation: jest.fn(),
   notifyCatalogReady: jest.fn(),
   refreshConversations: jest.fn(),
   reset: jest.fn(),
   sendMessage: jest.fn(),
+  sliceVtdRecord: jest.fn(),
   startNewConversation,
   switchConversation,
 };
@@ -54,6 +57,7 @@ function setState(overrides: Partial<AgentChatState> = {}): void {
         title: "Inspect recording",
         updatedAt: "2026-07-29T00:00:00.000Z",
         messageCount: 4,
+        profileName: "Diagnostics",
       },
       {
         conversationId: "conversation-2",
@@ -76,7 +80,10 @@ describe("ConversationList", () => {
     setState();
     (useTranslation as jest.Mock).mockReturnValue({
       i18n: { resolvedLanguage: "en" },
-      t: (key: string, options?: { count?: number; time?: string; title?: string }) => {
+      t: (
+        key: string,
+        options?: { count?: number; profileName?: string; time?: string; title?: string },
+      ) => {
         const translations: Record<string, string> = {
           "conversationList.newConversation": "New conversation",
           "conversationList.loading": "Loading conversations…",
@@ -89,6 +96,11 @@ describe("ConversationList", () => {
         }
         if (key === "conversationList.metadata") {
           return `${options?.time ?? ""} · ${options?.count ?? 0} messages`;
+        }
+        if (key === "conversationList.profileMetadata") {
+          return `${options?.profileName ?? ""} · ${options?.time ?? ""} · ${
+            options?.count ?? 0
+          } messages`;
         }
         return translations[key] ?? key;
       },
@@ -107,7 +119,8 @@ describe("ConversationList", () => {
     render(<ConversationList />);
 
     expect(screen.getByText("Inspect recording")).toBeInTheDocument();
-    expect(screen.getByText("1 hour ago · 4 messages")).toBeInTheDocument();
+    expect(screen.getByText("Diagnostics · 1 hour ago · 4 messages")).toBeInTheDocument();
+    expect(screen.getByText("yesterday · 2 messages")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Inspect recording/ })).toHaveClass("Mui-selected");
   });
 

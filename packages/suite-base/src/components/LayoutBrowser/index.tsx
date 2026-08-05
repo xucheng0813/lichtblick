@@ -21,6 +21,7 @@ import * as _ from "lodash-es";
 import moment from "moment";
 import { useSnackbar } from "notistack";
 import { useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import useAsyncFn from "react-use/lib/useAsyncFn";
 
 import Logger from "@lichtblick/log";
@@ -49,10 +50,13 @@ import useCallbackWithToast from "@lichtblick/suite-base/hooks/useCallbackWithTo
 import { useLayoutActions } from "@lichtblick/suite-base/hooks/useLayoutActions";
 import { useLayoutNavigation } from "@lichtblick/suite-base/hooks/useLayoutNavigation";
 import { useLayoutTransfer } from "@lichtblick/suite-base/hooks/useLayoutTransfer";
-import { usePrompt } from "@lichtblick/suite-base/hooks/usePrompt";
 import { defaultPlaybackConfig } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/reducers";
 import { AppEvent } from "@lichtblick/suite-base/services/IAnalytics";
-import { Layout, layoutIsShared } from "@lichtblick/suite-base/services/ILayoutStorage";
+import {
+  Layout,
+  layoutIsReadOnly,
+  layoutIsShared,
+} from "@lichtblick/suite-base/services/ILayoutStorage";
 import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
 import {
   resolveVizServerConfigured,
@@ -61,6 +65,7 @@ import {
 
 import LayoutSection from "./LayoutSection";
 import { useStyles } from "./index.style";
+import { UploadToOrgOptions } from "./types";
 
 const log = Logger.getLogger(__filename);
 
@@ -75,14 +80,18 @@ export default function LayoutBrowser({
   const { classes } = useStyles();
   const { signIn } = useCurrentUser();
   const { enqueueSnackbar } = useSnackbar();
+  const { t } = useTranslation("layoutBrowser");
   const layoutManager = useLayoutManager();
   const appConfiguration = useAppConfiguration();
-  const [prompt, promptModal] = usePrompt();
   const analytics = useAnalytics();
   const workspace = resolveWorkspace(appConfiguration);
   const layoutsAPI = useMemo(
     () => (resolveVizServerConfigured(workspace) ? new LayoutsAPI(workspace) : undefined),
     [workspace],
+  );
+  const descriptionEditingEnabled = useCallback(
+    (layout: Layout) => layoutsAPI != undefined && !layoutIsReadOnly(layout),
+    [layoutsAPI],
   );
 
   const currentLayoutId = useCurrentLayoutSelector(selectedLayoutIdSelector);
@@ -246,26 +255,26 @@ export default function LayoutBrowser({
     analytics,
   ]);
 
-  const onShareLayout = useCallbackWithToast(
-    async (item: Layout) => {
-      const name = await prompt({
-        title: "Share a copy with your organization",
-        subText: "Shared layouts can be used and changed by other members of your organization.",
-        initialValue: item.name,
-        label: "Layout name",
-      });
-      if (name != undefined) {
+  const onShareLayout = useCallback(
+    async (item: Layout, { name, permission }: UploadToOrgOptions): Promise<boolean> => {
+      try {
         const newLayout = await layoutManager.saveNewLayout({
           name,
           data: item.working?.data ?? item.baseline.data,
-          permission: "ORG_WRITE",
+          permission,
         });
-        analytics.logEvent(AppEvent.LAYOUT_SHARE, { permission: item.permission });
+        analytics.logEvent(AppEvent.LAYOUT_SHARE, { permission });
         setSharedSectionExpanded(true);
         await onSelectLayout(newLayout);
+        enqueueSnackbar(t("uploadSuccess"), { variant: "success" });
+        return true;
+      } catch (error) {
+        log.error(error);
+        enqueueSnackbar(t("uploadFailed"), { variant: "error" });
+        return false;
       }
     },
-    [analytics, layoutManager, onSelectLayout, prompt, setSharedSectionExpanded],
+    [analytics, enqueueSnackbar, layoutManager, onSelectLayout, setSharedSectionExpanded, t],
   );
 
   const onMakePersonalCopy = useCallbackWithToast(
@@ -292,20 +301,20 @@ export default function LayoutBrowser({
       try {
         const updated = await layoutsAPI.setDescription(layoutId, description);
         if (!updated) {
-          enqueueSnackbar("描述保存失败", { variant: "error" });
+          enqueueSnackbar(t("descriptionSaveFailed"), { variant: "error" });
         }
         return updated;
       } catch (error) {
         enqueueSnackbar(
           error instanceof HttpError && error.status === 404
-            ? "布局尚未同步到服务器,请稍后重试"
-            : "描述保存失败",
+            ? t("layoutNotSyncedToServer")
+            : t("descriptionSaveFailed"),
           { variant: "error" },
         );
         return false;
       }
     },
-    [enqueueSnackbar, layoutsAPI],
+    [enqueueSnackbar, layoutsAPI, t],
   );
 
   const showSignInPrompt =
@@ -356,7 +365,6 @@ export default function LayoutBrowser({
         </IconButton>,
       ].filter(Boolean)}
     >
-      {promptModal}
       {confirmModal}
       <Stack
         fullHeight
@@ -386,7 +394,7 @@ export default function LayoutBrowser({
         )}
         <LayoutSection
           disablePadding={enableNewTopNav}
-          descriptionEditingEnabled={layoutsAPI != undefined}
+          descriptionEditingEnabled={descriptionEditingEnabled}
           title={layoutManager.supportsSharing ? "Personal" : undefined}
           expanded={personalExpanded}
           onToggleExpanded={togglePersonalExpanded}
@@ -409,7 +417,7 @@ export default function LayoutBrowser({
         {layoutManager.supportsSharing && (
           <LayoutSection
             disablePadding={enableNewTopNav}
-            descriptionEditingEnabled={layoutsAPI != undefined}
+            descriptionEditingEnabled={descriptionEditingEnabled}
             title="Organization"
             expanded={sharedExpanded}
             onToggleExpanded={toggleSharedExpanded}

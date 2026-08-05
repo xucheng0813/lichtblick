@@ -172,6 +172,26 @@ describe("DesktopVtdClient", () => {
     });
   });
 
+  it("omits empty or unselected topics from slice-store bridge parameters", async () => {
+    const invokeVtd = jest
+      .fn<Promise<InvokeResult>, [string, unknown, string]>()
+      .mockResolvedValue({
+        ok: true,
+        value: { mcap_slice_id: "slice-all", tos: "tos://slice" },
+      });
+    const cancelVtd = jest.fn<Promise<void>, [string]>().mockResolvedValue();
+    testGlobal.desktopBridge = { cancelVtd, invokeVtd };
+    const client = new DesktopVtdClient();
+
+    await client.sliceStore({ id: "record-1", topics: [] });
+    await client.sliceStore({ id: "record-2", topics: undefined });
+
+    expect(invokeVtd.mock.calls.map(([_command, params]) => params)).toStrictEqual([
+      { id: "record-1" },
+      { id: "record-2" },
+    ]);
+  });
+
   it("does not invoke the bridge when the signal is already aborted", async () => {
     const invokeVtd = jest.fn<Promise<InvokeResult>, [string, unknown, string]>();
     const cancelVtd = jest.fn<Promise<void>, [string]>().mockResolvedValue();
@@ -247,7 +267,13 @@ describe("DesktopVtdClient", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(errorType);
-    expect(error).toMatchObject({ command: "detail", message: `main ${code}` });
+    expect(error).toMatchObject({
+      command: "detail",
+      message:
+        code === "not-found"
+          ? "main not-found Install it from Settings → AI Assistant."
+          : `main ${code}`,
+    });
   });
 
   it("classifies bridge rejection and malformed envelopes", async () => {

@@ -12,26 +12,30 @@ import {
   AgentConfiguration,
   isAgentConfigurationValid,
 } from "@lichtblick/suite-base/services/agent/agentSettings";
-import { AnthropicProvider } from "@lichtblick/suite-base/services/agent/local/AnthropicProvider";
-import { LocalAgentOrchestrator } from "@lichtblick/suite-base/services/agent/local/LocalAgentOrchestrator";
-import type { LocalAgentOrchestratorOptions } from "@lichtblick/suite-base/services/agent/local/LocalAgentOrchestrator";
-import { OpenAICompatProvider } from "@lichtblick/suite-base/services/agent/local/OpenAICompatProvider";
+import { summarizeWorkspace } from "@lichtblick/suite-base/services/agent/local/systemPrompt";
 import type { CatalogSnapshot } from "@lichtblick/suite-base/services/agent/local/types";
 import type { AgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import type { PanelInventoryEntry } from "@lichtblick/suite-base/services/agent/panelInventory";
+import {
+  PiAgentOrchestrator,
+  type PiAgentOrchestratorOptions,
+} from "@lichtblick/suite-base/services/agent/pi/PiAgentOrchestrator";
 import DesktopVtdClient from "@lichtblick/suite-base/services/vtd/DesktopVtdClient";
 import HttpVtdClient from "@lichtblick/suite-base/services/vtd/HttpVtdClient";
 
 const log = Logger.getLogger(__filename);
 
 const noLayout = (): undefined => undefined;
+const noPanels = (): readonly PanelInventoryEntry[] => [];
 
 export type AgentClientConfiguration = AgentConfiguration & {
   getCatalog: () => CatalogSnapshot;
   getCurrentLayout?: () => unknown;
+  getPanelInventory?: () => readonly PanelInventoryEntry[];
   memoryStore?: AgentMemoryStore;
-  onHistoryChanged?: LocalAgentOrchestratorOptions["onHistoryChanged"];
-  restoreHistory?: LocalAgentOrchestratorOptions["restoreHistory"];
-  getPromptCustomization?: LocalAgentOrchestratorOptions["getPromptCustomization"];
+  onHistoryChanged?: PiAgentOrchestratorOptions["onHistoryChanged"];
+  restoreHistory?: PiAgentOrchestratorOptions["restoreHistory"];
+  getPromptCustomization?: PiAgentOrchestratorOptions["getPromptCustomization"];
 };
 
 export function createLocalAgentClient({
@@ -40,6 +44,7 @@ export function createLocalAgentClient({
   desktop,
   getCatalog,
   getCurrentLayout,
+  getPanelInventory,
   getPromptCustomization,
   memoryStore,
   model,
@@ -48,7 +53,7 @@ export function createLocalAgentClient({
   provider,
   vtdAuthToken,
   vtdEndpoint,
-}: AgentClientConfiguration): LocalAgentOrchestrator {
+}: AgentClientConfiguration): PiAgentOrchestrator {
   if (
     !isAgentConfigurationValid({
       apiKey,
@@ -65,18 +70,6 @@ export function createLocalAgentClient({
 
   const normalizedBaseUrl = baseUrl.trim();
   const normalizedModel = model.trim();
-  const llmProvider =
-    provider === "openai-compatible"
-      ? new OpenAICompatProvider({
-          apiKey,
-          baseUrl: normalizedBaseUrl,
-          model: normalizedModel,
-        })
-      : new AnthropicProvider({
-          apiKey,
-          baseUrl: normalizedBaseUrl === "" ? undefined : normalizedBaseUrl,
-          model: normalizedModel,
-        });
   const vtdClient = desktop
     ? new DesktopVtdClient()
     : new HttpVtdClient(
@@ -86,15 +79,29 @@ export function createLocalAgentClient({
         vtdAuthToken?.trim() === "" ? undefined : vtdAuthToken?.trim(),
       );
 
-  return new LocalAgentOrchestrator({
-    provider: llmProvider,
-    vtdClient,
-    getCatalog,
-    getCurrentLayout,
+  return new PiAgentOrchestrator({
+    configuration: {
+      apiKey,
+      baseUrl: normalizedBaseUrl,
+      desktop,
+      model: normalizedModel,
+      provider,
+      vtdAuthToken,
+      vtdEndpoint,
+    },
+    getPromptCustomization,
+    getPanelInventory,
+    getWorkspaceContext: () => summarizeWorkspace(getCatalog(), getCurrentLayout?.()),
     memoryStore,
     onHistoryChanged,
     restoreHistory,
-    getPromptCustomization,
+    toolRuntime: {
+      deps: {
+        getCatalog,
+        memoryStore,
+        vtdClient,
+      },
+    },
   });
 }
 
@@ -104,24 +111,29 @@ export function useLocalAgentClient(
     enabled,
     getCatalog,
     getCurrentLayout,
+    getPanelInventory,
     getPromptCustomization,
     memoryStore,
     onHistoryChanged,
+    profileId,
     restoreHistory,
   }: {
     enabled: boolean;
     getCatalog: AgentClientConfiguration["getCatalog"];
     getCurrentLayout?: () => unknown;
+    getPanelInventory?: () => readonly PanelInventoryEntry[];
     memoryStore?: AgentMemoryStore;
-    onHistoryChanged?: LocalAgentOrchestratorOptions["onHistoryChanged"];
-    restoreHistory?: LocalAgentOrchestratorOptions["restoreHistory"];
-    getPromptCustomization?: LocalAgentOrchestratorOptions["getPromptCustomization"];
+    onHistoryChanged?: PiAgentOrchestratorOptions["onHistoryChanged"];
+    profileId?: string;
+    restoreHistory?: PiAgentOrchestratorOptions["restoreHistory"];
+    getPromptCustomization?: PiAgentOrchestratorOptions["getPromptCustomization"];
   },
-): LocalAgentOrchestrator | undefined {
+): PiAgentOrchestrator | undefined {
   const { apiKey, baseUrl, desktop, model, provider, vtdAuthToken, vtdEndpoint } =
     configuration;
   const stableGetCatalog = useLatestAgentCatalog(getCatalog);
   const stableGetCurrentLayout = useLatestGetter(getCurrentLayout ?? noLayout);
+  const stableGetPanelInventory = useLatestGetter(getPanelInventory ?? noPanels);
   // The identity is a pure render value. Resource creation is deferred until a committed layout
   // effect, so an abandoned concurrent render cannot leak an orchestrator.
   const configurationIdentity = useMemo(
@@ -131,17 +143,18 @@ export function useLocalAgentClient(
       desktop,
       enabled,
       model,
+      profileId,
       provider,
       vtdAuthToken,
       vtdEndpoint,
     }),
-    [apiKey, baseUrl, desktop, enabled, model, provider, vtdAuthToken, vtdEndpoint],
+    [apiKey, baseUrl, desktop, enabled, model, profileId, provider, vtdAuthToken, vtdEndpoint],
   );
   const valid =
     configurationIdentity.enabled &&
     isAgentConfigurationValid(configurationIdentity);
   const [resource, setResource] = useState<{
-    client: LocalAgentOrchestrator;
+    client: PiAgentOrchestrator;
     identity: object;
   }>();
   useLayoutEffect(() => {
@@ -155,6 +168,7 @@ export function useLocalAgentClient(
       desktop: current.desktop,
       getCatalog: stableGetCatalog,
       getCurrentLayout: stableGetCurrentLayout,
+      getPanelInventory: stableGetPanelInventory,
       getPromptCustomization,
       memoryStore,
       model: current.model,
@@ -180,6 +194,7 @@ export function useLocalAgentClient(
     restoreHistory,
     stableGetCatalog,
     stableGetCurrentLayout,
+    stableGetPanelInventory,
     valid,
   ]);
 

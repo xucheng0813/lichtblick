@@ -1,0 +1,24 @@
+diff --git a/dist/cjs/reflection.js b/dist/cjs/reflection.js
+index 72706e6fdfb83993216914fecfa1f82bffb5c4de..491af23d656d38b7091040c8476fe7ab872a2e67 100644
+--- a/dist/cjs/reflection.js
++++ b/dist/cjs/reflection.js
+@@ -692,6 +692,7 @@ class Parser {
+                 // NONE becomes an undefined slot in the array because the values array is should match the
+                 // discriminators length
+                 if (discriminator <= 0) {
++                    nextTableOffset += typeSize(reflection.BaseType.Obj);
+                     result.push(undefined);
+                     continue;
+                 }
+diff --git a/dist/esm/reflection.js b/dist/esm/reflection.js
+index 42126bec21156f496007d8b4ffbfe1be62ee94a2..4582a8aff11ab9646c83a1f33bf391d3a4d35789 100644
+--- a/dist/esm/reflection.js
++++ b/dist/esm/reflection.js
+@@ -687,6 +687,7 @@ export class Parser {
+                 // NONE becomes an undefined slot in the array because the values array is should match the
+                 // discriminators length
+                 if (discriminator <= 0) {
++                    nextTableOffset += typeSize(reflection.BaseType.Obj);
+                     result.push(undefined);
+                     continue;
+                 }

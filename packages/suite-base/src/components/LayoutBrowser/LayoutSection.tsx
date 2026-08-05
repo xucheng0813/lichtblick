@@ -14,10 +14,11 @@ import { Layout } from "@lichtblick/suite-base/services/ILayoutStorage";
 
 import LayoutRow from "./LayoutRow";
 import { useLayoutSectionStyles } from "./LayoutSection.style";
+import { UploadToOrgOptions } from "./types";
 
 export default function LayoutSection({
   title,
-  descriptionEditingEnabled = false,
+  descriptionEditingEnabled,
   disablePadding = false,
   expanded = true,
   emptyText,
@@ -38,7 +39,7 @@ export default function LayoutSection({
   onSetDescription,
 }: Readonly<{
   title: string | undefined;
-  descriptionEditingEnabled?: boolean;
+  descriptionEditingEnabled?: (layout: Layout) => boolean;
   disablePadding?: boolean;
   expanded?: boolean;
   emptyText: string | undefined;
@@ -51,7 +52,7 @@ export default function LayoutSection({
   onRename: (item: Layout, newName: string) => void;
   onDuplicate: (item: Layout) => void;
   onDelete: (item: Layout) => void;
-  onShare: (item: Layout) => void;
+  onShare: (item: Layout, options: UploadToOrgOptions) => Promise<boolean>;
   onExport: (item: Layout) => void;
   onOverwrite: (item: Layout) => void;
   onRevert: (item: Layout) => void;
@@ -92,7 +93,7 @@ export default function LayoutSection({
             <LayoutRow
               key={layout.id}
               layout={layout}
-              descriptionEditingEnabled={descriptionEditingEnabled}
+              descriptionEditingEnabled={descriptionEditingEnabled?.(layout) ?? false}
               anySelectedModifiedLayouts={anySelectedModifiedLayouts}
               multiSelectedIds={multiSelectedIds}
               selected={selectedId === layout.id}

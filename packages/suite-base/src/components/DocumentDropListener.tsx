@@ -17,13 +17,17 @@
 import { useSnackbar } from "notistack";
 import { extname } from "path";
 import { useCallback, useLayoutEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import Logger from "@lichtblick/log";
 import DropOverlay from "@lichtblick/suite-base/components/DropOverlay";
 import { NamespaceSelectionModal } from "@lichtblick/suite-base/components/NamespaceSelectionModal";
 import { AllowedFileExtensions } from "@lichtblick/suite-base/constants/allowedFileExtensions";
-import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import { Namespace } from "@lichtblick/suite-base/types";
+import {
+  resolveVizServerConfigured,
+  resolveWorkspaceBestEffort,
+} from "@lichtblick/suite-base/util/vizServerParams";
 
 const log = Logger.getLogger(__filename);
 
@@ -33,7 +37,7 @@ type DocumentDropListenerProps = {
     files?: File[];
     handles?: FileSystemFileHandle[]; // foxglove-depcheck-used: @types/wicg-file-system-access
     namespace?: Namespace;
-  }) => void;
+  }) => void | Promise<void>;
 };
 
 type PendingFile = {
@@ -49,11 +53,11 @@ export default function DocumentDropListener(props: DocumentDropListenerProps): 
   const { onDrop: onDropProp, allowedExtensions } = props;
 
   const { enqueueSnackbar } = useSnackbar();
+  const { t } = useTranslation("extensionsSettings");
 
   const shouldShowNamespaceModal = useCallback((files: File[]): boolean => {
-    const url = new URL(window.location.href);
-    const workspace = url.searchParams.get("workspace");
-    if (!workspace || !APP_CONFIG.apiUrl) {
+    const workspace = resolveWorkspaceBestEffort();
+    if (!resolveVizServerConfigured(workspace)) {
       return false;
     }
 
@@ -67,18 +71,37 @@ export default function DocumentDropListener(props: DocumentDropListenerProps): 
   }, []);
 
   const handleNamespaceSelection = useCallback(
-    (namespace: Namespace) => {
-      if (pendingFiles) {
-        onDropProp?.({
-          files: pendingFiles.files,
-          handles: pendingFiles.handles,
-          namespace,
-        });
-        setPendingFiles(undefined);
+    async (namespace: Namespace, options: { uploadToOrganization: boolean }) => {
+      if (!pendingFiles) {
+        setShowNamespaceModal(false);
+        return;
       }
+
+      const filesToInstall = pendingFiles;
+      setPendingFiles(undefined);
       setShowNamespaceModal(false);
+
+      await onDropProp?.({
+        files: filesToInstall.files,
+        handles: filesToInstall.handles,
+        namespace,
+      });
+
+      if (namespace === "local" && options.uploadToOrganization) {
+        const extensionFiles = filesToInstall.files.filter((file) =>
+          file.name.endsWith(AllowedFileExtensions.FOXE),
+        );
+        if (extensionFiles.length > 0) {
+          try {
+            await onDropProp?.({ files: extensionFiles, namespace: "org" });
+          } catch (error) {
+            log.error("Failed to upload locally installed extension to organization", error);
+            enqueueSnackbar(t("uploadExtensionToOrganizationFailed"), { variant: "error" });
+          }
+        }
+      }
     },
-    [onDropProp, pendingFiles],
+    [enqueueSnackbar, onDropProp, pendingFiles, t],
   );
 
   const handleModalClose = useCallback(() => {
@@ -193,7 +216,7 @@ export default function DocumentDropListener(props: DocumentDropListenerProps): 
         setPendingFiles({ files: filteredFiles, handles: filteredHandles });
         setShowNamespaceModal(true);
       } else {
-        onDropProp?.({ files: filteredFiles, handles: filteredHandles, namespace: "local" });
+        void onDropProp?.({ files: filteredFiles, handles: filteredHandles, namespace: "local" });
       }
     },
     [enqueueSnackbar, onDropProp, allowedExtensions, shouldShowNamespaceModal],
@@ -243,7 +266,7 @@ export default function DocumentDropListener(props: DocumentDropListenerProps): 
               setPendingFiles({ files });
               setShowNamespaceModal(true);
             } else {
-              props.onDrop?.({ files, namespace: "local" });
+              void props.onDrop?.({ files, namespace: "local" });
             }
           }
         }}
@@ -257,6 +280,7 @@ export default function DocumentDropListener(props: DocumentDropListenerProps): 
           onClose={handleModalClose}
           onSelect={handleNamespaceSelection}
           files={pendingFiles.files}
+          allowUploadToOrganization={resolveVizServerConfigured(resolveWorkspaceBestEffort())}
         />
       )}
     </>

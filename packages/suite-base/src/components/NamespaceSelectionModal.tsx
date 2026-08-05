@@ -4,10 +4,12 @@
 import { Computer, Group } from "@mui/icons-material";
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   List,
   ListItem,
   ListItemButton,
@@ -16,6 +18,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useStyles } from "@lichtblick/suite-base/components/NamespaceSelectionModal.style";
 import { Namespace } from "@lichtblick/suite-base/types";
@@ -23,8 +26,12 @@ import { Namespace } from "@lichtblick/suite-base/types";
 export interface NamespaceSelectionModalProps {
   open: boolean;
   onClose: () => void;
-  onSelect: (namespace: Namespace) => void;
+  onSelect: (
+    namespace: Namespace,
+    options: { uploadToOrganization: boolean },
+  ) => void | Promise<void>;
   files: File[];
+  allowUploadToOrganization?: boolean;
 }
 
 export function NamespaceSelectionModal({
@@ -32,12 +39,17 @@ export function NamespaceSelectionModal({
   onClose,
   onSelect,
   files,
+  allowUploadToOrganization = false,
 }: NamespaceSelectionModalProps): React.JSX.Element {
   const { classes } = useStyles();
+  const { t } = useTranslation("extensionsSettings");
   const [selectedNamespace, setSelectedNamespace] = useState<Namespace>("local");
+  const [uploadToOrganization, setUploadToOrganization] = useState(false);
 
   const handleSelect = () => {
-    onSelect(selectedNamespace);
+    void onSelect(selectedNamespace, {
+      uploadToOrganization: selectedNamespace === "local" && uploadToOrganization,
+    });
     onClose();
   };
 
@@ -83,7 +95,11 @@ export function NamespaceSelectionModal({
               </ListItemIcon>
               <ListItemText
                 primary="Local"
-                secondary="Install only on this device. Files will be stored locally and won't be shared with your organization."
+                secondary={
+                  allowUploadToOrganization && hasExtensions
+                    ? t("localInstallWithOptionalOrganizationUpload")
+                    : "Install only on this device. Files will be stored locally and won't be shared with your organization."
+                }
               />
             </ListItemButton>
           </ListItem>
@@ -104,6 +120,19 @@ export function NamespaceSelectionModal({
             </ListItemButton>
           </ListItem>
         </List>
+        {allowUploadToOrganization && hasExtensions && selectedNamespace === "local" && (
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={uploadToOrganization}
+                onChange={(event) => {
+                  setUploadToOrganization(event.target.checked);
+                }}
+              />
+            }
+            label={t("alsoUploadExtensionToOrganization")}
+          />
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>

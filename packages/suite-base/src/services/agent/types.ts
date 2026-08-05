@@ -17,6 +17,15 @@ export type ToolRun = {
   result?: unknown;
   error?: string;
 };
+export type ToolConfirmationScope = "once" | "session";
+export type ToolConfirmationOptions = {
+  approve: boolean;
+  scope?: ToolConfirmationScope;
+};
+export type ToolConfirmationDecision = {
+  approved: boolean;
+  scope: ToolConfirmationScope;
+};
 export type ChatRole = "user" | "assistant";
 export type ChatMessage = {
   id: string;
@@ -33,9 +42,22 @@ export type AgentEventEnvelope = {
   requestId?: string;
 };
 export type AgentEvent =
-  | (AgentEventEnvelope & { type: "message-start"; messageId: string; requestId: string })
-  | (AgentEventEnvelope & { type: "token"; messageId: string; delta: string; requestId: string })
-  | (AgentEventEnvelope & { type: "message-end"; messageId: string; requestId: string })
+  | (AgentEventEnvelope & {
+      type: "message-start";
+      messageId: string;
+      requestId: string;
+    })
+  | (AgentEventEnvelope & {
+      type: "token";
+      messageId: string;
+      delta: string;
+      requestId: string;
+    })
+  | (AgentEventEnvelope & {
+      type: "message-end";
+      messageId: string;
+      requestId: string;
+    })
   | (AgentEventEnvelope & {
       type: "tool-update";
       messageId: string;
@@ -96,7 +118,7 @@ export interface IAgentClient {
   confirmToolRun: (
     sessionId: string,
     toolRunId: string,
-    options: { approve: boolean },
+    options: ToolConfirmationOptions,
     signal?: AbortSignal,
   ) => Promise<void>;
   notifyCatalogReady: (

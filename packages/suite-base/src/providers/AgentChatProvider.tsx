@@ -18,7 +18,10 @@ import { createStore, type StoreApi } from "zustand";
 import Logger from "@lichtblick/log";
 import {
   AgentChatContext,
+  type AgentChatProfileOption,
   type AgentChatState,
+  type VtdSliceProgress,
+  type VtdSliceRequest,
 } from "@lichtblick/suite-base/context/AgentChatContext";
 import {
   AgentStreamProtocolError,
@@ -31,6 +34,7 @@ import type {
   ChatMessage,
   IAgentClient,
   LayoutProposal,
+  ToolConfirmationOptions,
   ToolRun,
   ToolRunStatus,
 } from "@lichtblick/suite-base/services/agent/types";
@@ -48,13 +52,30 @@ const CONVERSATION_LIST_REFRESH_DELAY_MS = 2_250;
 type AgentChatProviderProps = PropsWithChildren<{
   client?: IAgentClient;
   enabled?: boolean;
+  profileOptions?: readonly AgentChatProfileOption[];
+  selectedProfileId?: string;
+  selectedProfileName?: string;
+  onSelectProfile?: (profileId: string) => void;
   persistence?: AgentConversationPersistence;
   onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
+  onGetVtdTopics?: (id: string) => Promise<Record<string, number>>;
+  onLoadVtdRecord?: (id: string) => Promise<void>;
+  onSliceVtdRecord?: (
+    params: VtdSliceRequest,
+    onProgress?: (progress: VtdSliceProgress) => void,
+  ) => Promise<void>;
   onOpenDataSource?: (urls: string[], sessionId?: string) => void;
 }>;
 
 type CallbackRefs = {
+  selectedProfileName?: string;
   onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
+  onGetVtdTopics?: (id: string) => Promise<Record<string, number>>;
+  onLoadVtdRecord?: (id: string) => Promise<void>;
+  onSliceVtdRecord?: (
+    params: VtdSliceRequest,
+    onProgress?: (progress: VtdSliceProgress) => void,
+  ) => Promise<void>;
   onOpenDataSource?: (urls: string[], sessionId?: string) => void;
 };
 
@@ -160,7 +181,14 @@ function updateAssistantMessage(
 const TERMINAL_TOOL_STATUSES = new Set<ToolRunStatus>(["succeeded", "failed", "cancelled"]);
 
 const ALLOWED_TOOL_TRANSITIONS: Record<ToolRunStatus, ReadonlySet<ToolRunStatus>> = {
-  queued: new Set(["queued", "running", "awaiting-confirmation", "succeeded", "failed", "cancelled"]),
+  queued: new Set([
+    "queued",
+    "running",
+    "awaiting-confirmation",
+    "succeeded",
+    "failed",
+    "cancelled",
+  ]),
   running: new Set(["running", "awaiting-confirmation", "succeeded", "failed", "cancelled"]),
   "awaiting-confirmation": new Set([
     "awaiting-confirmation",
@@ -193,9 +221,7 @@ function upsertToolRun(toolRuns: ToolRun[] | undefined, nextToolRun: ToolRun): T
   if (runIndex === -1) {
     return [...runs, nextToolRun];
   }
-  return runs.map((run, index) =>
-    index === runIndex ? reduceToolRun(run, nextToolRun) : run,
-  );
+  return runs.map((run, index) => (index === runIndex ? reduceToolRun(run, nextToolRun) : run));
 }
 
 function reduceAgentEventState(
@@ -305,6 +331,8 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         return;
       }
 
+      activePersistence?.setProfileName(callbackRefs.current.selectedProfileName);
+
       const requestId = uuidv4();
       const userMessage: ChatMessage = {
         id: uuidv4(),
@@ -327,6 +355,10 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         if (!isActive(active)) {
           return;
         }
+        // Session creation may restore the persisted transcript after the optimistic UI write.
+        // Re-apply the current profile so the send remains the last writer of the conversation
+        // stamp before the orchestrator persists its updated LLM history.
+        activePersistence?.setProfileName(callbackRefs.current.selectedProfileName);
 
         const postController = new AbortController();
         const abortPost = () => {
@@ -361,7 +393,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         removeLifecycleAbortListener?.();
       }
     },
-    confirmToolRun: async (toolRunId: string, options: { approve: boolean }) => {
+    confirmToolRun: async (toolRunId: string, options: ToolConfirmationOptions) => {
       const active = await getActionLifecycle();
       if (active == undefined) {
         return;
@@ -428,10 +460,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         clearRecoverableError();
         try {
           const validatedProposal = validateLayoutProposal(proposal);
-          await callbackRefs.current.onApplyProposal?.(
-            validatedProposal,
-            active.controller.signal,
-          );
+          await callbackRefs.current.onApplyProposal?.(validatedProposal, active.controller.signal);
           if (!isActive(active)) {
             return;
           }
@@ -459,6 +488,30 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         }
       }
     },
+    loadVtdRecord: async (id: string) => {
+      assertCommittedEnabled();
+      const onLoadVtdRecord = callbackRefs.current.onLoadVtdRecord;
+      if (onLoadVtdRecord == undefined) {
+        throw new Error("VTD record loading is unavailable");
+      }
+      await onLoadVtdRecord(id);
+    },
+    getVtdTopics: async (id: string) => {
+      assertCommittedEnabled();
+      const onGetVtdTopics = callbackRefs.current.onGetVtdTopics;
+      if (onGetVtdTopics == undefined) {
+        throw new Error("VTD topic loading is unavailable");
+      }
+      return await onGetVtdTopics(id);
+    },
+    sliceVtdRecord: async (params, onProgress) => {
+      assertCommittedEnabled();
+      const onSliceVtdRecord = callbackRefs.current.onSliceVtdRecord;
+      if (onSliceVtdRecord == undefined) {
+        throw new Error("VTD record slicing is unavailable");
+      }
+      await onSliceVtdRecord(params, onProgress);
+    },
     dismissProposal: () => {
       assertCommittedEnabled();
       if (applyingProposal == undefined) {
@@ -484,7 +537,9 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         .notifyCatalogReady(state.sessionId, requestId, active.controller.signal)
         .catch((error: unknown) => {
           if (isActive(active) && !isAbortError(error)) {
-            log.warn(`Failed to notify the agent that the catalog is ready: ${errorMessage(error)}`);
+            log.warn(
+              `Failed to notify the agent that the catalog is ready: ${errorMessage(error)}`,
+            );
           }
         });
     },
@@ -537,9 +592,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         try {
           await persistence.switchConversation(conversationId);
           const restarted = startLifecycle(active.client);
-          store.setState(
-            emptyStateWithConversationList(persistence.getActiveConversationId()),
-          );
+          store.setState(emptyStateWithConversationList(persistence.getActiveConversationId()));
           const messages = await persistence.restoreUiMessages();
           if (lifecycle?.generation === restarted.generation) {
             store.setState({ messages: messages as AgentChatState["messages"] });
@@ -567,9 +620,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
           const rotated = await persistence.deleteConversation(conversationId);
           if (rotated && active != undefined) {
             startLifecycle(active.client);
-            store.setState(
-              emptyStateWithConversationList(persistence.getActiveConversationId()),
-            );
+            store.setState(emptyStateWithConversationList(persistence.getActiveConversationId()));
           }
           await refreshConversationList();
         } finally {
@@ -618,9 +669,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
     };
   }
 
-  async function enqueueConversationOperation(
-    operation: () => Promise<void>,
-  ): Promise<void> {
+  async function enqueueConversationOperation(operation: () => Promise<void>): Promise<void> {
     const queued = conversationOperationQueue.then(operation, operation);
     conversationOperationQueue = queued.catch(() => {});
     await queued;
@@ -808,12 +857,14 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
     }
 
     store.setState({ error: undefined, status: "connecting" });
-    const pending = expected.client.createSession(expected.controller.signal).then(({ sessionId }) => {
-      if (isActive(expected)) {
-        store.setState({ sessionId });
-      }
-      return sessionId;
-    });
+    const pending = expected.client
+      .createSession(expected.controller.signal)
+      .then(({ sessionId }) => {
+        if (isActive(expected)) {
+          store.setState({ sessionId });
+        }
+        return sessionId;
+      });
     const record = { generation: expected.generation, promise: pending };
     sessionPromise = record;
     try {
@@ -1084,6 +1135,20 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       });
       return;
     }
+    if (
+      applyingProposal == undefined &&
+      state.pendingProposalRequestId === record.requestId
+    ) {
+      if (queuedProposal?.requestId === record.requestId) {
+        queuedProposal = undefined;
+      }
+      store.setState({
+        pendingProposal: record.proposal,
+        pendingProposalMessageId: record.messageId,
+        pendingProposalRequestId: record.requestId,
+      });
+      return;
+    }
     queuedProposal = record;
   }
 
@@ -1141,9 +1206,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
           ? (options.fallbackStatus ?? getOperationalStatus(state.error))
           : "waiting-for-catalog",
       waitingRequest:
-        latest == undefined
-          ? undefined
-          : { requestId: latest.requestId, urls: latest.urls },
+        latest == undefined ? undefined : { requestId: latest.requestId, urls: latest.urls },
     }));
   }
 
@@ -1163,24 +1226,15 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
     const latest = getLatestWaitingRequest();
     store.setState({
       error: message,
-      status:
-        latest != undefined
-          ? "waiting-for-catalog"
-          : getOperationalStatus(message),
+      status: latest != undefined ? "waiting-for-catalog" : getOperationalStatus(message),
       waitingRequest:
-        latest == undefined
-          ? undefined
-          : { requestId: latest.requestId, urls: latest.urls },
+        latest == undefined ? undefined : { requestId: latest.requestId, urls: latest.urls },
     });
   }
 
   function failSession(record: Subscription, error: Error): void {
     const active = lifecycle;
-    if (
-      active?.generation !== record.generation ||
-      subscription !== record ||
-      active.fatal
-    ) {
+    if (active?.generation !== record.generation || subscription !== record || active.fatal) {
       return;
     }
     record.fatal = true;
@@ -1332,7 +1386,14 @@ export default function AgentChatProvider({
   children,
   client,
   enabled = true,
+  profileOptions,
+  selectedProfileId,
+  selectedProfileName,
+  onSelectProfile,
   onApplyProposal,
+  onGetVtdTopics,
+  onLoadVtdRecord,
+  onSliceVtdRecord,
   onOpenDataSource,
   persistence,
 }: AgentChatProviderProps): React.JSX.Element {
@@ -1340,11 +1401,33 @@ export default function AgentChatProvider({
   const [runtime] = useState(() => createAgentChatRuntime(callbackRefs));
 
   useLayoutEffect(() => {
-    callbackRefs.current = { onApplyProposal, onOpenDataSource };
+    callbackRefs.current = {
+      selectedProfileName,
+      onApplyProposal,
+      onGetVtdTopics,
+      onLoadVtdRecord,
+      onSliceVtdRecord,
+      onOpenDataSource,
+    };
     return () => {
       callbackRefs.current = {};
     };
-  }, [onApplyProposal, onOpenDataSource]);
+  }, [
+    onApplyProposal,
+    onGetVtdTopics,
+    onLoadVtdRecord,
+    onOpenDataSource,
+    onSliceVtdRecord,
+    selectedProfileName,
+  ]);
+
+  useLayoutEffect(() => {
+    runtime.store.setState({
+      profileOptions,
+      selectedProfileId,
+      selectProfile: onSelectProfile,
+    });
+  }, [onSelectProfile, profileOptions, runtime, selectedProfileId]);
 
   useLayoutEffect(() => {
     if (!enabled || client == undefined) {

@@ -15,6 +15,7 @@ import {
   VtdSchemaError,
   VtdTimeoutError,
 } from "./errors";
+import { normalizeVtdSliceParams } from "./normalizeVtdSliceParams";
 import type {
   IVtdClient,
   VtdRecord,
@@ -28,18 +29,55 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value != undefined && !Array.isArray(value);
+  return (
+    typeof value === "object" && value != undefined && !Array.isArray(value)
+  );
 }
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+function optionalStringOrNumber(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  return typeof value === "number" && Number.isFinite(value)
+    ? String(value)
+    : undefined;
 }
 
-function requiredString(value: unknown, field: string, command: string): string {
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function optionalTriggerTime(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function optionalEpochNanoseconds(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return /^\d+$/.test(value) ? value : undefined;
+  }
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? String(Math.trunc(value))
+    : undefined;
+}
+
+function requiredString(
+  value: unknown,
+  field: string,
+  command: string,
+): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new VtdSchemaError(`${field} must be a non-empty string`, command);
   }
@@ -114,21 +152,34 @@ function normalizeRecord(value: unknown): VtdRecord {
   if (!isRecord(value)) {
     throw new VtdSchemaError("list entry must be an object", "list");
   }
+  const raw = rawValue(value);
+  const rawRecord = isRecord(raw) ? raw : value;
   return {
     id: recordId(value.id),
     botName: optionalString(value.botName ?? value.bot_name),
     botSn: optionalString(value.botSn ?? value.bot_sn),
     triggerType: optionalString(value.triggerType ?? value.trigger_type),
-    dataType: optionalString(value.dataType ?? value.data_type),
-    triggerTime: optionalString(value.triggerTime ?? value.trigger_time),
-    sizeBytes: optionalNumber(value.sizeBytes ?? value.size_bytes ?? value.data_size),
-    raw: rawValue(value),
+    dataType: optionalStringOrNumber(value.dataType ?? value.data_type),
+    triggerTime: optionalTriggerTime(
+      value.triggerTime ?? value.trigger_time ?? rawRecord.trigger_time,
+    ),
+    dataStartNs: optionalEpochNanoseconds(
+      value.dataStartNs ?? value.data_st ?? rawRecord.data_st,
+    ),
+    dataEndNs: optionalEpochNanoseconds(
+      value.dataEndNs ?? value.data_et ?? rawRecord.data_et,
+    ),
+    sizeBytes: optionalNumber(
+      value.sizeBytes ?? value.size_bytes ?? value.data_size,
+    ),
+    raw,
   };
 }
 
-export function normalizeVtdSearchResponse(
-  value: unknown,
-): { records: VtdRecord[]; total?: number } {
+export function normalizeVtdSearchResponse(value: unknown): {
+  records: VtdRecord[];
+  total?: number;
+} {
   if (!isRecord(value)) {
     throw new VtdSchemaError("list result must be an object", "list");
   }
@@ -141,14 +192,18 @@ export function normalizeVtdSearchResponse(
     throw new VtdSchemaError("list result does not contain records", "list");
   }
   const pagination = isRecord(value.pagination) ? value.pagination : undefined;
-  const total = optionalNumber(value.total ?? value.total_count ?? pagination?.total);
+  const total = optionalNumber(
+    value.total ?? value.total_count ?? pagination?.total,
+  );
   return {
     records: rawRecords.map(normalizeRecord),
     ...(total == undefined ? {} : { total }),
   };
 }
 
-export function normalizeVtdTopicsResponse(value: unknown): Record<string, number> {
+export function normalizeVtdTopicsResponse(
+  value: unknown,
+): Record<string, number> {
   if (!isRecord(value)) {
     throw new VtdSchemaError("topics result must be an object", "topics");
   }
@@ -156,18 +211,25 @@ export function normalizeVtdTopicsResponse(value: unknown): Record<string, numbe
   const topics: Record<string, number> = {};
   for (const [topic, count] of Object.entries(rawTopics)) {
     if (typeof count !== "number" || !Number.isFinite(count)) {
-      throw new VtdSchemaError(`topic count for ${topic} must be a number`, "topics");
+      throw new VtdSchemaError(
+        `topic count for ${topic} must be a number`,
+        "topics",
+      );
     }
     topics[topic] = count;
   }
   return topics;
 }
 
-export function normalizeVtdSliceStoreResponse(
-  value: unknown,
-): { mcapSliceId: string; raw: unknown } {
+export function normalizeVtdSliceStoreResponse(value: unknown): {
+  mcapSliceId: string;
+  raw: unknown;
+} {
   if (!isRecord(value)) {
-    throw new VtdSchemaError("slice-store result must be an object", "slice-store");
+    throw new VtdSchemaError(
+      "slice-store result must be an object",
+      "slice-store",
+    );
   }
   return {
     mcapSliceId: requiredString(
@@ -179,9 +241,10 @@ export function normalizeVtdSliceStoreResponse(
   };
 }
 
-export function normalizeVtdSliceGetResponse(
-  value: unknown,
-): { downloadUrl: string; raw: unknown } {
+export function normalizeVtdSliceGetResponse(value: unknown): {
+  downloadUrl: string;
+  raw: unknown;
+} {
   if (!isRecord(value)) {
     throw new VtdSchemaError("slice-get result must be an object", "slice-get");
   }
@@ -195,12 +258,18 @@ export function normalizeVtdSliceGetResponse(
   };
 }
 
-export function normalizeVtdUrlResponse(value: unknown): { downloadUrl: string } {
+export function normalizeVtdUrlResponse(value: unknown): {
+  downloadUrl: string;
+} {
   if (!isRecord(value)) {
     throw new VtdSchemaError("url result must be an object", "url");
   }
   return {
-    downloadUrl: requiredString(value.downloadUrl ?? value.download_url, "download_url", "url"),
+    downloadUrl: requiredString(
+      value.downloadUrl ?? value.download_url,
+      "download_url",
+      "url",
+    ),
   };
 }
 
@@ -219,9 +288,11 @@ export default class HttpVtdClient implements IVtdClient {
     if (endpoint.length === 0) {
       throw new Error("VTD endpoint must not be empty");
     }
-    const runtimeLocation = (globalThis as unknown as {
-      location?: { origin?: string };
-    }).location;
+    const runtimeLocation = (
+      globalThis as unknown as {
+        location?: { origin?: string };
+      }
+    ).location;
     const baseUrl = runtimeLocation?.origin ?? "http://localhost";
     const parsedEndpoint = new URL(endpoint, baseUrl);
     if (
@@ -231,12 +302,17 @@ export default class HttpVtdClient implements IVtdClient {
       parsedEndpoint.search.length > 0 ||
       parsedEndpoint.hash.length > 0
     ) {
-      throw new Error("VTD endpoint must be an HTTP(S) URL without credentials, query, or fragment");
+      throw new Error(
+        "VTD endpoint must be an HTTP(S) URL without credentials, query, or fragment",
+      );
     }
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new Error("VTD timeout must be a positive number");
     }
-    if (authToken?.includes("\r") === true || authToken?.includes("\n") === true) {
+    if (
+      authToken?.includes("\r") === true ||
+      authToken?.includes("\n") === true
+    ) {
       throw new Error("VTD auth token must not contain line breaks");
     }
     parsedEndpoint.pathname = `${parsedEndpoint.pathname.replace(/\/+$/, "")}/`;
@@ -250,22 +326,31 @@ export default class HttpVtdClient implements IVtdClient {
     params: VtdSearchParams,
     signal?: AbortSignal,
   ): Promise<{ records: VtdRecord[]; total?: number }> {
-    return normalizeVtdSearchResponse(await this.#invoke("list", params, signal));
+    return normalizeVtdSearchResponse(
+      await this.#invoke("list", params, signal),
+    );
   }
 
   public async detail(id: string, signal?: AbortSignal): Promise<unknown> {
     return await this.#invoke("detail", { id }, signal);
   }
 
-  public async topics(id: string, signal?: AbortSignal): Promise<Record<string, number>> {
-    return normalizeVtdTopicsResponse(await this.#invoke("topics", { id }, signal));
+  public async topics(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<Record<string, number>> {
+    return normalizeVtdTopicsResponse(
+      await this.#invoke("topics", { id }, signal),
+    );
   }
 
   public async sliceStore(
     params: VtdSliceParams,
     signal?: AbortSignal,
   ): Promise<{ mcapSliceId: string; raw: unknown }> {
-    return normalizeVtdSliceStoreResponse(await this.#invoke("slice-store", params, signal));
+    return normalizeVtdSliceStoreResponse(
+      await this.#invoke("slice-store", normalizeVtdSliceParams(params), signal),
+    );
   }
 
   public async sliceGet(
@@ -277,15 +362,25 @@ export default class HttpVtdClient implements IVtdClient {
     );
   }
 
-  public async url(id: string, signal?: AbortSignal): Promise<{ downloadUrl: string }> {
+  public async url(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<{ downloadUrl: string }> {
     return normalizeVtdUrlResponse(await this.#invoke("url", { id }, signal));
   }
 
-  public async trigger(params: VtdTriggerParams, signal?: AbortSignal): Promise<unknown> {
+  public async trigger(
+    params: VtdTriggerParams,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     return await this.#invoke("trigger", params, signal);
   }
 
-  async #invoke(command: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+  async #invoke(
+    command: string,
+    params: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     if (signal?.aborted === true) {
       throw new VtdAbortError(command, { cause: signal.reason });
     }
@@ -312,16 +407,21 @@ export default class HttpVtdClient implements IVtdClient {
     const request = async (): Promise<unknown> => {
       let response: Response;
       try {
-        const headers: Record<string, string> = { "content-type": "application/json" };
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+        };
         if (this.#authToken != undefined && this.#authToken.length > 0) {
           headers.authorization = `Bearer ${this.#authToken}`;
         }
-        response = await this.#fetch(new URL(`vtd/${command}`, this.#endpoint), {
-          body: JSON.stringify(params),
-          headers,
-          method: "POST",
-          signal: controller.signal,
-        });
+        response = await this.#fetch(
+          new URL(`vtd/${command}`, this.#endpoint),
+          {
+            body: JSON.stringify(params),
+            headers,
+            method: "POST",
+            signal: controller.signal,
+          },
+        );
       } catch (error) {
         if (timedOut) {
           throw new VtdTimeoutError(command, this.#timeoutMs, { cause: error });
@@ -349,7 +449,12 @@ export default class HttpVtdClient implements IVtdClient {
       }
       const detail = new TextDecoder().decode(body);
       if (!response.ok) {
-        throw new VtdHttpError(command, response.status, response.statusText, detail);
+        throw new VtdHttpError(
+          command,
+          response.status,
+          response.statusText,
+          detail,
+        );
       }
       try {
         return JSON.parse(detail) as unknown;

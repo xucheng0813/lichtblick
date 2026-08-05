@@ -17,10 +17,7 @@ import {
   useState,
 } from "react";
 
-import {
-  type AgentChatState,
-  useAgentChat,
-} from "@lichtblick/suite-base/context/AgentChatContext";
+import { type AgentChatState, useAgentChat } from "@lichtblick/suite-base/context/AgentChatContext";
 import {
   AgentStreamProtocolError,
   AgentStreamSizeLimitError,
@@ -88,7 +85,13 @@ function createClientHarness(): ClientHarness {
       if (signal?.aborted === true) {
         pending.resolve();
       } else {
-        signal?.addEventListener("abort", () => { pending.resolve(); }, { once: true });
+        signal?.addEventListener(
+          "abort",
+          () => {
+            pending.resolve();
+          },
+          { once: true },
+        );
       }
       await pending.promise;
     },
@@ -139,9 +142,13 @@ function makeWrapper(
   client: IAgentClient,
   options: {
     onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
+    onGetVtdTopics?: (id: string) => Promise<Record<string, number>>;
+    onLoadVtdRecord?: (id: string) => Promise<void>;
+    onSliceVtdRecord?: AgentChatState["actions"]["sliceVtdRecord"];
     onOpenDataSource?: (urls: string[], sessionId?: string) => void;
     enabled?: boolean;
     persistence?: AgentConversationPersistence;
+    profileName?: string;
     strict?: boolean;
   } = {},
 ): React.ComponentType<PropsWithChildren> {
@@ -151,8 +158,12 @@ function makeWrapper(
         client={client}
         enabled={options.enabled}
         onApplyProposal={options.onApplyProposal}
+        onGetVtdTopics={options.onGetVtdTopics}
+        onLoadVtdRecord={options.onLoadVtdRecord}
         onOpenDataSource={options.onOpenDataSource}
+        onSliceVtdRecord={options.onSliceVtdRecord}
         persistence={options.persistence}
+        selectedProfileName={options.profileName}
       >
         {children}
       </AgentChatProvider>
@@ -223,6 +234,7 @@ describe("AgentChatProvider", () => {
       onUiMessagesChanged: jest.fn(),
       restoreLlmHistory: jest.fn().mockResolvedValue([]),
       restoreUiMessages: jest.fn(async () => transcripts.get(activeConversationId) ?? []),
+      setProfileName: jest.fn(),
       startNewConversation: jest.fn(() => {
         activeConversationId = "conversation-3";
         return activeConversationId;
@@ -232,7 +244,7 @@ describe("AgentChatProvider", () => {
       }),
     };
     const { result } = renderHook(() => useAgentChat(selectState), {
-      wrapper: makeWrapper(harness.client, { persistence }),
+      wrapper: makeWrapper(harness.client, { persistence, profileName: "Diagnostics" }),
     });
     await waitFor(() => {
       expect(result.current.messages[0]?.id).toBe("old-message");
@@ -246,6 +258,7 @@ describe("AgentChatProvider", () => {
       expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
       expect(harness.subscriptions).toHaveLength(1);
     });
+    expect(persistence.setProfileName).toHaveBeenCalledWith("Diagnostics");
     const oldSubscriptionSignal = harness.subscriptions[0]?.signal;
 
     await act(async () => {
@@ -255,9 +268,7 @@ describe("AgentChatProvider", () => {
 
     expect(oldSubscriptionSignal?.aborted).toBe(true);
     expect(result.current.activeConversationId).toBe("conversation-2");
-    expect(result.current.messages.map((message) => message.id)).toEqual([
-      "target-message",
-    ]);
+    expect(result.current.messages.map((message) => message.id)).toEqual(["target-message"]);
 
     let secondSend!: Promise<void>;
     act(() => {
@@ -312,6 +323,20 @@ describe("AgentChatProvider", () => {
       await expect(result.current.actions.applyProposal()).rejects.toThrow(
         "Agent chat is disabled",
       );
+      await expect(result.current.actions.loadVtdRecord("record-disabled")).rejects.toThrow(
+        "Agent chat is disabled",
+      );
+      await expect(result.current.actions.getVtdTopics("record-disabled")).rejects.toThrow(
+        "Agent chat is disabled",
+      );
+      await expect(
+        result.current.actions.sliceVtdRecord({
+          id: "record-disabled",
+          topics: ["/imu"],
+          startNs: "1",
+          endNs: "2",
+        }),
+      ).rejects.toThrow("Agent chat is disabled");
     });
     act(() => {
       expect(() => {
@@ -322,6 +347,43 @@ describe("AgentChatProvider", () => {
     expect(harness.client.createSession).not.toHaveBeenCalled();
     expect(harness.client.sendMessage).not.toHaveBeenCalled();
     expect(harness.client.subscribeEvents).not.toHaveBeenCalled();
+  });
+
+  it("routes direct VTD actions without creating an Agent session or waiting", async () => {
+    const harness = createClientHarness();
+    const onGetVtdTopics = jest.fn().mockResolvedValue({ "/imu": 12 });
+    const onLoadVtdRecord = jest.fn().mockResolvedValue(undefined);
+    const onSliceVtdRecord = jest.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, {
+        onGetVtdTopics,
+        onLoadVtdRecord,
+        onSliceVtdRecord,
+      }),
+    });
+    const sliceParams = {
+      id: "record-1",
+      topics: ["/imu"],
+      startNs: "1000000001",
+      endNs: "2000000002",
+    };
+    const onProgress = jest.fn();
+
+    await act(async () => {
+      await result.current.actions.loadVtdRecord("record-1");
+      await expect(result.current.actions.getVtdTopics("record-1")).resolves.toEqual({
+        "/imu": 12,
+      });
+      await result.current.actions.sliceVtdRecord(sliceParams, onProgress);
+    });
+
+    expect(onLoadVtdRecord).toHaveBeenCalledWith("record-1");
+    expect(onGetVtdTopics).toHaveBeenCalledWith("record-1");
+    expect(onSliceVtdRecord).toHaveBeenCalledWith(sliceParams, onProgress);
+    expect(result.current.status).toBe("idle");
+    expect(result.current.waitingRequest).toBeUndefined();
+    expect(harness.client.createSession).not.toHaveBeenCalled();
+    expect(harness.client.sendMessage).not.toHaveBeenCalled();
   });
 
   it("aborts and clears on disable, then initializes normally when re-enabled", async () => {
@@ -632,12 +694,7 @@ describe("AgentChatProvider", () => {
       expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
     });
     const requestId = requestIdAt(harness.client, 0);
-    const tool = (
-      id: string,
-      status: ToolRunStatus,
-      seq: number,
-      summary?: string,
-    ) => {
+    const tool = (id: string, status: ToolRunStatus, seq: number, summary?: string) => {
       harness.emit({
         type: "tool-update",
         messageId: "assistant-1",
@@ -740,7 +797,9 @@ describe("AgentChatProvider", () => {
     await act(flushMicrotasks);
     const requestId = requestIdAt(harness.client, 0);
 
-    act(() => { harness.eof(0); });
+    act(() => {
+      harness.eof(0);
+    });
     await act(flushMicrotasks);
     await act(async () => {
       jest.advanceTimersByTime(250);
@@ -748,7 +807,9 @@ describe("AgentChatProvider", () => {
     });
     expect(harness.subscriptions).toHaveLength(2);
 
-    act(() => { harness.eof(1); });
+    act(() => {
+      harness.eof(1);
+    });
     await act(flushMicrotasks);
     await act(async () => {
       jest.advanceTimersByTime(499);
@@ -794,7 +855,9 @@ describe("AgentChatProvider", () => {
       void result.current.actions.sendMessage("abort");
     });
     await act(flushMicrotasks);
-    act(() => { harness.eof(); });
+    act(() => {
+      harness.eof();
+    });
     await act(flushMicrotasks);
     unmount();
     await act(async () => {
@@ -818,7 +881,9 @@ describe("AgentChatProvider", () => {
       send = result.current.actions.sendMessage("fatal");
     });
     await act(flushMicrotasks);
-    act(() => { harness.fail(streamError); });
+    act(() => {
+      harness.fail(streamError);
+    });
     await act(async () => {
       await expect(send).rejects.toThrow(streamError.message);
     });
@@ -947,7 +1012,9 @@ describe("AgentChatProvider", () => {
       requestId,
       urls: ["https://example.test/a.mcap"],
     });
-    act(() => { result.current.actions.notifyCatalogReady(requestId); });
+    act(() => {
+      result.current.actions.notifyCatalogReady(requestId);
+    });
     expect(result.current.status).toBe("idle");
     expect(result.current.waitingRequest).toBeUndefined();
     expect(harness.client.notifyCatalogReady).toHaveBeenCalledWith(
@@ -957,7 +1024,9 @@ describe("AgentChatProvider", () => {
     );
     expect(resolved).toBe(false);
 
-    act(() => { harness.emit({ type: "done", requestId, seq: 2 }); });
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 2 });
+    });
     await act(async () => {
       await send;
     });
@@ -1333,7 +1402,9 @@ describe("AgentChatProvider", () => {
     });
     expect(firstCallback).not.toHaveBeenCalled();
     expect(secondCallback).toHaveBeenCalledTimes(1);
-    act(() => { result.current.actions.cancelWaiting(); });
+    act(() => {
+      result.current.actions.cancelWaiting();
+    });
     await act(async () => {
       await send;
     });
@@ -1471,6 +1542,120 @@ describe("AgentChatProvider", () => {
     expect(signal?.aborted).toBe(true);
     confirmation.resolve();
     await confirm;
+  });
+
+  it("supersedes an unhandled proposal from the same request without leaving a queued copy", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("complete proposal");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    const skeleton = validProposal("Skeleton");
+    const complete = validProposal("Complete");
+
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-skeleton",
+        proposal: skeleton,
+        requestId,
+        seq: 1,
+      });
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-complete",
+        proposal: complete,
+        requestId,
+        seq: 2,
+      });
+    });
+
+    expect(result.current.pendingProposal).toEqual(complete);
+    expect(result.current.pendingProposalMessageId).toBe("assistant-complete");
+    expect(result.current.pendingProposalRequestId).toBe(requestId);
+
+    act(() => {
+      result.current.actions.dismissProposal();
+    });
+    expect(result.current.pendingProposal).toBeUndefined();
+    expect(result.current.pendingProposalMessageId).toBeUndefined();
+    expect(result.current.pendingProposalRequestId).toBeUndefined();
+
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 3 });
+    });
+    await act(async () => {
+      await send;
+    });
+  });
+
+  it("keeps proposals from different requests queued and preserves dismiss/apply promotion", async () => {
+    const harness = createClientHarness();
+    const onApplyProposal = jest.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, { onApplyProposal }),
+    });
+    let firstSend!: Promise<void>;
+    let secondSend!: Promise<void>;
+    act(() => {
+      firstSend = result.current.actions.sendMessage("first proposal");
+      secondSend = result.current.actions.sendMessage("second proposal");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(2);
+    });
+    const firstRequestId = requestIdAt(harness.client, 0);
+    const secondRequestId = requestIdAt(harness.client, 1);
+    const firstProposal = validProposal("First request");
+    const secondProposal = validProposal("Second request");
+
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-first",
+        proposal: firstProposal,
+        requestId: firstRequestId,
+        seq: 1,
+      });
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-second",
+        proposal: secondProposal,
+        requestId: secondRequestId,
+        seq: 2,
+      });
+    });
+
+    expect(result.current.pendingProposal).toEqual(firstProposal);
+    expect(result.current.pendingProposalRequestId).toBe(firstRequestId);
+
+    act(() => {
+      result.current.actions.dismissProposal();
+    });
+    expect(result.current.pendingProposal).toEqual(secondProposal);
+    expect(result.current.pendingProposalMessageId).toBe("assistant-second");
+    expect(result.current.pendingProposalRequestId).toBe(secondRequestId);
+
+    await act(async () => {
+      await result.current.actions.applyProposal();
+    });
+    expect(onApplyProposal).toHaveBeenCalledWith(secondProposal, expect.any(AbortSignal));
+    expect(result.current.pendingProposal).toBeUndefined();
+
+    act(() => {
+      harness.emit({ type: "done", requestId: firstRequestId, seq: 3 });
+      harness.emit({ type: "done", requestId: secondRequestId, seq: 4 });
+    });
+    await act(async () => {
+      await Promise.all([firstSend, secondSend]);
+    });
   });
 
   it("validates proposals and single-flights apply operations", async () => {

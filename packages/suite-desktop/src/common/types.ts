@@ -16,10 +16,7 @@ export type ForwardedMenuEvent =
   | "open-help-general";
 
 export type ForwardedWindowEvent =
-  | "enter-full-screen"
-  | "leave-full-screen"
-  | "maximize"
-  | "unmaximize";
+  "enter-full-screen" | "leave-full-screen" | "maximize" | "unmaximize";
 
 /** Registering an event listener returns a function that will un-register the listener */
 export type UnregisterFn = () => void;
@@ -39,7 +36,10 @@ interface NativeMenuBridge {
    *
    * https://www.electronjs.org/docs/latest/api/context-bridge#parameter--error--return-type-support
    */
-  addIpcEventListener(eventName: ForwardedMenuEvent, handler: () => void): UnregisterFn;
+  addIpcEventListener(
+    eventName: ForwardedMenuEvent,
+    handler: () => void,
+  ): UnregisterFn;
 }
 
 // Items suitable for storage
@@ -56,7 +56,11 @@ interface Storage {
     key: string,
     options?: { encoding: undefined },
   ): Promise<Uint8Array | undefined>;
-  get(datastore: string, key: string, options: { encoding: "utf8" }): Promise<string | undefined>;
+  get(
+    datastore: string,
+    key: string,
+    options: { encoding: "utf8" },
+  ): Promise<string | undefined>;
   // put a single item into the datastore
   // This will replace any existing item with the same key
   put(datastore: string, key: string, value: StorageContent): Promise<void>;
@@ -160,9 +164,25 @@ export type VtdInvokeResult =
   | { ok: true; value: unknown }
   | { ok: false; code: VtdInvokeErrorCode; message: string };
 
-export const SECURE_CREDENTIAL_KEYS = ["agent.llmApiKey", "agent.vtdAuthToken"] as const;
+export type VtdStatus = {
+  installed: boolean;
+  path?: string;
+  version?: string;
+};
 
-export type SecureCredentialKey = (typeof SECURE_CREDENTIAL_KEYS)[number];
+export type VtdInstallResult = {
+  exitCode: number | null;
+  ok: boolean;
+  output: string;
+};
+
+export const SECURE_CREDENTIAL_KEYS = [
+  "agent.llmApiKey",
+  "agent.vtdAuthToken",
+] as const;
+
+export type SecureCredentialKey =
+  (typeof SECURE_CREDENTIAL_KEYS)[number] | `agent.profile.${string}.llmApiKey`;
 
 export type SecureCredentialGetResult =
   | {
@@ -186,18 +206,31 @@ export type SecureCredentialSetManyResult =
   | { ok: true }
   | {
       ok: false;
-      code: "backend-unavailable" | "insecure-backend" | "invalid-request" | "revision-conflict";
+      code:
+        | "backend-unavailable"
+        | "insecure-backend"
+        | "invalid-request"
+        | "revision-conflict";
     };
 
-export function isSecureCredentialKey(value: unknown): value is SecureCredentialKey {
-  return typeof value === "string" && (SECURE_CREDENTIAL_KEYS as readonly string[]).includes(value);
+export function isSecureCredentialKey(
+  value: unknown,
+): value is SecureCredentialKey {
+  return (
+    typeof value === "string" &&
+    ((SECURE_CREDENTIAL_KEYS as readonly string[]).includes(value) ||
+      /^agent\.profile\.[A-Za-z0-9-]{1,64}\.llmApiKey$/.test(value))
+  );
 }
 
 interface Desktop {
   /** https://www.electronjs.org/docs/tutorial/represented-file */
   setRepresentedFilename(path: string | undefined): Promise<void>;
 
-  addIpcEventListener(eventName: ForwardedWindowEvent, handler: () => void): UnregisterFn;
+  addIpcEventListener(
+    eventName: ForwardedWindowEvent,
+    handler: () => void,
+  ): UnregisterFn;
 
   /**
    * Notify the app that the color scheme setting has changed and the native theme may need to be
@@ -237,8 +270,12 @@ interface Desktop {
     requestId: string,
   ) => Promise<VtdInvokeResult>;
   cancelVtd: (requestId: string) => Promise<void>;
+  vtdStatus: () => Promise<VtdStatus>;
+  vtdInstall: () => Promise<VtdInstallResult>;
 
-  getSecureCredential: (key: SecureCredentialKey) => Promise<SecureCredentialGetResult>;
+  getSecureCredential: (
+    key: SecureCredentialKey,
+  ) => Promise<SecureCredentialGetResult>;
   setSecureCredential: (
     key: SecureCredentialKey,
     value: string,
@@ -262,4 +299,11 @@ interface Desktop {
   updateLanguage(): void;
 }
 
-export type { Desktop, DesktopExtension, DesktopLayout, NativeMenuBridge, Storage, StorageContent };
+export type {
+  Desktop,
+  DesktopExtension,
+  DesktopLayout,
+  NativeMenuBridge,
+  Storage,
+  StorageContent,
+};

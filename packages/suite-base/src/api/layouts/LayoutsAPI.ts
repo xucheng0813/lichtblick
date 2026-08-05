@@ -10,11 +10,13 @@ import {
   UpdateLayoutRequestBody,
   UpdateLayoutResponse,
 } from "@lichtblick/suite-base/api/layouts/types";
+import { LayoutID } from "@lichtblick/suite-base/context/CurrentLayoutContext";
 import { ISO8601Timestamp } from "@lichtblick/suite-base/services/ILayoutStorage";
 import {
   IRemoteLayoutStorage,
   RemoteLayout,
 } from "@lichtblick/suite-base/services/IRemoteLayoutStorage";
+import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
 import HttpService from "@lichtblick/suite-base/services/http/HttpService";
 
 function toRemoteLayout(layout: LayoutApiResponse): RemoteLayout {
@@ -53,8 +55,8 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
     return layoutData == undefined ? undefined : toRemoteLayout(layoutData);
   }
 
-  public async getLayout(): Promise<RemoteLayout | undefined> {
-    throw new Error("Method not implemented.");
+  public async getLayout(id: LayoutID): Promise<RemoteLayout | undefined> {
+    return (await this.getLayouts()).find((layout) => layout.id === id);
   }
 
   public async saveNewLayout(params: SaveNewLayoutParams): Promise<RemoteLayout> {
@@ -82,15 +84,22 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
       permission: params.permission,
     };
 
-    const { data: layoutData } = await HttpService.put<LayoutApiResponse>(
-      `${this.layoutPath}/${params.externalId}`,
-      requestBody,
-    );
+    try {
+      const { data: layoutData } = await HttpService.put<LayoutApiResponse>(
+        `${this.layoutPath}/${params.externalId}`,
+        requestBody,
+      );
 
-    // Transform the HTTP response into the expected UpdateLayoutResponse format
-    const newLayout = toRemoteLayout(layoutData);
+      // Transform the HTTP response into the expected UpdateLayoutResponse format
+      const newLayout = toRemoteLayout(layoutData);
 
-    return { status: "success", newLayout };
+      return { status: "success", newLayout };
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) {
+        return { status: "conflict" };
+      }
+      throw error;
+    }
   }
 
   public async setDescription(layoutId: string, description: string): Promise<boolean> {

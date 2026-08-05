@@ -18,7 +18,24 @@ const conversation: StoredConversation = {
   updatedAt: "2026-07-29T00:00:00.000Z",
   uiMessages: [{ id: "message-1" }],
   llmHistory: [{ role: "user", content: "inspect this recording" }],
+  profileName: "Diagnostics",
 };
+
+function createRejectedDeferred(): {
+  promise: Promise<never>;
+  reject: (error: Error) => void;
+} {
+  let rejectPromise: ((error: Error) => void) | undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    rejectPromise = reject;
+  });
+  return {
+    promise,
+    reject: (error) => {
+      rejectPromise?.(error);
+    },
+  };
+}
 
 function createStores() {
   const local = {
@@ -74,6 +91,29 @@ describe("RemoteAgentConversationStore", () => {
     expect(local.load).not.toHaveBeenCalled();
   });
 
+  it("passes the pi history format marker through remote and local snapshots", async () => {
+    const { http, local, store } = createStores();
+    const piConversation: StoredConversation = {
+      ...conversation,
+      llmHistory: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "inspect this recording" }],
+          timestamp: Date.parse("2026-08-04T09:30:00.000Z"),
+        },
+      ],
+      llmHistoryFormat: "pi/v1",
+    };
+    http.get.mockResolvedValue({
+      data: { ...piConversation, title: "inspect this recording" },
+      path: "",
+      timestamp: "",
+    });
+
+    await expect(store.load(piConversation.conversationId)).resolves.toEqual(piConversation);
+    expect(local.save).toHaveBeenCalledWith(piConversation);
+  });
+
   it("falls back to IndexedDB for HTTP and network failures", async () => {
     const { http, local, store } = createStores();
     http.get.mockRejectedValue(new HttpError("offline", 0, "Network Error"));
@@ -88,13 +128,14 @@ describe("RemoteAgentConversationStore", () => {
   it("always writes locally and trailing-debounces serialized remote saves", async () => {
     jest.useFakeTimers();
     const { http, local, store } = createStores();
-
-    await store.save(conversation);
-    await store.save({
+    const updatedConversation: StoredConversation = {
       ...conversation,
       updatedAt: "2026-07-29T00:00:01.000Z",
       uiMessages: [{ id: "message-2" }],
-    });
+    };
+
+    await store.save(conversation);
+    await store.save(updatedConversation);
 
     expect(local.save).toHaveBeenCalledTimes(2);
     expect(http.put).not.toHaveBeenCalled();
@@ -104,11 +145,82 @@ describe("RemoteAgentConversationStore", () => {
     expect(http.put).toHaveBeenCalledTimes(1);
     expect(http.put).toHaveBeenCalledWith(
       "workspaces/workspace%2Fa/conversations/conversation-1",
-      expect.objectContaining({
-        updatedAt: "2026-07-29T00:00:01.000Z",
-        uiMessages: [{ id: "message-2" }],
-      }),
+      updatedConversation,
     );
+  });
+
+  it("does not retry snapshots rejected as too large", async () => {
+    jest.useFakeTimers();
+    const { http, store } = createStores();
+    http.put.mockRejectedValue(new HttpError("too large", 413, "Payload Too Large"));
+
+    await store.save(conversation);
+    await jest.advanceTimersByTimeAsync(2_000);
+    await jest.advanceTimersByTimeAsync(2_000);
+
+    expect(http.put).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
+    (console.error as jest.Mock).mockClear();
+  });
+
+  it("requeues a transiently failed snapshot once and then succeeds", async () => {
+    jest.useFakeTimers();
+    const { http, store } = createStores();
+    http.put.mockRejectedValueOnce(new HttpError("offline", 0, "Network Error"));
+
+    await store.save(conversation);
+    await jest.advanceTimersByTimeAsync(2_000);
+    await jest.advanceTimersByTimeAsync(2_000);
+
+    expect(http.put).toHaveBeenCalledTimes(2);
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    (console.warn as jest.Mock).mockClear();
+  });
+
+  it("abandons a transiently failed snapshot after one retry", async () => {
+    jest.useFakeTimers();
+    const { http, store } = createStores();
+    http.put.mockRejectedValue(new HttpError("offline", 0, "Network Error"));
+
+    await store.save(conversation);
+    await jest.advanceTimersByTimeAsync(2_000);
+    await jest.advanceTimersByTimeAsync(2_000);
+    await jest.advanceTimersByTimeAsync(2_000);
+
+    expect(http.put).toHaveBeenCalledTimes(2);
+    expect(console.warn).toHaveBeenCalledTimes(2);
+    (console.warn as jest.Mock).mockClear();
+  });
+
+  it("does not requeue a failed snapshot behind a newer queued save", async () => {
+    jest.useFakeTimers();
+    const { http, store } = createStores();
+    const firstPut = createRejectedDeferred();
+    const newerConversation: StoredConversation = {
+      ...conversation,
+      updatedAt: "2026-07-29T00:00:01.000Z",
+      uiMessages: [{ id: "message-2" }],
+    };
+    http.put.mockReturnValueOnce(firstPut.promise);
+
+    await store.save(conversation);
+    await jest.advanceTimersByTimeAsync(2_000);
+    await store.save(newerConversation);
+    await jest.advanceTimersByTimeAsync(2_000);
+
+    firstPut.reject(new HttpError("offline", 0, "Network Error"));
+    await jest.advanceTimersByTimeAsync(0);
+    await jest.advanceTimersByTimeAsync(2_000);
+
+    expect(http.put).toHaveBeenCalledTimes(2);
+    expect(http.put).toHaveBeenNthCalledWith(
+      2,
+      "workspaces/workspace%2Fa/conversations/conversation-1",
+      newerConversation,
+    );
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    (console.warn as jest.Mock).mockClear();
   });
 
   it("deletes locally even when the remote delete fails", async () => {
@@ -130,6 +242,7 @@ describe("RemoteAgentConversationStore", () => {
           title: "inspect this recording",
           updatedAt: conversation.updatedAt,
           messageCount: 1,
+          profileName: conversation.profileName,
         },
       ],
       total: 1,

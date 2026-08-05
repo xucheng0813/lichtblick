@@ -20,6 +20,12 @@ export const useStyles = makeStyles()((theme) => ({
     padding: theme.spacing(0.75, 1.5),
     borderBottom: `1px solid ${theme.palette.divider}`,
   },
+  profileSelect: {
+    maxWidth: 180,
+    minWidth: 112,
+    height: theme.spacing(3.5),
+    fontSize: theme.typography.caption.fontSize,
+  },
   conversationPopover: {
     width: 320,
     maxWidth: "calc(100vw - 32px)",
@@ -99,7 +105,12 @@ export const useStyles = makeStyles()((theme) => ({
     color: theme.palette.text.primary,
     backgroundColor: theme.palette.background.paper,
   },
+  toolToggleButton: {
+    flex: "none",
+    padding: theme.spacing(0.25),
+  },
   toolName: {
+    flex: 1,
     minWidth: 0,
     overflow: "hidden",
     fontFamily: customTypography.fontMonospace,
@@ -107,11 +118,31 @@ export const useStyles = makeStyles()((theme) => ({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
+  toolStatusChip: {
+    flex: "none",
+  },
+  toolCardBody: {
+    marginTop: theme.spacing(0.75),
+  },
   toolSummary: {
     marginTop: theme.spacing(0.75),
   },
   toolError: {
     marginTop: theme.spacing(0.75),
+  },
+  toolResult: {
+    marginTop: theme.spacing(0.75),
+    marginBottom: 0,
+    maxHeight: 240,
+    overflow: "auto",
+    padding: theme.spacing(0.75),
+    borderRadius: theme.shape.borderRadius,
+    backgroundColor: theme.palette.action.hover,
+    fontFamily: customTypography.fontMonospace,
+    fontSize: "0.75rem",
+    lineHeight: 1.4,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "anywhere",
   },
   progress: {
     marginTop: theme.spacing(1),

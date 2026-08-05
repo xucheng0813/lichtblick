@@ -22,6 +22,7 @@ import {
   VtdPermissionError,
   VtdTimeoutError,
 } from "./errors";
+import { normalizeVtdSliceParams } from "./normalizeVtdSliceParams";
 import type {
   IVtdClient,
   VtdRecord,
@@ -124,7 +125,11 @@ function ipcError(command: DesktopVtdInvokeCommand, result: Extract<DesktopVtdIn
     case "invalid-json":
       return withMessage(new VtdJsonError(command, { cause }), result.message);
     case "not-found":
-      return new VtdNotFoundError(command, result.message, { cause });
+      return new VtdNotFoundError(
+        command,
+        `${result.message} Install it from Settings → AI Assistant.`,
+        { cause },
+      );
     case "permission-denied":
       return new VtdPermissionError(command, result.message, { cause });
     default:
@@ -163,7 +168,9 @@ export default class DesktopVtdClient implements IVtdClient {
     params: VtdSliceParams,
     signal?: AbortSignal,
   ): Promise<{ mcapSliceId: string; raw: unknown }> {
-    return normalizeVtdSliceStoreResponse(await this.#invoke("slice-store", params, signal));
+    return normalizeVtdSliceStoreResponse(
+      await this.#invoke("slice-store", normalizeVtdSliceParams(params), signal),
+    );
   }
 
   public async sliceGet(

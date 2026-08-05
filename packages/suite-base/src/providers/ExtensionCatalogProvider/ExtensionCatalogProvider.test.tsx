@@ -115,13 +115,18 @@ describe("ExtensionCatalogProvider", () => {
       type: "server",
       namespace: "org",
       getExtensions: jest.fn().mockResolvedValue([remoteExtension]),
-      loadExtension: options?.loadExtensionMock ?? jest.fn().mockResolvedValue(loadResponse),
+      loadExtension:
+        options?.loadExtensionMock ?? jest.fn().mockResolvedValue(loadResponse),
     });
   }
 
-  async function setup({ loadersOverride }: { loadersOverride?: IExtensionLoader[] } = {}) {
+  async function setup({
+    loadersOverride,
+  }: { loadersOverride?: IExtensionLoader[] } = {}) {
     const namespace: Namespace = "local";
-    const extensionInfo: ExtensionInfo = ExtensionBuilder.extensionInfo({ namespace });
+    const extensionInfo: ExtensionInfo = ExtensionBuilder.extensionInfo({
+      namespace,
+    });
     const extensions: ExtensionInfo[] = [extensionInfo];
 
     const loadExtension = jest.fn().mockResolvedValue({
@@ -141,7 +146,9 @@ describe("ExtensionCatalogProvider", () => {
     const { result } = renderHook(() => useExtensionCatalog((state) => state), {
       initialProps: {},
       wrapper: ({ children }) => (
-        <ExtensionCatalogProvider loaders={loaders}>{children}</ExtensionCatalogProvider>
+        <ExtensionCatalogProvider loaders={loaders}>
+          {children}
+        </ExtensionCatalogProvider>
       ),
     });
 
@@ -161,6 +168,24 @@ describe("ExtensionCatalogProvider", () => {
       expect(loadExtension).toHaveBeenCalledTimes(1);
     });
     expect(result.current.installedExtensions).toEqual([extensionInfo]);
+  });
+
+  it("returns the stored local extension package from the active browser loader", async () => {
+    (isDesktopApp as jest.Mock).mockReturnValue(false);
+    const extension = ExtensionBuilder.extensionInfo({ namespace: "local" });
+    const buffer = new Uint8Array([1, 2, 3]);
+    const loadExtension = jest
+      .fn()
+      .mockResolvedValue({ buffer, raw: defaultSource });
+    const loader = createLocalLoader(extension, {
+      loadExtensionMock: loadExtension,
+    });
+    const { result } = await setup({ loadersOverride: [loader] });
+
+    await expect(
+      result.current.getExtensionPackage("local", extension.id),
+    ).resolves.toEqual(buffer);
+    expect(loadExtension).toHaveBeenLastCalledWith(extension.id);
   });
 
   it("handles extensions with the same id in different loaders", async () => {
@@ -197,7 +222,10 @@ describe("ExtensionCatalogProvider", () => {
     await waitFor(() => {
       expect(loadExtension2).toHaveBeenCalledTimes(1);
     });
-    expect(result.current.installedExtensions).toEqual([extension1, extension2]);
+    expect(result.current.installedExtensions).toEqual([
+      extension1,
+      extension2,
+    ]);
   });
 
   it("should register a message converter", async () => {
@@ -379,7 +407,9 @@ describe("ExtensionCatalogProvider", () => {
     const { result } = renderHook(() => useExtensionCatalog((state) => state), {
       initialProps: {},
       wrapper: ({ children }) => (
-        <ExtensionCatalogProvider loaders={[loader]}>{children}</ExtensionCatalogProvider>
+        <ExtensionCatalogProvider loaders={[loader]}>
+          {children}
+        </ExtensionCatalogProvider>
       ),
     });
 
@@ -421,7 +451,9 @@ describe("ExtensionCatalogProvider", () => {
     const { result } = renderHook(() => useExtensionCatalog((state) => state), {
       initialProps: {},
       wrapper: ({ children }) => (
-        <ExtensionCatalogProvider loaders={[loader]}>{children}</ExtensionCatalogProvider>
+        <ExtensionCatalogProvider loaders={[loader]}>
+          {children}
+        </ExtensionCatalogProvider>
       ),
     });
 
@@ -468,7 +500,9 @@ describe("ExtensionCatalogProvider", () => {
     const { result } = renderHook(() => useExtensionCatalog((state) => state), {
       initialProps: {},
       wrapper: ({ children }) => (
-        <ExtensionCatalogProvider loaders={[loader]}>{children}</ExtensionCatalogProvider>
+        <ExtensionCatalogProvider loaders={[loader]}>
+          {children}
+        </ExtensionCatalogProvider>
       ),
     });
 
@@ -505,7 +539,8 @@ describe("ExtensionCatalogProvider", () => {
     const updatedConfig = jest.fn();
     const childId = "Dummy!1my2ydk";
     const DummyPanel = getDummyPanel(updatedConfig, childId);
-    const generatePanelSettings = <T,>(obj: PanelSettings<T>) => obj as PanelSettings<unknown>;
+    const generatePanelSettings = <T,>(obj: PanelSettings<T>) =>
+      obj as PanelSettings<unknown>;
 
     render(
       <PanelSetup
@@ -605,9 +640,14 @@ describe("ExtensionCatalogProvider", () => {
 
       await expect(
         act(async () => {
-          await result.current.installExtensions(invalidNamespace, extensionData);
+          await result.current.installExtensions(
+            invalidNamespace,
+            extensionData,
+          );
         }),
-      ).rejects.toThrow(`No extension loader found for namespace ${invalidNamespace}`);
+      ).rejects.toThrow(
+        `No extension loader found for namespace ${invalidNamespace}`,
+      );
     });
 
     it("should return a failure result when all loaders fail to install the extension", async () => {
@@ -616,7 +656,9 @@ describe("ExtensionCatalogProvider", () => {
       const loader = createMockLoader({
         namespace: "local",
         type: "browser",
-        installExtension: jest.fn().mockRejectedValue(new Error("install failed")),
+        installExtension: jest
+          .fn()
+          .mockRejectedValue(new Error("install failed")),
       });
       const { result } = await setup({ loadersOverride: [loader] });
       const extensionData: ExtensionData[] = [{ buffer: new Uint8Array() }];
@@ -624,13 +666,85 @@ describe("ExtensionCatalogProvider", () => {
       // When: installExtensions is called
       let response: InstallExtensionsResult[] | undefined;
       await act(async () => {
-        response = await result.current.installExtensions("local", extensionData);
+        response = await result.current.installExtensions(
+          "local",
+          extensionData,
+        );
       });
 
       // Then: result reports failure with "All loaders failed"
       expect(response).toHaveLength(1);
       expect(response![0]!.success).toBe(false);
       expect((response![0]!.error as Error).message).toBe("All loaders failed");
+    });
+
+    it("installs a downloaded org package only into the browser cache", async () => {
+      const extensionInfo = ExtensionBuilder.extensionInfo({
+        namespace: "org",
+        version: "2.0.0",
+      });
+      const serverInstall = jest.fn();
+      const cacheInstall = jest.fn().mockResolvedValue(extensionInfo);
+      const serverLoader = createMockLoader({
+        getExtensions: jest.fn().mockResolvedValue([]),
+        installExtension: serverInstall,
+        namespace: "org",
+        type: "server",
+      });
+      const cacheLoader = createMockLoader({
+        getExtensions: jest.fn().mockResolvedValue([]),
+        installExtension: cacheInstall,
+        loadExtension: jest.fn().mockResolvedValue({ raw: defaultSource }),
+        namespace: "org",
+        type: "browser",
+      });
+      const { result } = await setup({
+        loadersOverride: [serverLoader, cacheLoader],
+      });
+
+      let response: InstallExtensionsResult[] | undefined;
+      await act(async () => {
+        response = await result.current.installExtensions("org", [
+          { buffer: new Uint8Array([1, 2, 3]), namespace: "org" },
+        ]);
+      });
+
+      expect(response?.[0]).toMatchObject({
+        success: true,
+        info: extensionInfo,
+      });
+      expect(serverInstall).not.toHaveBeenCalled();
+      expect(cacheInstall).toHaveBeenCalledTimes(1);
+    });
+
+    it("loads an uploaded org extension by extension id after server installation", async () => {
+      const extensionInfo = ExtensionBuilder.extensionInfo({
+        externalId: "2",
+        id: "publisher.extension",
+        namespace: "org",
+      });
+      const loadExtension = jest.fn().mockResolvedValue({ raw: defaultSource });
+      const serverLoader = createMockLoader({
+        getExtensions: jest.fn().mockResolvedValue([]),
+        installExtension: jest.fn().mockResolvedValue(extensionInfo),
+        loadExtension,
+        namespace: "org",
+        type: "server",
+      });
+      const { result } = await setup({ loadersOverride: [serverLoader] });
+
+      await act(async () => {
+        await result.current.installExtensions("org", [
+          {
+            buffer: new Uint8Array([1, 2, 3]),
+            file: new File(["extension"], "extension.foxe"),
+            namespace: "org",
+          },
+        ]);
+      });
+
+      expect(loadExtension).toHaveBeenCalledWith(extensionInfo.id);
+      expect(loadExtension).not.toHaveBeenCalledWith(extensionInfo.externalId);
     });
   });
 
@@ -662,7 +776,9 @@ describe("ExtensionCatalogProvider", () => {
         act(async () => {
           await result.current.uninstallExtension(invalidNamespace, "");
         }),
-      ).rejects.toThrow(`No extension loader found for namespace ${invalidNamespace}`);
+      ).rejects.toThrow(
+        `No extension loader found for namespace ${invalidNamespace}`,
+      );
     });
 
     it.each([
@@ -687,49 +803,53 @@ describe("ExtensionCatalogProvider", () => {
         namespace: "org" as Namespace,
         useExternalId: true,
       },
-    ])("should call uninstallExtension with correct parameter for $description", async ({
-      isDesktop,
-      loaderType,
-      namespace,
-      useExternalId,
-    }) => {
-      (isDesktopApp as jest.Mock).mockReturnValue(isDesktop);
+    ])(
+      "should call uninstallExtension with correct parameter for $description",
+      async ({ isDesktop, loaderType, namespace, useExternalId }) => {
+        (isDesktopApp as jest.Mock).mockReturnValue(isDesktop);
 
-      const externalId = useExternalId ? BasicBuilder.string() : undefined;
-      const extensionInfo = ExtensionBuilder.extensionInfo({
-        namespace,
-        ...(externalId && { externalId }),
-      });
-      const uninstallFn = jest.fn().mockResolvedValue(undefined);
-      const loader: IExtensionLoader = {
-        type: loaderType,
-        namespace,
-        getExtension: jest.fn(),
-        getExtensions: jest.fn().mockResolvedValue([extensionInfo]),
-        installExtension: jest.fn().mockResolvedValue(extensionInfo),
-        loadExtension: jest.fn(),
-        uninstallExtension: uninstallFn,
-      };
+        const externalId = useExternalId ? BasicBuilder.string() : undefined;
+        const extensionInfo = ExtensionBuilder.extensionInfo({
+          namespace,
+          ...(externalId && { externalId }),
+        });
+        const uninstallFn = jest.fn().mockResolvedValue(undefined);
+        const loader: IExtensionLoader = {
+          type: loaderType,
+          namespace,
+          getExtension: jest.fn(),
+          getExtensions: jest.fn().mockResolvedValue([extensionInfo]),
+          installExtension: jest.fn().mockResolvedValue(extensionInfo),
+          loadExtension: jest.fn(),
+          uninstallExtension: uninstallFn,
+        };
 
-      const { result } = await setup({ loadersOverride: [loader] });
+        const { result } = await setup({ loadersOverride: [loader] });
 
-      await waitFor(() => {
-        expect(result.current.installedExtensions).toHaveLength(1);
-      });
+        await waitFor(() => {
+          expect(result.current.installedExtensions).toHaveLength(1);
+        });
 
-      await act(async () => {
-        await result.current.uninstallExtension(namespace, extensionInfo.id);
-      });
+        await act(async () => {
+          await result.current.uninstallExtension(namespace, extensionInfo.id);
+        });
 
-      expect(uninstallFn).toHaveBeenCalledWith(useExternalId ? externalId : extensionInfo.id);
-    });
+        expect(uninstallFn).toHaveBeenCalledWith(
+          useExternalId ? externalId : extensionInfo.id,
+        );
+      },
+    );
 
     it("should log a warning and still remove extension data from state when uninstallExtension throws", async () => {
       (isDesktopApp as jest.Mock).mockReturnValue(false);
       jest.spyOn(console, "warn").mockImplementation(() => {});
 
-      const extensionInfo = ExtensionBuilder.extensionInfo({ namespace: "local" });
-      const uninstallFn = jest.fn().mockRejectedValue(new Error("Uninstall failed"));
+      const extensionInfo = ExtensionBuilder.extensionInfo({
+        namespace: "local",
+      });
+      const uninstallFn = jest
+        .fn()
+        .mockRejectedValue(new Error("Uninstall failed"));
       const loader: IExtensionLoader = {
         type: "browser",
         namespace: "local",
@@ -761,13 +881,21 @@ describe("ExtensionCatalogProvider", () => {
       (isDesktopApp as jest.Mock).mockReturnValue(false);
 
       const sharedId = BasicBuilder.string();
-      const localExtension = ExtensionBuilder.extensionInfo({ id: sharedId, namespace: "local" });
-      const orgExtension = ExtensionBuilder.extensionInfo({ id: sharedId, namespace: "org" });
+      const localExtension = ExtensionBuilder.extensionInfo({
+        id: sharedId,
+        namespace: "local",
+      });
+      const orgExtension = ExtensionBuilder.extensionInfo({
+        id: sharedId,
+        namespace: "org",
+      });
 
       const localLoader = createLocalLoader(localExtension, { source: "" });
       const orgLoader = createOrgServerLoader(orgExtension, { source: "" });
 
-      const { result } = await setup({ loadersOverride: [localLoader, orgLoader] });
+      const { result } = await setup({
+        loadersOverride: [localLoader, orgLoader],
+      });
 
       await waitFor(() => {
         expect(result.current.installedExtensions).toHaveLength(2);
@@ -800,13 +928,21 @@ describe("ExtensionCatalogProvider", () => {
         }
       `;
 
-      const localExtension = ExtensionBuilder.extensionInfo({ id: sharedId, namespace: "local" });
-      const orgExtension = ExtensionBuilder.extensionInfo({ id: sharedId, namespace: "org" });
+      const localExtension = ExtensionBuilder.extensionInfo({
+        id: sharedId,
+        namespace: "local",
+      });
+      const orgExtension = ExtensionBuilder.extensionInfo({
+        id: sharedId,
+        namespace: "org",
+      });
 
       const localLoader = createLocalLoader(localExtension, { source });
       const orgLoader = createOrgServerLoader(orgExtension, { source });
 
-      const { result } = await setup({ loadersOverride: [localLoader, orgLoader] });
+      const { result } = await setup({
+        loadersOverride: [localLoader, orgLoader],
+      });
 
       await waitFor(() => {
         expect(result.current.installedExtensions).toHaveLength(2);
@@ -818,8 +954,8 @@ describe("ExtensionCatalogProvider", () => {
       });
 
       expect(result.current.installedExtensions).toHaveLength(1);
-      const panelKey = Object.keys(result.current.installedPanels ?? {}).find((k) =>
-        k.includes(panelName),
+      const panelKey = Object.keys(result.current.installedPanels ?? {}).find(
+        (k) => k.includes(panelName),
       );
       expect(panelKey).toBeDefined();
 
@@ -896,7 +1032,10 @@ describe("ExtensionCatalogProvider", () => {
       const extensionData: ExtensionData[] = [{ buffer: new Uint8Array() }];
 
       await act(async () => {
-        await result.current.installExtensions(extensionInfo.namespace!, extensionData);
+        await result.current.installExtensions(
+          extensionInfo.namespace!,
+          extensionData,
+        );
       });
 
       act(() => {
@@ -911,7 +1050,9 @@ describe("ExtensionCatalogProvider", () => {
         ...messageConverter,
         converter: expect.any(Function),
       });
-      expect(result.current.installedPanels).toEqual({ [panelName]: expect.any(Object) });
+      expect(result.current.installedPanels).toEqual({
+        [panelName]: expect.any(Object),
+      });
       expect(result.current.installedPanels![panelName]).toMatchObject({
         extensionId: extensionInfo.id,
         extensionName: extensionInfo.qualifiedName,
@@ -977,7 +1118,10 @@ describe("ExtensionCatalogProvider", () => {
 
       // When
       act(() => {
-        result.current.mergeState(updatedExtensionInfo, emptyContributionPoints);
+        result.current.mergeState(
+          updatedExtensionInfo,
+          emptyContributionPoints,
+        );
       });
 
       // Then: list still has exactly one entry and it reflects the new version
@@ -1014,7 +1158,10 @@ describe("ExtensionCatalogProvider", () => {
   describe("downloadExtension", () => {
     it("should download an extension and return a Uint8Array", async () => {
       // Given
-      const bytes = new Uint8Array([BasicBuilder.number(), BasicBuilder.number()]);
+      const bytes = new Uint8Array([
+        BasicBuilder.number(),
+        BasicBuilder.number(),
+      ]);
       const url = BasicBuilder.string();
       global.fetch = jest.fn().mockResolvedValue({
         arrayBuffer: jest.fn().mockResolvedValue(bytes.buffer),
@@ -1037,7 +1184,9 @@ describe("ExtensionCatalogProvider", () => {
     it("should reload all extensions from loaders", async () => {
       // Given
       const extension = ExtensionBuilder.extensionInfo({ namespace: "local" });
-      const loadExtensionMock = jest.fn().mockResolvedValue({ raw: defaultSource });
+      const loadExtensionMock = jest
+        .fn()
+        .mockResolvedValue({ raw: defaultSource });
       const loader = createLocalLoader(extension, { loadExtensionMock });
       const { result } = await setup({ loadersOverride: [loader] });
       loadExtensionMock.mockClear();
@@ -1080,7 +1229,9 @@ describe("ExtensionCatalogProvider", () => {
 
       // Then: only one camera model registered (second duplicate was skipped)
       expect(result.current.installedCameraModels.size).toBe(1);
-      expect(result.current.installedCameraModels.has(cameraModelName)).toBe(true);
+      expect(result.current.installedCameraModels.has(cameraModelName)).toBe(
+        true,
+      );
 
       (console.warn as jest.Mock).mockRestore();
     });
@@ -1090,7 +1241,9 @@ describe("ExtensionCatalogProvider", () => {
       const loader = createMockLoader({
         namespace: "local",
         type: "browser",
-        getExtensions: jest.fn().mockRejectedValue(new Error("getExtensions failed")),
+        getExtensions: jest
+          .fn()
+          .mockRejectedValue(new Error("getExtensions failed")),
       });
 
       // When: mount triggers refreshAllExtensions
@@ -1127,10 +1280,13 @@ describe("ExtensionCatalogProvider", () => {
 
       const cachedExtension =
         overrides?.cachedExtension ??
-        (cachedVersion ? { ...remoteExtension, version: cachedVersion } : undefined);
+        (cachedVersion
+          ? { ...remoteExtension, version: cachedVersion }
+          : undefined);
 
       const loadCachedMock =
-        overrides?.loadCachedMock ?? jest.fn().mockResolvedValue({ raw: defaultSource });
+        overrides?.loadCachedMock ??
+        jest.fn().mockResolvedValue({ raw: defaultSource });
       const loadRemoteMock =
         overrides?.loadRemoteMock ??
         jest.fn().mockResolvedValue({
@@ -1164,7 +1320,9 @@ describe("ExtensionCatalogProvider", () => {
     it("should load from local loader", async () => {
       // Given
       const extension = ExtensionBuilder.extensionInfo({ namespace: "local" });
-      const loadExtensionMock = jest.fn().mockResolvedValue({ raw: defaultSource });
+      const loadExtensionMock = jest
+        .fn()
+        .mockResolvedValue({ raw: defaultSource });
       const loader = createLocalLoader(extension, { loadExtensionMock });
 
       // When
@@ -1194,7 +1352,9 @@ describe("ExtensionCatalogProvider", () => {
       });
 
       // When
-      const { result } = await setup({ loadersOverride: [cacheLoader, serverLoader] });
+      const { result } = await setup({
+        loadersOverride: [cacheLoader, serverLoader],
+      });
 
       // Then
       await waitFor(() => {
@@ -1214,7 +1374,7 @@ describe("ExtensionCatalogProvider", () => {
         loadCachedMock,
         cacheInstallMock,
         loadRemoteMock,
-        externalId,
+        extensionId,
         cacheLoader,
         serverLoader,
         remoteExtension,
@@ -1225,11 +1385,13 @@ describe("ExtensionCatalogProvider", () => {
       });
 
       // When
-      const { result } = await setup({ loadersOverride: [cacheLoader, serverLoader] });
+      const { result } = await setup({
+        loadersOverride: [cacheLoader, serverLoader],
+      });
 
       // Then
       await waitFor(() => {
-        expect(loadRemoteMock).toHaveBeenCalledWith(externalId);
+        expect(loadRemoteMock).toHaveBeenCalledWith(extensionId);
       });
       await waitFor(() => {
         expect(cacheInstallMock).toHaveBeenCalledWith({ foxeFileData: buffer });
@@ -1249,7 +1411,7 @@ describe("ExtensionCatalogProvider", () => {
         cacheInstallMock,
         remoteExtension,
         loadRemoteMock,
-        externalId,
+        extensionId,
         cacheLoader,
         serverLoader,
       } = setupLoaders({
@@ -1258,10 +1420,12 @@ describe("ExtensionCatalogProvider", () => {
         buffer,
       });
 
-      const { result } = await setup({ loadersOverride: [cacheLoader, serverLoader] });
+      const { result } = await setup({
+        loadersOverride: [cacheLoader, serverLoader],
+      });
 
       await waitFor(() => {
-        expect(loadRemoteMock).toHaveBeenCalledWith(externalId);
+        expect(loadRemoteMock).toHaveBeenCalledWith(extensionId);
       });
       await waitFor(() => {
         expect(cacheInstallMock).toHaveBeenCalledWith({ foxeFileData: buffer });
@@ -1278,7 +1442,7 @@ describe("ExtensionCatalogProvider", () => {
         cacheInstallMock,
         remoteExtension,
         loadRemoteMock,
-        externalId,
+        extensionId,
         cacheLoader,
         serverLoader,
       } = setupLoaders({
@@ -1287,11 +1451,13 @@ describe("ExtensionCatalogProvider", () => {
       });
 
       // when
-      const { result } = await setup({ loadersOverride: [cacheLoader, serverLoader] });
+      const { result } = await setup({
+        loadersOverride: [cacheLoader, serverLoader],
+      });
 
       // Then
       await waitFor(() => {
-        expect(loadRemoteMock).toHaveBeenCalledWith(externalId);
+        expect(loadRemoteMock).toHaveBeenCalledWith(extensionId);
       });
       await waitFor(() => {
         expect(cacheInstallMock).toHaveBeenCalledWith({ foxeFileData: buffer });
@@ -1308,24 +1474,31 @@ describe("ExtensionCatalogProvider", () => {
         resolveGetExtensions = resolve;
       });
       let shouldThrowOnPerfNow = false;
-      const performanceNowSpy = jest.spyOn(performance, "now").mockImplementation(() => {
-        if (shouldThrowOnPerfNow) {
-          shouldThrowOnPerfNow = false; // only throw once
-          throw new Error("test error");
-        }
-        return 0;
-      });
+      const performanceNowSpy = jest
+        .spyOn(performance, "now")
+        .mockImplementation(() => {
+          if (shouldThrowOnPerfNow) {
+            shouldThrowOnPerfNow = false; // only throw once
+            throw new Error("test error");
+          }
+          return 0;
+        });
       const loader = createMockLoader({
         namespace: "local",
         type: "browser",
         getExtensions: jest.fn().mockReturnValue(pendingGetExtensions),
       });
 
-      const { result } = renderHook(() => useExtensionCatalog((state) => state), {
-        wrapper: ({ children }) => (
-          <ExtensionCatalogProvider loaders={[loader]}>{children}</ExtensionCatalogProvider>
-        ),
-      });
+      const { result } = renderHook(
+        () => useExtensionCatalog((state) => state),
+        {
+          wrapper: ({ children }) => (
+            <ExtensionCatalogProvider loaders={[loader]}>
+              {children}
+            </ExtensionCatalogProvider>
+          ),
+        },
+      );
 
       // When: the getExtensions promise rejects
       shouldThrowOnPerfNow = true;

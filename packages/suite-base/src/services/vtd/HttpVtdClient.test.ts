@@ -39,7 +39,8 @@ function textResponse(
       }),
     },
     headers: {
-      get: (name: string) => name.toLowerCase() === "content-length" ? contentLength : undefined,
+      get: (name: string) =>
+        name.toLowerCase() === "content-length" ? contentLength : undefined,
     },
     ok: status >= 200 && status < 300,
     status,
@@ -103,11 +104,58 @@ describe("HttpVtdClient", () => {
       ],
       total: 9,
     });
-    expect(mockFetch).toHaveBeenCalledWith(new URL("http://sidecar.example/api/vtd/list"), {
-      body: JSON.stringify(params),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-      signal: expect.any(AbortSignal),
+    expect(mockFetch).toHaveBeenCalledWith(
+      new URL("http://sidecar.example/api/vtd/list"),
+      {
+        body: JSON.stringify(params),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+        signal: expect.any(AbortSignal),
+      },
+    );
+  });
+
+  it("normalizes numeric trigger times and nanosecond data bounds", async () => {
+    const numericStartNs = Number("1912689768838297225");
+    const numericEndNs = Number("1912689798835199400");
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        data: [
+          {
+            data_type: 2,
+            data_et: numericEndNs,
+            data_st: numericStartNs,
+            id: 842046,
+            trigger_time: 1912689788000,
+          },
+          {
+            data_et: "1912689898835199400",
+            data_st: "1912689868838297225",
+            id: "842047",
+            trigger_time: "2030-08-11T14:44:48.000Z",
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      new HttpVtdClient("http://sidecar", mockFetch).search({}),
+    ).resolves.toMatchObject({
+      records: [
+        {
+          dataEndNs: String(numericEndNs),
+          dataStartNs: String(numericStartNs),
+          dataType: "2",
+          id: "842046",
+          triggerTime: "2030-08-11T14:43:08.000Z",
+        },
+        {
+          dataEndNs: "1912689898835199400",
+          dataStartNs: "1912689868838297225",
+          id: "842047",
+          triggerTime: "2030-08-11T14:44:48.000Z",
+        },
+      ],
     });
   });
 
@@ -115,15 +163,24 @@ describe("HttpVtdClient", () => {
     mockFetch
       .mockResolvedValueOnce(jsonResponse({ id: "record-1" }))
       .mockResolvedValueOnce(jsonResponse({ topics: { "/imu": 12 } }))
-      .mockResolvedValueOnce(jsonResponse({ mcap_slice_id: "slice-1", tos: "tos://slice" }))
       .mockResolvedValueOnce(
-        jsonResponse({ download_url: "https://download/slice", mcap_slice_id: "slice-1" }),
+        jsonResponse({ mcap_slice_id: "slice-1", tos: "tos://slice" }),
       )
-      .mockResolvedValueOnce(jsonResponse({ download_url: "https://download/full" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          download_url: "https://download/slice",
+          mcap_slice_id: "slice-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ download_url: "https://download/full" }),
+      )
       .mockResolvedValueOnce(jsonResponse({ records: [], logs: [] }));
     const client = new HttpVtdClient("http://sidecar", mockFetch);
 
-    await expect(client.detail("record-1")).resolves.toEqual({ id: "record-1" });
+    await expect(client.detail("record-1")).resolves.toEqual({
+      id: "record-1",
+    });
     await expect(client.topics("record-1")).resolves.toEqual({ "/imu": 12 });
     await expect(
       client.sliceStore({
@@ -139,7 +196,9 @@ describe("HttpVtdClient", () => {
     await expect(client.url("record-1")).resolves.toEqual({
       downloadUrl: "https://download/full",
     });
-    await expect(client.trigger({ all: true, triggerId: "trigger-1" })).resolves.toEqual({
+    await expect(
+      client.trigger({ all: true, triggerId: "trigger-1" }),
+    ).resolves.toEqual({
       logs: [],
       records: [],
     });
@@ -166,6 +225,28 @@ describe("HttpVtdClient", () => {
     ]);
   });
 
+  it("omits empty or unselected topics from slice-store request bodies", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({ mcap_slice_id: "slice-all-1", tos: "tos://slice-1" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ mcap_slice_id: "slice-all-2", tos: "tos://slice-2" }),
+      );
+    const client = new HttpVtdClient("http://sidecar", mockFetch);
+
+    await client.sliceStore({ id: "record-1", topics: [] });
+    await client.sliceStore({ id: "record-2", topics: undefined });
+
+    const bodies = mockFetch.mock.calls.map(([_request, init]) => {
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected a JSON request body");
+      }
+      return JSON.parse(init.body) as unknown;
+    });
+    expect(bodies).toStrictEqual([{ id: "record-1" }, { id: "record-2" }]);
+  });
+
   it("classifies HTTP status errors with structured response data", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ error: "bad filter" }, 400));
 
@@ -190,11 +271,15 @@ describe("HttpVtdClient", () => {
       .mockResolvedValueOnce(jsonResponse({ download_url: "" }));
     const client = new HttpVtdClient("http://sidecar", mockFetch);
 
-    const network = await client.detail("record-1").catch((caught: unknown) => caught);
+    const network = await client
+      .detail("record-1")
+      .catch((caught: unknown) => caught);
     expect(network).toBeInstanceOf(VtdNetworkError);
     expect((network as Error & { cause?: unknown }).cause).toBe(networkCause);
 
-    await expect(client.detail("record-1")).rejects.toBeInstanceOf(VtdJsonError);
+    await expect(client.detail("record-1")).rejects.toBeInstanceOf(
+      VtdJsonError,
+    );
     await expect(client.url("record-1")).rejects.toBeInstanceOf(VtdSchemaError);
   });
 
@@ -227,7 +312,9 @@ describe("HttpVtdClient", () => {
           // Intentionally pending.
         }),
     );
-    const request = new HttpVtdClient("http://sidecar", mockFetch, 100).detail("record-1");
+    const request = new HttpVtdClient("http://sidecar", mockFetch, 100).detail(
+      "record-1",
+    );
     void request.catch(() => {});
 
     jest.advanceTimersByTime(100);
@@ -241,18 +328,25 @@ describe("HttpVtdClient", () => {
 
   it("validates and composes endpoints with URL semantics", () => {
     expect(() => new HttpVtdClient("", mockFetch)).toThrow("must not be empty");
-    expect(() => new HttpVtdClient("ftp://sidecar", mockFetch)).toThrow("HTTP(S)");
-    expect(() => new HttpVtdClient("https://user:secret@sidecar", mockFetch)).toThrow(
-      "without credentials",
+    expect(() => new HttpVtdClient("ftp://sidecar", mockFetch)).toThrow(
+      "HTTP(S)",
     );
-    expect(() => new HttpVtdClient("https://sidecar/api?tenant=a", mockFetch)).toThrow(
-      "without credentials",
-    );
+    expect(
+      () => new HttpVtdClient("https://user:secret@sidecar", mockFetch),
+    ).toThrow("without credentials");
+    expect(
+      () => new HttpVtdClient("https://sidecar/api?tenant=a", mockFetch),
+    ).toThrow("without credentials");
   });
 
   it("adds bearer authorization only when an auth token is configured", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ id: "record-1" }));
-    const client = new HttpVtdClient("http://sidecar", mockFetch, 30_000, "secret-token");
+    const client = new HttpVtdClient(
+      "http://sidecar",
+      mockFetch,
+      30_000,
+      "secret-token",
+    );
 
     await client.detail("record-1");
 
@@ -266,7 +360,8 @@ describe("HttpVtdClient", () => {
       }),
     );
     expect(
-      () => new HttpVtdClient("http://sidecar", mockFetch, 30_000, "bad\ntoken"),
+      () =>
+        new HttpVtdClient("http://sidecar", mockFetch, 30_000, "bad\ntoken"),
     ).toThrow("must not contain line breaks");
   });
 
@@ -289,12 +384,10 @@ describe("HttpVtdClient", () => {
   it("cancels a streaming body as soon as the cumulative limit is exceeded", async () => {
     const cancel = jest.fn().mockResolvedValue(undefined);
     const releaseLock = jest.fn();
-    const read = jest
-      .fn()
-      .mockResolvedValueOnce({
-        done: false,
-        value: { byteLength: 32 * 1024 * 1024 + 1 } as Uint8Array,
-      });
+    const read = jest.fn().mockResolvedValueOnce({
+      done: false,
+      value: { byteLength: 32 * 1024 * 1024 + 1 } as Uint8Array,
+    });
     mockFetch.mockResolvedValueOnce({
       body: { getReader: () => ({ cancel, read, releaseLock }) },
       headers: { get: () => undefined },

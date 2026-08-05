@@ -16,14 +16,7 @@
 import { Link, Typography } from "@mui/material";
 import { t } from "i18next";
 import { useSnackbar } from "notistack";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { v4 as uuidv4 } from "uuid";
 
@@ -69,6 +62,10 @@ import { TopicList } from "@lichtblick/suite-base/components/TopicList";
 import VariablesList from "@lichtblick/suite-base/components/VariablesList";
 import { WorkspaceDialogs } from "@lichtblick/suite-base/components/WorkspaceDialogs";
 import { AllowedFileExtensions } from "@lichtblick/suite-base/constants/allowedFileExtensions";
+import type {
+  VtdSliceProgress,
+  VtdSliceRequest,
+} from "@lichtblick/suite-base/context/AgentChatContext";
 import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { useAppContext } from "@lichtblick/suite-base/context/AppContext";
 import {
@@ -79,11 +76,10 @@ import {
   useCurrentUser,
   useCurrentUserType,
 } from "@lichtblick/suite-base/context/CurrentUserContext";
-import {
-  EventsStore,
-  useEvents,
-} from "@lichtblick/suite-base/context/EventsContext";
+import { EventsStore, useEvents } from "@lichtblick/suite-base/context/EventsContext";
+import { useExtensionCatalog } from "@lichtblick/suite-base/context/ExtensionCatalogContext";
 import { useLayoutManager } from "@lichtblick/suite-base/context/LayoutManagerContext";
+import { usePanelCatalog } from "@lichtblick/suite-base/context/PanelCatalogContext";
 import { usePlayerSelection } from "@lichtblick/suite-base/context/PlayerSelectionContext";
 import {
   LeftSidebarItemKey,
@@ -107,6 +103,7 @@ import AgentChatProvider from "@lichtblick/suite-base/providers/AgentChatProvide
 import { PanelStateContextProvider } from "@lichtblick/suite-base/providers/PanelStateContextProvider";
 import WorkspaceContextProvider from "@lichtblick/suite-base/providers/WorkspaceContextProvider";
 import {
+  getOrgDefaultProfile,
   selectAgentConfiguration,
   useAgentSettings,
 } from "@lichtblick/suite-base/services/agent/agentSettings";
@@ -118,6 +115,7 @@ import {
   getOrCreateConversationId,
 } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
 import { createAgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import { buildPanelInventory } from "@lichtblick/suite-base/services/agent/panelInventory";
 import { readAgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import {
   fetchAgentBootstrap,
@@ -127,11 +125,7 @@ import {
 import type { LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
 import { useAgentWorkspaceTools } from "@lichtblick/suite-base/services/agent/workspaceTools";
 import ICONS from "@lichtblick/suite-base/theme/icons";
-import {
-  InjectedSidebarItem,
-  Namespace,
-  WorkspaceProps,
-} from "@lichtblick/suite-base/types";
+import { InjectedSidebarItem, Namespace, WorkspaceProps } from "@lichtblick/suite-base/types";
 import { parseAppURLState } from "@lichtblick/suite-base/util/appURLState";
 import useBroadcast from "@lichtblick/suite-base/util/broadcast/useBroadcast";
 import isDesktopApp from "@lichtblick/suite-base/util/isDesktopApp";
@@ -145,8 +139,7 @@ import { severityToBadgeColor } from "./utils";
 
 const log = Logger.getLogger(__filename);
 
-const selectedLayoutIdSelector = (state: LayoutState) =>
-  state.selectedLayout?.id;
+const selectedLayoutIdSelector = (state: LayoutState) => state.selectedLayout?.id;
 
 function isInjectedSidebarItem(
   item: [string, { iconName?: string; title: string }],
@@ -158,8 +151,7 @@ function isInjectedSidebarItem(
   );
 }
 
-const selectPlayerPresence = ({ playerState }: MessagePipelineContext) =>
-  playerState.presence;
+const selectPlayerPresence = ({ playerState }: MessagePipelineContext) => playerState.presence;
 const selectPlayerIsPresent = ({ playerState }: MessagePipelineContext) =>
   playerState.presence !== PlayerPresence.NOT_PRESENT;
 const selectIsPlaying = (ctx: MessagePipelineContext) =>
@@ -168,34 +160,23 @@ const selectPause = (ctx: MessagePipelineContext) => ctx.pausePlayback;
 const selectPlay = (ctx: MessagePipelineContext) => ctx.startPlayback;
 const selectSeek = (ctx: MessagePipelineContext) => ctx.seekPlayback;
 const selectPlayUntil = (ctx: MessagePipelineContext) => ctx.playUntil;
-const selectPlayerId = (ctx: MessagePipelineContext) =>
-  ctx.playerState.playerId;
+const selectPlayerId = (ctx: MessagePipelineContext) => ctx.playerState.playerId;
 const selectEventsSupported = (store: EventsStore) => store.eventsSupported;
 const selectSelectEvent = (store: EventsStore) => store.selectEvent;
 
-const selectWorkspaceDataSourceDialog = (store: WorkspaceContextStore) =>
-  store.dialogs.dataSource;
-const selectWorkspaceLeftSidebarItem = (store: WorkspaceContextStore) =>
-  store.sidebars.left.item;
-const selectWorkspaceLeftSidebarOpen = (store: WorkspaceContextStore) =>
-  store.sidebars.left.open;
-const selectWorkspaceLeftSidebarSize = (store: WorkspaceContextStore) =>
-  store.sidebars.left.size;
-const selectWorkspaceRightSidebarItem = (store: WorkspaceContextStore) =>
-  store.sidebars.right.item;
-const selectWorkspaceRightSidebarOpen = (store: WorkspaceContextStore) =>
-  store.sidebars.right.open;
-const selectWorkspaceRightSidebarSize = (store: WorkspaceContextStore) =>
-  store.sidebars.right.size;
+const selectWorkspaceDataSourceDialog = (store: WorkspaceContextStore) => store.dialogs.dataSource;
+const selectWorkspaceLeftSidebarItem = (store: WorkspaceContextStore) => store.sidebars.left.item;
+const selectWorkspaceLeftSidebarOpen = (store: WorkspaceContextStore) => store.sidebars.left.open;
+const selectWorkspaceLeftSidebarSize = (store: WorkspaceContextStore) => store.sidebars.left.size;
+const selectWorkspaceRightSidebarItem = (store: WorkspaceContextStore) => store.sidebars.right.item;
+const selectWorkspaceRightSidebarOpen = (store: WorkspaceContextStore) => store.sidebars.right.open;
+const selectWorkspaceRightSidebarSize = (store: WorkspaceContextStore) => store.sidebars.right.size;
 
 type WorkspaceContentProps = WorkspaceProps & {
   agentEnabled: boolean;
 };
 
-function WorkspaceContent({
-  agentEnabled,
-  ...props
-}: WorkspaceContentProps): React.JSX.Element {
+function WorkspaceContent({ agentEnabled, ...props }: WorkspaceContentProps): React.JSX.Element {
   const { PerformanceSidebarComponent } = useAppContext();
   const { classes } = useStyles();
   const containerRef = useRef<HTMLDivElement>(ReactNull);
@@ -253,10 +234,7 @@ function WorkspaceContent({
 
   // file types we support for drag/drop
   const allowedDropExtensions = useMemo(() => {
-    const extensions: string[] = [
-      AllowedFileExtensions.FOXE,
-      AllowedFileExtensions.JSON,
-    ];
+    const extensions: string[] = [AllowedFileExtensions.FOXE, AllowedFileExtensions.JSON];
     for (const source of availableSources) {
       if (source.type === "file" && source.supportedFileTypes) {
         extensions.push(...source.supportedFileTypes);
@@ -275,9 +253,7 @@ function WorkspaceContent({
 
   useStructureItemsStoreManager();
 
-  const [enableDebugMode = false] = useAppConfigurationValue<boolean>(
-    AppSetting.SHOW_DEBUG_PANELS,
-  );
+  const [enableDebugMode = false] = useAppConfigurationValue<boolean>(AppSetting.SHOW_DEBUG_PANELS);
 
   const { currentUser, signIn } = useCurrentUser();
 
@@ -294,9 +270,7 @@ function WorkspaceContent({
   );
 
   const [initialEnableNewTopNav] = useState(currentEnableNewTopNav);
-  const enableNewTopNav = isDesktopApp()
-    ? initialEnableNewTopNav
-    : currentEnableNewTopNav;
+  const enableNewTopNav = isDesktopApp() ? initialEnableNewTopNav : currentEnableNewTopNav;
 
   const { sidebarItems: appContextSidebarItems } = useAppContext();
 
@@ -351,7 +325,7 @@ function WorkspaceContent({
         filesArray.push(...files);
       }
 
-      void handleFiles(filesArray, namespace);
+      await handleFiles(filesArray, namespace);
     },
     [handleFiles],
   );
@@ -435,10 +409,7 @@ function WorkspaceContent({
       if (supportsAccountSettings) {
         bottomItems.set("account", {
           iconName: currentUser != undefined ? "BlockheadFilled" : "Blockhead",
-          title:
-            currentUser != undefined
-              ? `Signed in as ${currentUser.email}`
-              : "Account",
+          title: currentUser != undefined ? `Signed in as ${currentUser.email}` : "Account",
           component: AccountSettings,
         });
       }
@@ -469,8 +440,7 @@ function WorkspaceContent({
   ]);
 
   const eventsSupported = useEvents(selectEventsSupported);
-  const showEventsTab =
-    currentUserType !== "unauthenticated" && eventsSupported;
+  const showEventsTab = currentUserType !== "unauthenticated" && eventsSupported;
 
   const leftSidebarItems = useMemo(() => {
     const items = new Map<LeftSidebarItemKey, SidebarItem>([
@@ -526,12 +496,7 @@ function WorkspaceContent({
       });
     }
     return items;
-  }, [
-    agentEnabled,
-    enableDebugMode,
-    showEventsTab,
-    PerformanceSidebarComponent,
-  ]);
+  }, [agentEnabled, enableDebugMode, showEventsTab, PerformanceSidebarComponent]);
 
   const keyboardEventHasModifier = (event: KeyboardEvent) =>
     navigator.userAgent.includes("Mac") ? event.metaKey : event.ctrlKey;
@@ -543,10 +508,7 @@ function WorkspaceContent({
     const { t: tAddPanel } = useTranslation("addPanel");
 
     return (
-      <SidebarContent
-        disablePadding={selectedLayoutId != undefined}
-        title={tAddPanel("addPanel")}
-      >
+      <SidebarContent disablePadding={selectedLayoutId != undefined} title={tAddPanel("addPanel")}>
         {selectedLayoutId == undefined ? (
           <Typography color="text.secondary">
             <Trans
@@ -594,12 +556,7 @@ function WorkspaceContent({
         });
       },
     };
-  }, [
-    dialogActions.dataSource,
-    dialogActions.openFile,
-    sidebarActions.left,
-    sidebarActions.right,
-  ]);
+  }, [dialogActions.dataSource, dialogActions.openFile, sidebarActions.left, sidebarActions.right]);
 
   const targetUrlState = useMemo(() => {
     const deepLinks = props.deepLinks ?? [];
@@ -696,9 +653,7 @@ function WorkspaceContent({
       try {
         const response = await fetch(layoutUrl);
         if (!response.ok) {
-          log.error(
-            `Failed to fetch layout: ${safeUrlLabel} (status ${response.status})`,
-          );
+          log.error(`Failed to fetch layout: ${safeUrlLabel} (status ${response.status})`);
           enqueueSnackbar(`Failed to load layout (HTTP ${response.status})`, {
             variant: "error",
           });
@@ -708,18 +663,13 @@ function WorkspaceContent({
         // Derive filename from sanitized pathname (no credentials in name)
         const rawFilename = parsedUrl.pathname.split("/").pop();
         const filename =
-          rawFilename != undefined && rawFilename !== ""
-            ? rawFilename
-            : "layout.json";
+          rawFilename != undefined && rawFilename !== "" ? rawFilename : "layout.json";
         const dotIndex = filename.lastIndexOf(".");
-        const layoutName =
-          dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
+        const layoutName = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
 
         // Find existing layouts with the same name before saving (safe deduplication)
         const existingLayouts = await layoutManager.getLayouts();
-        const matchingLayouts = existingLayouts.filter(
-          (layout) => layout.name === layoutName,
-        );
+        const matchingLayouts = existingLayouts.filter((layout) => layout.name === layoutName);
 
         // Delegate JSON parsing, saving, and selection to parseAndInstallLayout
         const text = await response.text();
@@ -761,11 +711,9 @@ function WorkspaceContent({
     }
     // Apply any available layout URL
     if (unappliedSourceArgs.layoutUrl) {
-      fetchLayoutFromUrl(unappliedSourceArgs.layoutUrl).catch(
-        (error: unknown) => {
-          log.error("Failed to fetch layout from URL", error);
-        },
-      );
+      fetchLayoutFromUrl(unappliedSourceArgs.layoutUrl).catch((error: unknown) => {
+        log.error("Failed to fetch layout from URL", error);
+      });
       shouldUpdate = true;
     }
     if (shouldUpdate) {
@@ -775,13 +723,7 @@ function WorkspaceContent({
         layoutUrl: undefined,
       });
     }
-  }, [
-    fetchLayoutFromUrl,
-    selectEvent,
-    selectSource,
-    unappliedSourceArgs,
-    setUnappliedSourceArgs,
-  ]);
+  }, [fetchLayoutFromUrl, selectEvent, selectSource, unappliedSourceArgs, setUnappliedSourceArgs]);
 
   const [unappliedTime, setUnappliedTime] = useState(
     targetUrlState ? { time: targetUrlState.time } : undefined,
@@ -842,10 +784,7 @@ function WorkspaceContent({
   return (
     <PanelStateContextProvider>
       {dataSourceDialog.open && <DataSourceDialog />}
-      <DocumentDropListener
-        onDrop={dropHandler}
-        allowedExtensions={allowedDropExtensions}
-      />
+      <DocumentDropListener onDrop={dropHandler} allowedExtensions={allowedDropExtensions} />
       <SyncAdapters />
       <KeyListener global keyDownHandlers={keyDownHandlers} />
       <div className={classes.container} ref={containerRef} tabIndex={0}>
@@ -903,6 +842,17 @@ function ConfiguredAgentWorkspaceIntegration({
 }: AgentWorkspaceIntegrationProps & {
   desktop: boolean;
 }): React.JSX.Element {
+  const panelCatalog = usePanelCatalog();
+  const installedExtensions = useExtensionCatalog((state) => state.installedExtensions);
+  const panelInventory = useMemo(
+    () => buildPanelInventory(panelCatalog.getPanels(), installedExtensions ?? []),
+    [installedExtensions, panelCatalog],
+  );
+  const panelInventoryRef = useRef(panelInventory);
+  useLayoutEffect(() => {
+    panelInventoryRef.current = panelInventory;
+  }, [panelInventory]);
+  const getPanelInventory = useCallback(() => panelInventoryRef.current, []);
   const workspaceTools = useAgentWorkspaceTools();
   const workspaceToolsRef = useRef(workspaceTools);
   useLayoutEffect(() => {
@@ -919,7 +869,47 @@ function ConfiguredAgentWorkspaceIntegration({
 
   const appConfiguration = useAppConfiguration();
   const { migrationReady, snapshot } = useAgentSettings(appConfiguration, { desktop });
-  const configuration = selectAgentConfiguration(snapshot, { desktop });
+  const orgDefaultProfile = getOrgDefaultProfile();
+  const [selectedProfileId, setSelectedProfileId] = useState(snapshot.activeProfileId);
+  const selectedProfileAvailable =
+    selectedProfileId === orgDefaultProfile?.id ||
+    snapshot.profiles.some((profile) => profile.id === selectedProfileId);
+  const effectiveSelectedProfileId = selectedProfileAvailable
+    ? selectedProfileId
+    : snapshot.activeProfileId;
+  useEffect(() => {
+    if (!selectedProfileAvailable) {
+      setSelectedProfileId(snapshot.activeProfileId);
+    }
+  }, [selectedProfileAvailable, snapshot.activeProfileId]);
+  const profileOptions = useMemo(
+    () => [
+      ...snapshot.profiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        isActive: profile.id === snapshot.activeProfileId,
+        isOrgDefault: false,
+      })),
+      ...(orgDefaultProfile == undefined
+        ? []
+        : [
+            {
+              id: orgDefaultProfile.id,
+              name: orgDefaultProfile.name,
+              isActive: false,
+              isOrgDefault: true,
+            },
+          ]),
+    ],
+    [orgDefaultProfile, snapshot.activeProfileId, snapshot.profiles],
+  );
+  const selectedProfileName = profileOptions.find(
+    (profile) => profile.id === effectiveSelectedProfileId,
+  )?.name;
+  const configuration = selectAgentConfiguration(snapshot, {
+    desktop,
+    profileId: effectiveSelectedProfileId,
+  });
   const resolvedWorkspace = resolveWorkspace(appConfiguration);
   const vizServerWorkspace = resolveVizServerConfigured(resolvedWorkspace)
     ? resolvedWorkspace
@@ -988,29 +978,89 @@ function ConfiguredAgentWorkspaceIntegration({
       clearInterval(interval);
     };
   }, [vizServerWorkspace]);
-  const restoreHistory = useMemo(() => persistence.restoreLlmHistory, [persistence]);
-  const onHistoryChanged = useMemo(() => persistence.onLlmHistoryChanged, [persistence]);
-  const agentClient = useLocalAgentClient(
-    configuration,
-    {
-      enabled: agentEnabled && migrationReady && !snapshot.storageError,
-      getCatalog,
-      getCurrentLayout,
-      memoryStore,
-      onHistoryChanged,
-      restoreHistory,
-      getPromptCustomization,
-    },
-  );
+  const restoreHistory = useMemo(() => persistence.restorePiLlmHistory, [persistence]);
+  const onHistoryChanged = useMemo(() => persistence.onPiLlmHistoryChanged, [persistence]);
+  const agentClient = useLocalAgentClient(configuration, {
+    enabled: agentEnabled && migrationReady && !snapshot.storageError,
+    getCatalog,
+    getCurrentLayout,
+    getPanelInventory,
+    memoryStore,
+    onHistoryChanged,
+    profileId: effectiveSelectedProfileId,
+    restoreHistory,
+    getPromptCustomization,
+  });
   const configuredAgentEnabled = agentEnabled && agentClient != undefined;
+  const onLoadVtdRecord = useCallback(
+    async (id: string) => {
+      if (agentClient == undefined) {
+        throw new Error("VTD client is unavailable");
+      }
+      const { downloadUrl } = await agentClient.getVtdClient().url(id);
+      workspaceToolsRef.current.openDataSource([downloadUrl]);
+    },
+    [agentClient],
+  );
+  const pendingVtdSlices = useMemo(
+    () => ({
+      owner: agentClient,
+      values: new Map<string, { requestKey: string; sliceId: string }>(),
+    }),
+    [agentClient],
+  );
+  const onGetVtdTopics = useCallback(
+    async (id: string) => {
+      if (agentClient == undefined) {
+        throw new Error("VTD client is unavailable");
+      }
+      return await agentClient.getVtdClient().topics(id);
+    },
+    [agentClient],
+  );
+  const onSliceVtdRecord = useCallback(
+    async (params: VtdSliceRequest, onProgress?: (progress: VtdSliceProgress) => void) => {
+      if (agentClient == undefined) {
+        throw new Error("VTD client is unavailable");
+      }
+      const vtdClient = agentClient.getVtdClient();
+      const requestKey = JSON.stringify([params.id, params.topics, params.startNs, params.endNs]);
+      if (requestKey == undefined) {
+        throw new Error("Unable to identify the VTD slice request");
+      }
+      const cachedSlice = pendingVtdSlices.values.get(params.id);
+      let sliceId = cachedSlice?.requestKey === requestKey ? cachedSlice.sliceId : undefined;
+      if (sliceId == undefined) {
+        onProgress?.("slicing");
+        const { mcapSliceId } = await vtdClient.sliceStore(params);
+        sliceId = mcapSliceId;
+        pendingVtdSlices.values.set(params.id, { requestKey, sliceId });
+      }
+
+      onProgress?.("loading");
+      const { downloadUrl } = await vtdClient.sliceGet(sliceId);
+      workspaceToolsRef.current.openDataSource([downloadUrl]);
+      if (pendingVtdSlices.values.get(params.id)?.sliceId === sliceId) {
+        pendingVtdSlices.values.delete(params.id);
+      }
+    },
+    [agentClient, pendingVtdSlices],
+  );
 
   return (
     <AgentChatProvider
       client={agentClient}
       enabled={configuredAgentEnabled}
       onApplyProposal={onApplyProposal}
+      onGetVtdTopics={onGetVtdTopics}
+      onLoadVtdRecord={onLoadVtdRecord}
       onOpenDataSource={onOpenDataSource}
+      onSliceVtdRecord={onSliceVtdRecord}
+      onSelectProfile={setSelectedProfileId}
       persistence={persistence}
+      profileOptions={profileOptions}
+      selectedProfileId={effectiveSelectedProfileId}
+      selectedProfileName={selectedProfileName}
     >
       <AgentCatalogWatcher />
       {children}
@@ -1018,9 +1068,7 @@ function ConfiguredAgentWorkspaceIntegration({
   );
 }
 
-function WebAgentWorkspaceIntegration(
-  props: AgentWorkspaceIntegrationProps,
-): React.JSX.Element {
+function WebAgentWorkspaceIntegration(props: AgentWorkspaceIntegrationProps): React.JSX.Element {
   return <ConfiguredAgentWorkspaceIntegration {...props} desktop={false} />;
 }
 
@@ -1035,9 +1083,7 @@ export function AgentWorkspaceIntegration(
 }
 
 export default function Workspace(props: WorkspaceProps): React.JSX.Element {
-  const [agentEnabled = false] = useAppConfigurationValue<boolean>(
-    AppSetting.AGENT_ENABLED,
-  );
+  const [agentEnabled = false] = useAppConfigurationValue<boolean>(AppSetting.AGENT_ENABLED);
   const [showOpenDialogOnStartup = true] = useAppConfigurationValue<boolean>(
     AppSetting.SHOW_OPEN_DIALOG_ON_STARTUP,
   );
@@ -1070,9 +1116,7 @@ export default function Workspace(props: WorkspaceProps): React.JSX.Element {
       workspaceStoreCreator={workspaceStoreCreator}
       disablePersistenceForStorybook={props.disablePersistenceForStorybook}
     >
-      <AgentWorkspaceIntegration agentEnabled={agentEnabled}>
-        {content}
-      </AgentWorkspaceIntegration>
+      <AgentWorkspaceIntegration agentEnabled={agentEnabled}>{content}</AgentWorkspaceIntegration>
     </WorkspaceContextProvider>
   );
 }

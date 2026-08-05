@@ -137,8 +137,9 @@ export class HttpService {
     params: Record<string, string> = {},
     options: HttpRequestOptions = {},
   ): Promise<HttpResponse<T>> {
-    const queryString = new URLSearchParams(params);
-    return await this.request<T>(`${endpoint}?${queryString.toString()}`, {
+    const queryString = new URLSearchParams(params).toString();
+    const url = queryString ? `${endpoint}?${queryString}` : endpoint;
+    return await this.request<T>(url, {
       method: "GET",
       ...options,
     });

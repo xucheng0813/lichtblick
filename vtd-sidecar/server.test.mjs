@@ -3,7 +3,10 @@
 
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
@@ -108,7 +111,8 @@ function sendRequest(
   },
 ) {
   return new Promise((resolve, reject) => {
-    const payload = rawBody ?? (body == null ? undefined : JSON.stringify(body));
+    const payload =
+      rawBody ?? (body == null ? undefined : JSON.stringify(body));
     const requestHeaders = { ...headers };
     if (payload != null) {
       requestHeaders["Content-Length"] = Buffer.byteLength(payload);
@@ -174,6 +178,261 @@ async function waitFor(predicate, timeoutMs = 500) {
     });
   }
 }
+
+async function createStaticFixture() {
+  const directory = await mkdtemp(join(tmpdir(), "vtd-sidecar-static-"));
+  const root = join(directory, "public");
+  await mkdir(root);
+  await writeFile(
+    join(root, "index.html"),
+    "<!doctype html><script>globalThis.layout=[/*LICHTBLICK_SUITE_DEFAULT_LAYOUT_PLACEHOLDER*/][0]</script>",
+  );
+  await writeFile(join(root, "app.js"), 'console.log("static app");');
+  await writeFile(join(root, "payload.bin"), Buffer.from([0, 1, 2, 3]));
+  await writeFile(join(directory, "outside-secret.txt"), "must-not-leak");
+  return {
+    directory,
+    root,
+    cleanup: async () => {
+      await rm(directory, { force: true, recursive: true });
+    },
+  };
+}
+
+test("keeps pure API behavior when STATIC_ROOT is not configured", async () => {
+  const spawnCalls = [];
+  const server = createVtdSidecarServer({
+    staticRoot: "",
+    spawnImpl: (...args) => {
+      spawnCalls.push(args);
+      return createMockChild({ stdout: '{"data":[]}' });
+    },
+  });
+  const port = await listen(server);
+
+  try {
+    const staticResponse = await sendRequest(port, {
+      method: "GET",
+      path: "/index.html",
+    });
+    assert.equal(staticResponse.statusCode, 404);
+
+    const apiResponse = await sendRequest(port, {
+      body: {},
+      path: "/vtd/list",
+    });
+    assert.equal(apiResponse.statusCode, 200);
+    assert.equal(apiResponse.body, '{"data":[]}');
+    assert.equal(spawnCalls.length, 1);
+  } finally {
+    await close(server);
+  }
+});
+
+test("serves static GET and HEAD responses with safe content types", async () => {
+  const fixture = await createStaticFixture();
+  const server = createVtdSidecarServer({
+    staticRoot: fixture.root,
+    spawnImpl: () => createMockChild(),
+  });
+  const port = await listen(server);
+
+  try {
+    const javascript = await sendRequest(port, {
+      method: "GET",
+      path: "/app.js",
+    });
+    assert.equal(javascript.statusCode, 200);
+    assert.equal(javascript.body, 'console.log("static app");');
+    assert.equal(
+      javascript.headers["content-type"],
+      "text/javascript; charset=utf-8",
+    );
+    assert.equal(javascript.headers["x-content-type-options"], "nosniff");
+
+    const head = await sendRequest(port, {
+      method: "HEAD",
+      path: "/payload.bin",
+    });
+    assert.equal(head.statusCode, 200);
+    assert.equal(head.body, "");
+    assert.equal(head.headers["content-length"], "4");
+    assert.equal(head.headers["content-type"], "application/octet-stream");
+  } finally {
+    await close(server);
+    await fixture.cleanup();
+  }
+});
+
+test("falls back to the cached index only for HTML navigation", async () => {
+  const fixture = await createStaticFixture();
+  const server = createVtdSidecarServer({
+    staticRoot: fixture.root,
+    spawnImpl: () => createMockChild(),
+  });
+  const port = await listen(server);
+
+  try {
+    const navigation = await sendRequest(port, {
+      headers: { Accept: "text/html,application/xhtml+xml" },
+      method: "GET",
+      path: "/settings/agent",
+    });
+    assert.equal(navigation.statusCode, 200);
+    assert.match(navigation.body, /<!doctype html>/);
+    assert.equal(
+      navigation.headers["content-type"],
+      "text/html; charset=utf-8",
+    );
+
+    const assetMiss = await sendRequest(port, {
+      headers: { Accept: "application/json" },
+      method: "GET",
+      path: "/missing.json",
+    });
+    assert.equal(assetMiss.statusCode, 404);
+  } finally {
+    await close(server);
+    await fixture.cleanup();
+  }
+});
+
+test("keeps vtd routes ahead of static fallback", async () => {
+  const fixture = await createStaticFixture();
+  const spawnCalls = [];
+  const server = createVtdSidecarServer({
+    staticRoot: fixture.root,
+    spawnImpl: (...args) => {
+      spawnCalls.push(args);
+      return createMockChild({ stdout: '{"data":["record-1"]}' });
+    },
+  });
+  const port = await listen(server);
+
+  try {
+    const apiResponse = await sendRequest(port, {
+      body: {},
+      path: "/vtd/list",
+    });
+    assert.equal(apiResponse.statusCode, 200);
+    assert.equal(apiResponse.body, '{"data":["record-1"]}');
+    assert.equal(spawnCalls.length, 1);
+
+    const apiGet = await sendRequest(port, {
+      headers: { Accept: "text/html" },
+      method: "GET",
+      path: "/vtd/list",
+    });
+    assert.equal(apiGet.statusCode, 405);
+    assert.doesNotMatch(apiGet.body, /<!doctype html>/);
+  } finally {
+    await close(server);
+    await fixture.cleanup();
+  }
+});
+
+test("rejects traversal, NUL, and backslash static paths without exposing outside files", async () => {
+  const fixture = await createStaticFixture();
+  const server = createVtdSidecarServer({
+    staticRoot: fixture.root,
+    spawnImpl: () => createMockChild(),
+  });
+  const port = await listen(server);
+
+  try {
+    for (const path of [
+      "/%2e%2e/outside-secret.txt",
+      "/..%2Foutside-secret.txt",
+      "/assets%5C..%5Coutside-secret.txt",
+      "/%00",
+    ]) {
+      const response = await sendRequest(port, { method: "GET", path });
+      assert.ok([400, 404].includes(response.statusCode));
+      assert.doesNotMatch(response.body, /must-not-leak/);
+    }
+  } finally {
+    await close(server);
+    await fixture.cleanup();
+  }
+});
+
+test("injects the default layout into index.html once and caches the result", async () => {
+  const fixture = await createStaticFixture();
+  const defaultLayout = '{"id":"layout-1","name":"$&"}';
+  const server = createVtdSidecarServer({
+    defaultLayout,
+    staticRoot: fixture.root,
+    spawnImpl: () => createMockChild(),
+  });
+  await writeFile(join(fixture.root, "index.html"), "changed after startup");
+  const port = await listen(server);
+
+  try {
+    const direct = await sendRequest(port, {
+      method: "GET",
+      path: "/index.html",
+    });
+    assert.equal(direct.statusCode, 200);
+    assert.match(
+      direct.body,
+      /globalThis\.layout=\[\{"id":"layout-1","name":"\$&"\}\]\[0\]/,
+    );
+    assert.doesNotMatch(direct.body, /PLACEHOLDER|changed after startup/);
+
+    const fallback = await sendRequest(port, {
+      headers: { Accept: "text/html" },
+      method: "GET",
+      path: "/nested/route",
+    });
+    assert.equal(fallback.body, direct.body);
+  } finally {
+    await close(server);
+    await fixture.cleanup();
+  }
+});
+
+test("serializes and escapes the default layout before inline-script injection", async () => {
+  const fixture = await createStaticFixture();
+  const defaultLayout = JSON.stringify({
+    name: "</script><script>globalThis.pwned=true</script>",
+    separator: "\u2028",
+  });
+  const server = createVtdSidecarServer({
+    defaultLayout,
+    staticRoot: fixture.root,
+    spawnImpl: () => createMockChild(),
+  });
+  const port = await listen(server);
+
+  try {
+    const response = await sendRequest(port, { method: "GET", path: "/index.html" });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body.match(/<\/script>/giu)?.length, 1);
+    assert.doesNotMatch(response.body, /<\/script><script>/iu);
+    assert.match(response.body, /\\u003c\/script>\\u003cscript>/u);
+    assert.equal(response.body.includes("\u2028"), false);
+    assert.match(response.body, /\\u2028/u);
+  } finally {
+    await close(server);
+    await fixture.cleanup();
+  }
+});
+
+test("rejects an invalid default layout instead of injecting raw text", async () => {
+  const fixture = await createStaticFixture();
+  try {
+    assert.throws(
+      () =>
+        createVtdSidecarServer({
+          defaultLayout: "</script><script>globalThis.pwned=true</script>",
+          staticRoot: fixture.root,
+        }),
+      /LICHTBLICK_SUITE_DEFAULT_LAYOUT must contain valid JSON/u,
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
 test("rejects unknown and prototype-chain command names", async () => {
   const spawnCalls = [];
@@ -246,6 +505,78 @@ test("maps values as --flag=value argv entries and preserves stdout JSON", async
         { shell: false },
       ],
     ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("accepts topic names without a leading slash and rejects commas", async () => {
+  const spawnCalls = [];
+  const server = createVtdSidecarServer({
+    spawnImpl: (...args) => {
+      spawnCalls.push(args);
+      return createMockChild({ stdout: '{"mcap_slice_id":"slice-2"}' });
+    },
+  });
+  const port = await listen(server);
+
+  try {
+    // Real recordings contain topics like "aorta/..." and "collectd/..." with
+    // no leading slash; the sidecar must pass them through untouched.
+    const ok = await sendRequest(port, {
+      body: {
+        id: "1234",
+        topics: ["aorta/default/ctx/system/beta_mode", "/imu"],
+      },
+      path: "/vtd/slice-store",
+    });
+    assert.equal(ok.statusCode, 200);
+    assert.ok(
+      spawnCalls[0][1].includes(
+        "--topics=aorta/default/ctx/system/beta_mode,/imu",
+      ),
+    );
+
+    // A comma would corrupt the joined --topics CLI argument.
+    const bad = await sendRequest(port, {
+      body: { id: "1234", topics: ["/imu,extra"] },
+      path: "/vtd/slice-store",
+    });
+    assert.equal(bad.statusCode, 400);
+  } finally {
+    await close(server);
+  }
+});
+
+test("treats an empty slice topics array the same as an omitted topics field", async () => {
+  const spawnCalls = [];
+  const server = createVtdSidecarServer({
+    spawnImpl: (...args) => {
+      spawnCalls.push(args);
+      return createMockChild({ stdout: '{"mcap_slice_id":"slice-all"}' });
+    },
+  });
+  const port = await listen(server);
+
+  try {
+    const omitted = await sendRequest(port, {
+      body: { id: "1234" },
+      path: "/vtd/slice-store",
+    });
+    const empty = await sendRequest(port, {
+      body: { id: "1234", topics: [] },
+      path: "/vtd/slice-store",
+    });
+
+    assert.equal(omitted.statusCode, 200);
+    assert.equal(empty.statusCode, 200);
+    assert.deepEqual(
+      spawnCalls.map(([_command, args]) => args),
+      [
+        ["slice-store", "1234", "--json"],
+        ["slice-store", "1234", "--json"],
+      ],
+    );
   } finally {
     await close(server);
   }
@@ -571,9 +902,18 @@ test("defaults to no CORS headers and supports explicit preflight configuration"
       path: "/vtd/list",
     });
     assert.equal(response.statusCode, 204);
-    assert.equal(response.headers["access-control-allow-origin"], "https://lichtblick.example");
-    assert.equal(response.headers["access-control-allow-methods"], "POST, OPTIONS");
-    assert.equal(response.headers["access-control-allow-headers"], "Content-Type, Authorization");
+    assert.equal(
+      response.headers["access-control-allow-origin"],
+      "https://lichtblick.example",
+    );
+    assert.equal(
+      response.headers["access-control-allow-methods"],
+      "POST, OPTIONS",
+    );
+    assert.equal(
+      response.headers["access-control-allow-headers"],
+      "Content-Type, Authorization",
+    );
 
     const rejected = await sendRequest(corsPort, {
       body: {},
@@ -892,7 +1232,10 @@ test("redacts credentials, request suffixes, TOS paths, and control characters f
     const output = logged.join("\n");
     assert.match(output, /Bearer \[REDACTED\]/);
     assert.match(output, /file\.mcap\?\[REDACTED\]/);
-    assert.match(output, /https:\/\/\[REDACTED\]@internal\.example\/path\?\[REDACTED\]/);
+    assert.match(
+      output,
+      /https:\/\/\[REDACTED\]@internal\.example\/path\?\[REDACTED\]/,
+    );
     assert.match(output, /tos:\/\/\[REDACTED\]/);
     assert.doesNotMatch(
       output,

@@ -62,6 +62,7 @@ jest.mock("@lichtblick/suite-base/panels/Plot/hooks/useGlobalSync");
 jest.mock("@lichtblick/suite-base/panels/Plot/hooks/usePanning");
 jest.mock("@lichtblick/suite-base/panels/Plot/hooks/useSubscriptions");
 jest.mock("@lichtblick/suite-base/panels/Plot/hooks/usePlotPanelSettings");
+jest.mock("@lichtblick/suite-base/panels/Plot/hooks/useAutoSeedPlotPaths");
 jest.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string) => key,

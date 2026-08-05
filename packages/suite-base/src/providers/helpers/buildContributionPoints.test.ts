@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
-import { TopicAliasFunction, ExtensionPanelRegistration, PanelSettings } from "@lichtblick/suite";
+import {
+  TopicAliasFunction,
+  ExtensionPanelRegistration,
+  PanelSettings,
+} from "@lichtblick/suite";
 import ExtensionBuilder from "@lichtblick/suite-base/testing/builders/ExtensionBuilder";
 import { InstalledMessageConverter } from "@lichtblick/suite-base/types/messageConverters";
 import { BasicBuilder } from "@lichtblick/test-builders";
@@ -14,7 +18,9 @@ describe("buildContributionPoints", () => {
   });
 
   it("should initialize contribution objects", () => {
-    const consoleErrorMock = jest.spyOn(console, "error").mockImplementation(() => {});
+    const consoleErrorMock = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
     const extensionInfo = ExtensionBuilder.extensionInfo();
 
     const result = buildContributionPoints(extensionInfo, "");
@@ -61,8 +67,46 @@ describe("buildContributionPoints", () => {
     delete (globalThis as any).panel;
   });
 
+  it("attaches matching package metadata and extension fallback text to a panel", () => {
+    const panelName = "Camera";
+    const extensionInfo = ExtensionBuilder.extensionInfo({
+      description: "Acme visualization panels.",
+      panelsMeta: {
+        [panelName]: {
+          description: "Shows camera images.",
+          schemas: ["sensor_msgs/Image"],
+        },
+      },
+    });
+    const registration: ExtensionPanelRegistration = {
+      name: panelName,
+      initPanel: jest.fn(),
+    };
+    (globalThis as any).panel = registration;
+    const extensionSource = `
+      module.exports = {
+        activate: (ctx) => ctx.registerPanel(globalThis.panel)
+      };
+    `;
+
+    const result = buildContributionPoints(extensionInfo, extensionSource);
+    const registered =
+      result.panels[`${extensionInfo.qualifiedName}.${panelName}`];
+
+    expect(registered).toMatchObject({
+      extensionDescription: "Acme visualization panels.",
+      meta: {
+        description: "Shows camera images.",
+        schemas: ["sensor_msgs/Image"],
+      },
+    });
+    delete (globalThis as any).panel;
+  });
+
   it("should warn when trying to register a duplicate panel", () => {
-    const logWarnMock = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const logWarnMock = jest
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
     const extensionInfo = ExtensionBuilder.extensionInfo();
     const panelName = BasicBuilder.string();
     const panelId = `${extensionInfo.qualifiedName}.${panelName}`;
@@ -159,14 +203,18 @@ describe("buildContributionPoints", () => {
     expect(Object.keys(result.panelSettings)).toHaveLength(2);
     expect(result.messageConverters).toHaveLength(1);
     expect(result.messageConverters[0]?.extensionId).toEqual(extensionInfo.id);
-    expect(result.panelSettings.panelSettingsA).toHaveProperty(messageConverter.fromSchemaName);
-    expect(result.panelSettings.panelSettingsA![messageConverter.fromSchemaName]).toEqual(
-      panelSettingsA,
+    expect(result.panelSettings.panelSettingsA).toHaveProperty(
+      messageConverter.fromSchemaName,
     );
-    expect(result.panelSettings.panelSettingsB).toHaveProperty(messageConverter.fromSchemaName);
-    expect(result.panelSettings.panelSettingsB![messageConverter.fromSchemaName]).toEqual(
-      panelSettingsB,
+    expect(
+      result.panelSettings.panelSettingsA![messageConverter.fromSchemaName],
+    ).toEqual(panelSettingsA);
+    expect(result.panelSettings.panelSettingsB).toHaveProperty(
+      messageConverter.fromSchemaName,
     );
+    expect(
+      result.panelSettings.panelSettingsB![messageConverter.fromSchemaName],
+    ).toEqual(panelSettingsB);
     delete (globalThis as any).messageConverter;
   });
 

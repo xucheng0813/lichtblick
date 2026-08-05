@@ -1,6 +1,10 @@
 *.log
 *.tsbuildinfo
 .DS_Store
+.env
+.env.*
+!.env.example
+.git
 .webpack/
 .caddy-certs/
 .caddy-data/

@@ -51,18 +51,47 @@ Two different clocks, and choosing the wrong one is a common mistake:
 - **Trigger time** — when the event fired: \`start\`, \`end\`, \`at\`, \`triggerTime\`.
 - **Data coverage** — the span the recording covers: \`queryStart\`, \`queryEnd\`, \`queryTime\`.
 
-Use \`queryTime\` for "what was recorded at 14:30" and \`at\` for "what triggered around 14:30".
-\`at\` is a ±5 second shortcut and overrides \`start\`/\`end\`. \`dataDay\` filters by recording day as
-\`YYYYMMDD\`.
+Choose the clock from what the user means, not merely from the presence of a timestamp:
+
+- For "data at a particular time", "data during this interval", "the N seconds before and after",
+  or "what happened during this period", use \`queryStart\`/\`queryEnd\`. These questions ask which
+  recordings' data coverage overlaps the requested interval. Never use \`start\`/\`end\` for them.
+- For "what triggered at this time" or "which trigger events fired during this interval", use
+  \`start\`/\`end\` or \`at\`. These questions explicitly ask about trigger time.
+
+Use \`queryTime\` for a single instant such as "what was recorded at 14:30" and \`at\` for "what
+triggered around 14:30". \`at\` is a ±5 second shortcut and overrides \`start\`/\`end\`. \`dataDay\`
+filters by recording day as \`YYYYMMDD\`.
+
+Verified counterexample: for bot \`8010006CHQ26FAA0212\` and local window
+\`2026-08-04 15:58:50\`–\`16:00:50\`, \`start\`/\`end\` returned 0 records. The correct
+\`queryStart\`/\`queryEnd\` search returned 6 records whose nanosecond \`data_st\`/\`data_et\`
+coverage overlapped the window: \`wokeup_sound_detected\`, \`app_report_abnormal\`, \`teleop\`,
+\`avatar_teleop\`, \`avatar\`, and \`bms\`.
 
 Accepted time formats: \`"2026-07-27 15:04:05"\`, \`"2026-07-27"\`, \`"2026/07/27 15:04:05"\`,
 RFC 3339, or a bare integer timestamp (unit inferred from digit count).
+
+For relative dates such as "yesterday", "today", or "last week" (including "昨天", "今天", and
+"上周"), use the current time and browser timezone from the system prompt to resolve an absolute
+local date range first. Pass
+\`YYYY-MM-DD HH:MM:SS\` local-time values to \`start\`, \`end\`, or \`at\`, and derive \`dataDay\` as
+\`YYYYMMDD\` from that local date. Never pass relative-date words directly to a tool.
 
 ### Paging and ordering
 
 \`page\` from 1, \`pageSize\` up to 100. \`orderBy\` names a field; \`orderDir\` is \`"ASC"\` or
 \`"DESC"\`. Start with a small \`pageSize\` while narrowing, and report the total so the user knows
 how much was matched.
+
+## Reporting search results
+
+Search results are presented to the user automatically in an interactive list card, with paging,
+sorting, loading, and slicing handled inside the card. Never enumerate matching records one by one
+in your reply. Instead, keep the textual summary brief — 1-3 sentences covering the total number
+of matches, the time span they cover, the dominant trigger types or bot distribution, and any
+notable anomalies worth flagging. Expand a record's details only when the user asks about that
+specific record.
 
 ## Reading results
 

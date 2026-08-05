@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import "@testing-library/jest-dom";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { useContext, useEffect, useState } from "react";
 
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
@@ -14,6 +14,7 @@ import {
 } from "@lichtblick/suite-base/components/MessagePipeline";
 import Sidebars from "@lichtblick/suite-base/components/Sidebars";
 import { SidebarItem } from "@lichtblick/suite-base/components/Sidebars/types";
+import type { AgentChatProfileOption } from "@lichtblick/suite-base/context/AgentChatContext";
 import { useAppContext } from "@lichtblick/suite-base/context/AppContext";
 import {
   useCurrentUser,
@@ -32,6 +33,10 @@ import useAlertCount from "@lichtblick/suite-base/hooks/useAlertCount";
 import { useHandleFiles } from "@lichtblick/suite-base/hooks/useHandleFiles";
 import { useLayoutTransfer } from "@lichtblick/suite-base/hooks/useLayoutTransfer";
 import { PlayerPresence } from "@lichtblick/suite-base/players/types";
+import {
+  type AgentProfile,
+  selectAgentConfiguration,
+} from "@lichtblick/suite-base/services/agent/agentSettings";
 import { parseAppURLState } from "@lichtblick/suite-base/util/appURLState";
 
 import Workspace from "./Workspace";
@@ -58,29 +63,74 @@ const mockAppConfiguration = {
   removeChangeListener: jest.fn(),
   set: jest.fn().mockResolvedValue(undefined),
 };
+const mockPanelCatalog = {
+  getPanels: jest.fn().mockReturnValue([]),
+};
+const mockDefaultAgentProfile: AgentProfile = {
+  anthropic: { apiKey: "", baseUrl: "", model: "claude-test" },
+  id: "default",
+  name: "Default",
+  openAiCompatible: { apiKey: "", baseUrl: "", model: "" },
+  provider: "anthropic",
+};
+let mockAgentProfiles: AgentProfile[] = [mockDefaultAgentProfile];
+let mockActiveAgentProfileId = "default";
+
+function resetMockAgentProfiles(): void {
+  mockAgentProfiles = [mockDefaultAgentProfile];
+  mockActiveAgentProfileId = "default";
+}
+
 jest.mock("@lichtblick/suite-base/context/AppConfigurationContext", () => ({
   ...jest.requireActual("@lichtblick/suite-base/context/AppConfigurationContext"),
   useAppConfiguration: () => mockAppConfiguration,
 }));
+jest.mock("@lichtblick/suite-base/context/ExtensionCatalogContext", () => ({
+  useExtensionCatalog: (selector: (state: { installedExtensions: [] }) => unknown) =>
+    selector({ installedExtensions: [] }),
+}));
+jest.mock("@lichtblick/suite-base/context/PanelCatalogContext", () => ({
+  usePanelCatalog: () => mockPanelCatalog,
+}));
 jest.mock("@lichtblick/suite-base/services/agent/agentSettings", () => {
-  const actual = jest.requireActual("@lichtblick/suite-base/services/agent/agentSettings");
+  const actual = jest.requireActual<
+    typeof import("@lichtblick/suite-base/services/agent/agentSettings")
+  >("@lichtblick/suite-base/services/agent/agentSettings");
   return {
     ...actual,
+    selectAgentConfiguration: jest.fn(actual.selectAgentConfiguration),
     useAgentSettings: () => ({
       migrationReady: true,
-      snapshot: {
-        anthropic: {
-          apiKey: localStorage.getItem("lichtblick.agent.anthropic.apiKey") ?? "",
-          baseUrl: "",
-          model: "claude-test",
-        },
-        openAiCompatible: { apiKey: "", baseUrl: "", model: "" },
-        provider: "anthropic",
-        revision: "",
-        storageError: false,
-        vtdAuthToken: "",
-        vtdEndpoint: "https://vtd.example.com",
-      },
+      snapshot: (() => {
+        const legacyApiKey = globalThis.localStorage.getItem(
+          "lichtblick.agent.anthropic.apiKey",
+        );
+        const profiles = mockAgentProfiles.map((profile) =>
+          profile.id === mockActiveAgentProfileId && legacyApiKey != undefined
+            ? {
+                ...profile,
+                anthropic: { ...profile.anthropic, apiKey: legacyApiKey },
+              }
+            : profile,
+        );
+        const activeProfile =
+          profiles.find((profile) => profile.id === mockActiveAgentProfileId) ?? profiles[0]!;
+        return {
+          activeProfileId: activeProfile.id,
+          profiles,
+          anthropic: {
+            ...activeProfile.anthropic,
+          },
+          credentialResaveRequired: false,
+          credentialStorage: "plaintext",
+          openAiCompatible: { ...activeProfile.openAiCompatible },
+          provider: activeProfile.provider,
+          revision: "",
+          storageError: false,
+          vtdAuthToken: "",
+          vtdEndpoint: "https://vtd.example.com",
+        };
+      })(),
     }),
   };
 });
@@ -90,11 +140,16 @@ jest.mock("notistack", () => ({
   useSnackbar: () => ({ enqueueSnackbar: mockEnqueueSnackbar }),
 }));
 
-const mockAgentChatProvider = jest.fn(
-  ({ children }: React.PropsWithChildren<{ enabled?: boolean }>) => (
-    <>{children}</>
-  ),
-);
+type MockAgentChatProviderProps = React.PropsWithChildren<{
+  enabled?: boolean;
+  onSelectProfile?: (profileId: string) => void;
+  profileOptions?: readonly AgentChatProfileOption[];
+  selectedProfileId?: string;
+  selectedProfileName?: string;
+}>;
+const mockAgentChatProvider = jest.fn(({ children }: MockAgentChatProviderProps) => (
+  <>{children}</>
+));
 const mockAgentCatalogWatcher = jest.fn(() => null);
 
 // ── api ───────────────────────────────────────────────────────────────────────
@@ -118,23 +173,17 @@ jest.mock("@lichtblick/suite-base/components/AgentCatalogWatcher", () => ({
 jest.mock("@lichtblick/suite-base/components/AlertList/AlertsList", () => ({
   AlertsList: () => undefined,
 }));
-jest.mock(
-  "@lichtblick/suite-base/components/AccountSettingsSidebar/AccountSettings",
-  () => ({
-    __esModule: true,
-    default: () => undefined,
-  }),
-);
+jest.mock("@lichtblick/suite-base/components/AccountSettingsSidebar/AccountSettings", () => ({
+  __esModule: true,
+  default: () => undefined,
+}));
 jest.mock("@lichtblick/suite-base/components/DataSourceDialog", () => ({
   DataSourceDialog: () => undefined,
 }));
-jest.mock(
-  "@lichtblick/suite-base/components/DataSourceSidebar/DataSourceSidebar",
-  () => ({
-    __esModule: true,
-    default: () => undefined,
-  }),
-);
+jest.mock("@lichtblick/suite-base/components/DataSourceSidebar/DataSourceSidebar", () => ({
+  __esModule: true,
+  default: () => undefined,
+}));
 jest.mock("@lichtblick/suite-base/components/DocumentDropListener", () => ({
   __esModule: true,
   default: () => undefined,
@@ -200,9 +249,7 @@ jest.mock("@lichtblick/suite-base/components/WorkspaceDialogs", () => ({
 
 // ── providers ─────────────────────────────────────────────────────────────────
 jest.mock("@lichtblick/suite-base/providers/PanelStateContextProvider", () => ({
-  PanelStateContextProvider: ({ children }: React.PropsWithChildren) => (
-    <>{children}</>
-  ),
+  PanelStateContextProvider: ({ children }: React.PropsWithChildren) => <>{children}</>,
 }));
 jest.mock("@lichtblick/suite-base/providers/AgentChatProvider", () => ({
   __esModule: true,
@@ -241,17 +288,12 @@ jest.mock("@lichtblick/suite-base/context/PlayerSelectionContext", () => ({
   usePlayerSelection: jest.fn(),
 }));
 jest.mock("@lichtblick/suite-base/context/Workspace/WorkspaceContext", () => ({
-  ...jest.requireActual(
-    "@lichtblick/suite-base/context/Workspace/WorkspaceContext",
-  ),
+  ...jest.requireActual("@lichtblick/suite-base/context/Workspace/WorkspaceContext"),
   useWorkspaceStore: jest.fn(),
 }));
-jest.mock(
-  "@lichtblick/suite-base/context/Workspace/useWorkspaceActions",
-  () => ({
-    useWorkspaceActions: jest.fn(),
-  }),
-);
+jest.mock("@lichtblick/suite-base/context/Workspace/useWorkspaceActions", () => ({
+  useWorkspaceActions: jest.fn(),
+}));
 jest.mock("@lichtblick/suite-base/hooks", () => ({
   useAppConfigurationValue: jest.fn(),
 }));
@@ -275,9 +317,7 @@ jest.mock("@lichtblick/suite-base/hooks/useHandleFiles", () => ({
 }));
 jest.mock("@lichtblick/suite-base/hooks/useLayoutTransfer", () => ({
   useLayoutTransfer: jest.fn().mockReturnValue({
-    parseAndInstallLayout: jest
-      .fn()
-      .mockResolvedValue({ id: "default-layout-id" }),
+    parseAndInstallLayout: jest.fn().mockResolvedValue({ id: "default-layout-id" }),
     importLayout: jest.fn(),
     exportLayout: jest.fn(),
   }),
@@ -286,12 +326,9 @@ jest.mock("@lichtblick/suite-base/hooks/useSeekTimeFromCLI", () => ({
   __esModule: true,
   default: jest.fn(),
 }));
-jest.mock(
-  "@lichtblick/suite-base/panels/Plot/hooks/useStructureItemsStoreManager",
-  () => ({
-    useStructureItemsStoreManager: jest.fn(),
-  }),
-);
+jest.mock("@lichtblick/suite-base/panels/Plot/hooks/useStructureItemsStoreManager", () => ({
+  useStructureItemsStoreManager: jest.fn(),
+}));
 jest.mock("@lichtblick/suite-base/theme/icons", () => ({
   __esModule: true,
   default: {},
@@ -377,21 +414,47 @@ function agentAppConfigurationValue(
   }
 }
 
+function jsonResponse(data: unknown): Response {
+  const bytes = new TextEncoder().encode(JSON.stringify(data));
+  let consumed = false;
+  return {
+    body: {
+      cancel: jest.fn().mockResolvedValue(undefined),
+      getReader: () => ({
+        cancel: jest.fn().mockResolvedValue(undefined),
+        read: jest.fn(async () => {
+          if (consumed) {
+            return { done: true, value: undefined };
+          }
+          consumed = true;
+          return { done: false, value: bytes };
+        }),
+        releaseLock: jest.fn(),
+      }),
+    },
+    headers: { get: () => undefined },
+    ok: true,
+    status: 200,
+    statusText: "OK",
+  } as unknown as Response;
+}
+
+beforeEach(() => {
+  resetMockAgentProfiles();
+  jest.mocked(selectAgentConfiguration).mockClear();
+});
+
 describe("Workspace - alerts badge in leftSidebarItems", () => {
   beforeEach(() => {
     localStorage.clear();
     mockAgentChatProvider.mockClear();
     mockAgentCatalogWatcher.mockClear();
     (useMessagePipeline as jest.Mock).mockImplementation(
-      (selector: (ctx: typeof mockPipelineContext) => unknown) =>
-        selector(mockPipelineContext),
+      (selector: (ctx: typeof mockPipelineContext) => unknown) => selector(mockPipelineContext),
     );
-    (useMessagePipelineGetter as jest.Mock).mockReturnValue(
-      () => mockPipelineContext,
-    );
+    (useMessagePipelineGetter as jest.Mock).mockReturnValue(() => mockPipelineContext);
     (useWorkspaceStore as jest.Mock).mockImplementation(
-      (selector: (store: typeof mockWorkspaceStore) => unknown) =>
-        selector(mockWorkspaceStore),
+      (selector: (store: typeof mockWorkspaceStore) => unknown) => selector(mockWorkspaceStore),
     );
     (useWorkspaceActions as jest.Mock).mockReturnValue(mockWorkspaceActions);
     (usePlayerSelection as jest.Mock).mockReturnValue({
@@ -413,12 +476,8 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
     });
     (useCurrentUserType as jest.Mock).mockReturnValue("unauthenticated");
     (useEvents as jest.Mock).mockImplementation(
-      (
-        selector: (store: {
-          eventsSupported: boolean;
-          selectEvent: jest.Mock;
-        }) => unknown,
-      ) => selector({ eventsSupported: false, selectEvent: jest.fn() }),
+      (selector: (store: { eventsSupported: boolean; selectEvent: jest.Mock }) => unknown) =>
+        selector({ eventsSupported: false, selectEvent: jest.fn() }),
     );
     (useAppContext as jest.Mock).mockReturnValue({
       PerformanceSidebarComponent: undefined,
@@ -444,10 +503,7 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
     render(<Workspace />);
 
     // Then
-    const leftItems = MockedSidebars.mock.lastCall?.[0]?.leftItems as Map<
-      string,
-      SidebarItem
-    >;
+    const leftItems = MockedSidebars.mock.lastCall?.[0]?.leftItems as Map<string, SidebarItem>;
     expect(leftItems.get("alerts")?.badge).toBeUndefined();
   });
 
@@ -463,10 +519,7 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
     render(<Workspace />);
 
     // Then
-    const leftItems = MockedSidebars.mock.lastCall?.[0]?.leftItems as Map<
-      string,
-      SidebarItem
-    >;
+    const leftItems = MockedSidebars.mock.lastCall?.[0]?.leftItems as Map<string, SidebarItem>;
     expect(leftItems.get("alerts")?.badge).toEqual({
       count: 1,
       color: "error",
@@ -485,26 +538,74 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
     render(<Workspace />);
 
     // Then
-    const leftItems = MockedSidebars.mock.lastCall?.[0]?.leftItems as Map<
-      string,
-      SidebarItem
-    >;
+    const leftItems = MockedSidebars.mock.lastCall?.[0]?.leftItems as Map<string, SidebarItem>;
     expect(leftItems.get("alerts")?.badge?.count).toBe(5);
   });
 
   it("keeps the disabled provider mounted while hiding Agent Chat UI entries", () => {
     render(<Workspace />);
 
-    const rightItems = MockedSidebars.mock.lastCall?.[0]?.rightItems as Map<
-      string,
-      SidebarItem
-    >;
+    const rightItems = MockedSidebars.mock.lastCall?.[0]?.rightItems as Map<string, SidebarItem>;
     expect(rightItems.has("agent-chat")).toBe(false);
     expect(mockAgentChatProvider).toHaveBeenCalled();
     expect(mockAgentChatProvider.mock.lastCall?.[0]).toMatchObject({
       enabled: false,
     });
     expect(mockAgentCatalogWatcher).toHaveBeenCalled();
+  });
+
+  it("passes the session profile selection into configuration and falls back after deletion", async () => {
+    const diagnosticsProfile: AgentProfile = {
+      anthropic: { apiKey: "diagnostics-key", baseUrl: "", model: "claude-diagnostics" },
+      id: "diagnostics",
+      name: "Diagnostics",
+      openAiCompatible: { apiKey: "", baseUrl: "", model: "" },
+      provider: "anthropic",
+    };
+    mockAgentProfiles = [
+      {
+        ...mockDefaultAgentProfile,
+        anthropic: { ...mockDefaultAgentProfile.anthropic, apiKey: "default-key" },
+      },
+      diagnosticsProfile,
+    ];
+    const root = render(<Workspace />);
+
+    expect(mockAgentChatProvider.mock.lastCall?.[0]).toMatchObject({
+      selectedProfileId: "default",
+      selectedProfileName: "Default",
+    });
+    expect(mockAgentChatProvider.mock.lastCall?.[0].profileOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "default", isActive: true }),
+        expect.objectContaining({ id: "diagnostics", isActive: false }),
+      ]),
+    );
+
+    act(() => {
+      mockAgentChatProvider.mock.lastCall?.[0].onSelectProfile?.("diagnostics");
+    });
+    await waitFor(() => {
+      expect(mockAgentChatProvider.mock.lastCall?.[0]).toMatchObject({
+        selectedProfileId: "diagnostics",
+        selectedProfileName: "Diagnostics",
+      });
+    });
+    expect(jest.mocked(selectAgentConfiguration).mock.lastCall?.[1]).toMatchObject({
+      profileId: "diagnostics",
+    });
+
+    mockAgentProfiles = [mockAgentProfiles[0]!];
+    root.rerender(<Workspace />);
+    await waitFor(() => {
+      expect(mockAgentChatProvider.mock.lastCall?.[0]).toMatchObject({
+        selectedProfileId: "default",
+        selectedProfileName: "Default",
+      });
+    });
+    expect(jest.mocked(selectAgentConfiguration).mock.lastCall?.[1]).toMatchObject({
+      profileId: "default",
+    });
   });
 
   it("normalizes a persisted hidden agent sidebar selection", async () => {
@@ -516,8 +617,7 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
       },
     };
     (useWorkspaceStore as jest.Mock).mockImplementation(
-      (selector: (store: typeof persistedAgentStore) => unknown) =>
-        selector(persistedAgentStore),
+      (selector: (store: typeof persistedAgentStore) => unknown) => selector(persistedAgentStore),
     );
     mockWorkspaceActions.sidebarActions.right.selectItem.mockClear();
     mockWorkspaceActions.sidebarActions.right.setOpen.mockClear();
@@ -525,20 +625,24 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
     render(<Workspace />);
 
     await waitFor(() => {
-      expect(
-        mockWorkspaceActions.sidebarActions.right.selectItem,
-      ).toHaveBeenCalledWith("variables");
-      expect(
-        mockWorkspaceActions.sidebarActions.right.setOpen,
-      ).toHaveBeenCalledWith(false);
+      expect(mockWorkspaceActions.sidebarActions.right.selectItem).toHaveBeenCalledWith(
+        "variables",
+      );
+      expect(mockWorkspaceActions.sidebarActions.right.setOpen).toHaveBeenCalledWith(false);
     });
   });
 
-  it("mounts the provider and wires data-source opening when agent.enabled is true", () => {
+  it("mounts the provider and wires direct and agent data-source opening", async () => {
     const selectSource = jest.fn();
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(jsonResponse({ downloadUrl: "https://example.com/record.mcap" }))
+      .mockResolvedValueOnce(jsonResponse({ topics: { "/camera": 2, "/imu": 12 } }))
+      .mockResolvedValueOnce(jsonResponse({ mcap_slice_id: "slice-1" }))
+      .mockRejectedValueOnce(new Error("slice-get temporarily unavailable"))
+      .mockResolvedValueOnce(jsonResponse({ download_url: "https://example.com/slice.mcap" }));
     localStorage.setItem("lichtblick.agent.anthropic.apiKey", "test-api-key");
-    (useAppConfigurationValue as jest.Mock).mockImplementation(
-      (key: string) => agentAppConfigurationValue(key, { enabled: true }),
+    (useAppConfigurationValue as jest.Mock).mockImplementation((key: string) =>
+      agentAppConfigurationValue(key, { enabled: true }),
     );
     (usePlayerSelection as jest.Mock).mockReturnValue({
       availableSources: [],
@@ -547,10 +651,7 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
 
     render(<Workspace />);
 
-    const rightItems = MockedSidebars.mock.lastCall?.[0]?.rightItems as Map<
-      string,
-      SidebarItem
-    >;
+    const rightItems = MockedSidebars.mock.lastCall?.[0]?.rightItems as Map<string, SidebarItem>;
     expect(rightItems.has("agent-chat")).toBe(true);
     expect(mockAgentChatProvider).toHaveBeenCalled();
     expect(mockAgentChatProvider.mock.lastCall?.[0]).toMatchObject({
@@ -559,12 +660,79 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
     expect(mockAgentCatalogWatcher).toHaveBeenCalled();
 
     const providerProps = mockAgentChatProvider.mock.lastCall?.[0] as {
+      onGetVtdTopics: (id: string) => Promise<Record<string, number>>;
+      onLoadVtdRecord: (id: string) => Promise<void>;
       onOpenDataSource: (urls: string[]) => void;
+      onSliceVtdRecord: (
+        params: {
+          id: string;
+          topics: string[];
+          startNs: string;
+          endNs: string;
+        },
+        onProgress: (progress: "slicing" | "loading") => void,
+      ) => Promise<void>;
     };
     providerProps.onOpenDataSource(["https://example.com/agent.mcap"]);
     expect(selectSource).toHaveBeenCalledWith("remote-file", {
       type: "connection",
       params: { url: "https://example.com/agent.mcap" },
+    });
+
+    await act(async () => {
+      await providerProps.onLoadVtdRecord("record-1");
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      new URL("https://vtd.example.com/vtd/url"),
+      expect.objectContaining({
+        body: JSON.stringify({ id: "record-1" }),
+        method: "POST",
+      }),
+    );
+    expect(selectSource).toHaveBeenLastCalledWith("remote-file", {
+      type: "connection",
+      params: { url: "https://example.com/record.mcap" },
+    });
+
+    await expect(providerProps.onGetVtdTopics("record-1")).resolves.toEqual({
+      "/camera": 2,
+      "/imu": 12,
+    });
+    const sliceParams = {
+      id: "record-1",
+      topics: ["/camera", "/imu"],
+      startNs: "1912689868838297225",
+      endNs: "1912690468838297225",
+    };
+    const firstProgress = jest.fn();
+    await expect(providerProps.onSliceVtdRecord(sliceParams, firstProgress)).rejects.toThrow(
+      "slice-get",
+    );
+    expect(firstProgress.mock.calls.map(([progress]) => progress)).toEqual(["slicing", "loading"]);
+
+    const retryProgress = jest.fn();
+    await act(async () => {
+      await providerProps.onSliceVtdRecord(sliceParams, retryProgress);
+    });
+    expect(retryProgress).toHaveBeenCalledTimes(1);
+    expect(retryProgress).toHaveBeenCalledWith("loading");
+    const fetchCalls = (global.fetch as jest.Mock).mock.calls;
+    expect(fetchCalls.filter(([url]) => String(url).endsWith("/vtd/slice-store"))).toHaveLength(1);
+    expect(fetchCalls.filter(([url]) => String(url).endsWith("/vtd/slice-get"))).toHaveLength(2);
+    expect(global.fetch).toHaveBeenCalledWith(
+      new URL("https://vtd.example.com/vtd/slice-store"),
+      expect.objectContaining({ body: JSON.stringify(sliceParams), method: "POST" }),
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      new URL("https://vtd.example.com/vtd/slice-get"),
+      expect.objectContaining({
+        body: JSON.stringify({ sliceId: "slice-1" }),
+        method: "POST",
+      }),
+    );
+    expect(selectSource).toHaveBeenLastCalledWith("remote-file", {
+      type: "connection",
+      params: { url: "https://example.com/slice.mcap" },
     });
   });
 
@@ -595,15 +763,12 @@ describe("Workspace - alerts badge in leftSidebarItems", () => {
               setEnabled((value) => !value);
             }}
           />
-          <Workspace
-            AppBarComponent={PersistentAppBar}
-            disablePersistenceForStorybook
-          />
+          <Workspace AppBarComponent={PersistentAppBar} disablePersistenceForStorybook />
         </>
       );
     }
-    (useAppConfigurationValue as jest.Mock).mockImplementation(
-      (key: string) => agentAppConfigurationValue(key, { enabled: agentEnabled }),
+    (useAppConfigurationValue as jest.Mock).mockImplementation((key: string) =>
+      agentAppConfigurationValue(key, { enabled: agentEnabled }),
     );
 
     const root = render(<RuntimeEnabledHarness />);
@@ -640,15 +805,11 @@ describe("Workspace - session-based MCAP resolution", () => {
     jest.clearAllMocks();
 
     (useMessagePipeline as jest.Mock).mockImplementation(
-      (selector: (ctx: typeof mockPipelineContext) => unknown) =>
-        selector(mockPipelineContext),
+      (selector: (ctx: typeof mockPipelineContext) => unknown) => selector(mockPipelineContext),
     );
-    (useMessagePipelineGetter as jest.Mock).mockReturnValue(
-      () => mockPipelineContext,
-    );
+    (useMessagePipelineGetter as jest.Mock).mockReturnValue(() => mockPipelineContext);
     (useWorkspaceStore as jest.Mock).mockImplementation(
-      (selector: (store: typeof mockWorkspaceStore) => unknown) =>
-        selector(mockWorkspaceStore),
+      (selector: (store: typeof mockWorkspaceStore) => unknown) => selector(mockWorkspaceStore),
     );
     (useWorkspaceActions as jest.Mock).mockReturnValue(mockWorkspaceActions);
     (usePlayerSelection as jest.Mock).mockReturnValue({
@@ -670,12 +831,8 @@ describe("Workspace - session-based MCAP resolution", () => {
     });
     (useCurrentUserType as jest.Mock).mockReturnValue("unauthenticated");
     (useEvents as jest.Mock).mockImplementation(
-      (
-        selector: (store: {
-          eventsSupported: boolean;
-          selectEvent: jest.Mock;
-        }) => unknown,
-      ) => selector({ eventsSupported: false, selectEvent: jest.fn() }),
+      (selector: (store: { eventsSupported: boolean; selectEvent: jest.Mock }) => unknown) =>
+        selector({ eventsSupported: false, selectEvent: jest.fn() }),
     );
     (useAppContext as jest.Mock).mockReturnValue({
       PerformanceSidebarComponent: undefined,
@@ -696,18 +853,11 @@ describe("Workspace - session-based MCAP resolution", () => {
     (parseAppURLState as jest.Mock).mockReturnValue({ sessionId });
 
     // When
-    render(
-      <Workspace
-        deepLinks={["https://app.example.com/?sessionid=test-session-123"]}
-      />,
-    );
+    render(<Workspace deepLinks={["https://app.example.com/?sessionid=test-session-123"]} />);
 
     // Then
     await waitFor(() => {
-      expect(mockGetSession).toHaveBeenCalledWith(
-        sessionId,
-        expect.any(AbortSignal),
-      );
+      expect(mockGetSession).toHaveBeenCalledWith(sessionId, expect.any(AbortSignal));
     });
     await waitFor(() => {
       expect(mockSelectSource).toHaveBeenCalledWith("remote-file", {
@@ -727,26 +877,16 @@ describe("Workspace - session-based MCAP resolution", () => {
     (parseAppURLState as jest.Mock).mockReturnValue({ sessionId });
 
     // When
-    render(
-      <Workspace
-        deepLinks={["https://app.example.com/?sessionid=failing-session"]}
-      />,
-    );
+    render(<Workspace deepLinks={["https://app.example.com/?sessionid=failing-session"]} />);
 
     // Then
     await waitFor(() => {
-      expect(mockGetSession).toHaveBeenCalledWith(
-        sessionId,
-        expect.any(AbortSignal),
-      );
+      expect(mockGetSession).toHaveBeenCalledWith(sessionId, expect.any(AbortSignal));
     });
     await waitFor(() => {
-      expect(mockEnqueueSnackbar).toHaveBeenCalledWith(
-        "Failed to load session data sources",
-        {
-          variant: "error",
-        },
-      );
+      expect(mockEnqueueSnackbar).toHaveBeenCalledWith("Failed to load session data sources", {
+        variant: "error",
+      });
     });
   });
 
@@ -758,9 +898,7 @@ describe("Workspace - session-based MCAP resolution", () => {
     });
 
     // When
-    render(
-      <Workspace deepLinks={["https://app.example.com/?ds=remote-file"]} />,
-    );
+    render(<Workspace deepLinks={["https://app.example.com/?ds=remote-file"]} />);
 
     // Then
     expect(mockGetSession).not.toHaveBeenCalled();
@@ -779,15 +917,11 @@ describe("Workspace - fetchLayoutFromUrl", () => {
 
   const setupWorkspaceMocks = () => {
     (useMessagePipeline as jest.Mock).mockImplementation(
-      (selector: (ctx: typeof mockPipelineContext) => unknown) =>
-        selector(mockPipelineContext),
+      (selector: (ctx: typeof mockPipelineContext) => unknown) => selector(mockPipelineContext),
     );
-    (useMessagePipelineGetter as jest.Mock).mockReturnValue(
-      () => mockPipelineContext,
-    );
+    (useMessagePipelineGetter as jest.Mock).mockReturnValue(() => mockPipelineContext);
     (useWorkspaceStore as jest.Mock).mockImplementation(
-      (selector: (store: typeof mockWorkspaceStore) => unknown) =>
-        selector(mockWorkspaceStore),
+      (selector: (store: typeof mockWorkspaceStore) => unknown) => selector(mockWorkspaceStore),
     );
     (useWorkspaceActions as jest.Mock).mockReturnValue(mockWorkspaceActions);
     (usePlayerSelection as jest.Mock).mockReturnValue({
@@ -809,12 +943,8 @@ describe("Workspace - fetchLayoutFromUrl", () => {
     });
     (useCurrentUserType as jest.Mock).mockReturnValue("unauthenticated");
     (useEvents as jest.Mock).mockImplementation(
-      (
-        selector: (store: {
-          eventsSupported: boolean;
-          selectEvent: jest.Mock;
-        }) => unknown,
-      ) => selector({ eventsSupported: false, selectEvent: jest.fn() }),
+      (selector: (store: { eventsSupported: boolean; selectEvent: jest.Mock }) => unknown) =>
+        selector({ eventsSupported: false, selectEvent: jest.fn() }),
     );
     (useAppContext as jest.Mock).mockReturnValue({
       PerformanceSidebarComponent: undefined,
@@ -855,17 +985,13 @@ describe("Workspace - fetchLayoutFromUrl", () => {
     // When
     render(
       <Workspace
-        deepLinks={[
-          "https://app.example.com/?layoutUrl=https://example.com/my-layout.json",
-        ]}
+        deepLinks={["https://app.example.com/?layoutUrl=https://example.com/my-layout.json"]}
       />,
     );
 
     // Then
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        "https://example.com/my-layout.json",
-      );
+      expect(global.fetch).toHaveBeenCalledWith("https://example.com/my-layout.json");
     });
     await waitFor(() => {
       expect(mockParseAndInstallLayout).toHaveBeenCalledWith(
@@ -889,9 +1015,7 @@ describe("Workspace - fetchLayoutFromUrl", () => {
     // When
     render(
       <Workspace
-        deepLinks={[
-          "https://app.example.com/?layoutUrl=https://example.com/my-layout.json",
-        ]}
+        deepLinks={["https://app.example.com/?layoutUrl=https://example.com/my-layout.json"]}
       />,
     );
 
@@ -916,9 +1040,7 @@ describe("Workspace - fetchLayoutFromUrl", () => {
     // When
     render(
       <Workspace
-        deepLinks={[
-          "https://app.example.com/?layoutUrl=https://example.com/my-layout.json",
-        ]}
+        deepLinks={["https://app.example.com/?layoutUrl=https://example.com/my-layout.json"]}
       />,
     );
 
@@ -937,11 +1059,7 @@ describe("Workspace - fetchLayoutFromUrl", () => {
 
     // When
     render(
-      <Workspace
-        deepLinks={[
-          "https://app.example.com/?layoutUrl=file:///local/layout.json",
-        ]}
-      />,
+      <Workspace deepLinks={["https://app.example.com/?layoutUrl=file:///local/layout.json"]} />,
     );
 
     // Then
@@ -965,20 +1083,15 @@ describe("Workspace - fetchLayoutFromUrl", () => {
     // When
     render(
       <Workspace
-        deepLinks={[
-          "https://app.example.com/?layoutUrl=https://example.com/layout.json",
-        ]}
+        deepLinks={["https://app.example.com/?layoutUrl=https://example.com/layout.json"]}
       />,
     );
 
     // Then
     await waitFor(() => {
-      expect(mockEnqueueSnackbar).toHaveBeenCalledWith(
-        "Failed to load layout (HTTP 404)",
-        {
-          variant: "error",
-        },
-      );
+      expect(mockEnqueueSnackbar).toHaveBeenCalledWith("Failed to load layout (HTTP 404)", {
+        variant: "error",
+      });
     });
   });
 
@@ -992,20 +1105,15 @@ describe("Workspace - fetchLayoutFromUrl", () => {
     // When
     render(
       <Workspace
-        deepLinks={[
-          "https://app.example.com/?layoutUrl=https://example.com/layout.json",
-        ]}
+        deepLinks={["https://app.example.com/?layoutUrl=https://example.com/layout.json"]}
       />,
     );
 
     // Then
     await waitFor(() => {
-      expect(mockEnqueueSnackbar).toHaveBeenCalledWith(
-        "Failed to load layout from URL",
-        {
-          variant: "error",
-        },
-      );
+      expect(mockEnqueueSnackbar).toHaveBeenCalledWith("Failed to load layout from URL", {
+        variant: "error",
+      });
     });
   });
 
@@ -1018,9 +1126,7 @@ describe("Workspace - fetchLayoutFromUrl", () => {
     });
 
     // When
-    render(
-      <Workspace deepLinks={["https://app.example.com/?ds=remote-file"]} />,
-    );
+    render(<Workspace deepLinks={["https://app.example.com/?ds=remote-file"]} />);
 
     // Then
     expect(global.fetch).not.toHaveBeenCalled();
@@ -1033,11 +1139,7 @@ describe("Workspace - fetchLayoutFromUrl", () => {
     });
 
     // When
-    render(
-      <Workspace
-        deepLinks={["https://app.example.com/?layoutUrl=not+a+valid+url"]}
-      />,
-    );
+    render(<Workspace deepLinks={["https://app.example.com/?layoutUrl=not+a+valid+url"]} />);
 
     // Then
     await waitFor(() => {

@@ -274,6 +274,7 @@ export function useInstallingExtensionsState({
             }
           }
         }
+        return allResults;
       } catch (error: unknown) {
         setInstallingProgress((prev) => ({
           ...prev,
@@ -292,6 +293,7 @@ export function useInstallingExtensionsState({
         enqueueSnackbar(`An error occurred during extension installation: ${errorMessage}`, {
           variant: "error",
         });
+        return [];
       } finally {
         if (isPlayingInitialState) {
           play?.();

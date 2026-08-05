@@ -13,6 +13,7 @@ import {
 import { ALLOWED_FILES } from "@lichtblick/suite-base/services/extension/types";
 import decompressFile from "@lichtblick/suite-base/services/extension/utils/decompressFile";
 import extractFoxeFileContent from "@lichtblick/suite-base/services/extension/utils/extractFoxeFileContent";
+import { parseExtensionPanelsMeta } from "@lichtblick/suite-base/services/extension/utils/parseExtensionPanelsMeta";
 import validatePackageInfo from "@lichtblick/suite-base/services/extension/utils/validatePackageInfo";
 import { Namespace } from "@lichtblick/suite-base/types";
 import { ExtensionInfo } from "@lichtblick/suite-base/types/Extensions";
@@ -44,12 +45,14 @@ export class RemoteExtensionLoader implements IExtensionLoader {
     return await this.#remote.list();
   }
 
-  public async loadExtension(id: string): Promise<LoadedExtension> {
-    log.debug("[Remote] Loading extension", id);
+  public async loadExtension(extensionId: string): Promise<LoadedExtension> {
+    log.debug("[Remote] Loading extension", extensionId);
 
-    const foxeFileData = await this.#remote.loadContent(id);
+    const foxeFileData = await this.#remote.loadContent(extensionId);
     if (!foxeFileData) {
-      throw new Error("Extension is corrupted or does not exist in the file system.");
+      throw new Error(
+        "Extension is corrupted or does not exist in the file system.",
+      );
     }
 
     const decompressedData = await decompressFile(foxeFileData);
@@ -58,7 +61,9 @@ export class RemoteExtensionLoader implements IExtensionLoader {
       ALLOWED_FILES.EXTENSION,
     );
     if (!rawExtensionFile) {
-      throw new Error(`Extension is corrupted: missing ${ALLOWED_FILES.EXTENSION}`);
+      throw new Error(
+        `Extension is corrupted: missing ${ALLOWED_FILES.EXTENSION}`,
+      );
     }
 
     return {
@@ -78,15 +83,26 @@ export class RemoteExtensionLoader implements IExtensionLoader {
     }
 
     const decompressedData = await decompressFile(foxeFileData);
-    const rawPackageFile = await extractFoxeFileContent(decompressedData, ALLOWED_FILES.PACKAGE);
+    const rawPackageFile = await extractFoxeFileContent(
+      decompressedData,
+      ALLOWED_FILES.PACKAGE,
+    );
     if (!rawPackageFile) {
       throw new Error(
         `Corrupted extension. File "${ALLOWED_FILES.PACKAGE}" is missing in the extension source.`,
       );
     }
 
-    const rawInfo = validatePackageInfo(JSON.parse(rawPackageFile) as Partial<ExtensionInfo>);
-    const normalizedPublisher = rawInfo.publisher.replace(/[^A-Za-z0-9_\s]+/g, "");
+    const parsedPackage = JSON.parse(rawPackageFile) as Record<string, unknown>;
+    const panelsMeta = parseExtensionPanelsMeta(parsedPackage.lichtblickPanels);
+    const extensionInfoFields = { ...parsedPackage };
+    delete extensionInfoFields.lichtblickPanels;
+    delete extensionInfoFields.panelsMeta;
+    const rawInfo = validatePackageInfo(extensionInfoFields);
+    const normalizedPublisher = rawInfo.publisher.replace(
+      /[^A-Za-z0-9_\s]+/g,
+      "",
+    );
 
     const newExtension: StoredExtension = {
       content: foxeFileData,
@@ -94,14 +110,26 @@ export class RemoteExtensionLoader implements IExtensionLoader {
         ...rawInfo,
         id: `${normalizedPublisher}.${rawInfo.name}`,
         namespace: rawInfo.namespace,
+        panelsMeta,
         qualifiedName: rawInfo.displayName || rawInfo.name,
-        readme: (await extractFoxeFileContent(decompressedData, ALLOWED_FILES.README)) ?? "",
-        changelog: (await extractFoxeFileContent(decompressedData, ALLOWED_FILES.CHANGELOG)) ?? "",
+        readme:
+          (await extractFoxeFileContent(
+            decompressedData,
+            ALLOWED_FILES.README,
+          )) ?? "",
+        changelog:
+          (await extractFoxeFileContent(
+            decompressedData,
+            ALLOWED_FILES.CHANGELOG,
+          )) ?? "",
       },
       workspace: this.workspace,
     };
 
-    const storedExtension = await this.#remote.createOrUpdate(newExtension, file);
+    const storedExtension = await this.#remote.createOrUpdate(
+      newExtension,
+      file,
+    );
     return storedExtension.info;
   }
 

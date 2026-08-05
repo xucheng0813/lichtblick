@@ -20,7 +20,9 @@ export const PANEL_CATALOG_SKILL: Skill = {
     "Before choosing panels for a layout, or when unsure which panel fits a topic's schema.",
   body: `# Panel catalog
 
-Every panel below is on the layout allowlist. Panels not listed here cannot be proposed.
+The complete live panel inventory in the system context under "Available panels" is authoritative
+for which panel types can be proposed. This skill only explains configuration details for the
+panels documented below.
 
 ## How panels select data
 

@@ -307,6 +307,103 @@ const typeSchema = {
   ],
 };
 
+const UnionType = {
+  NONE: 0,
+  TableA: 1,
+  TableB: 2,
+} as const;
+
+type UnionMember =
+  | {
+      type: typeof UnionType.TableA;
+      shared: number;
+      conflict: number;
+      aOnly: string;
+    }
+  | {
+      type: typeof UnionType.TableB;
+      shared: number;
+      conflict: string;
+      bOnly: boolean;
+    };
+
+function createUnionMember(builder: Builder, member: UnionMember): number {
+  if (member.type === UnionType.TableA) {
+    const aOnly = builder.createString(member.aOnly);
+    builder.startObject(3);
+    builder.addFieldInt32(0, member.shared, 0);
+    builder.addFieldInt32(1, member.conflict, 0);
+    builder.addFieldOffset(2, aOnly, 0);
+    return builder.endObject();
+  }
+
+  const conflict = builder.createString(member.conflict);
+  builder.startObject(3);
+  builder.addFieldInt32(0, member.shared, 0);
+  builder.addFieldOffset(1, conflict, 0);
+  builder.addFieldInt8(2, member.bOnly ? 1 : 0, 0);
+  return builder.endObject();
+}
+
+function createUnionTypeVector(builder: Builder, members: (UnionMember | undefined)[]): number {
+  builder.startVector(1, members.length, 1);
+  for (let index = members.length - 1; index >= 0; --index) {
+    builder.addInt8(members[index]?.type ?? UnionType.NONE);
+  }
+  return builder.endVector();
+}
+
+function createUnionValueVector(builder: Builder, offsets: number[]): number {
+  builder.startVector(4, offsets.length, 4);
+  for (let index = offsets.length - 1; index >= 0; --index) {
+    const offset = offsets[index] ?? 0;
+    if (offset === 0) {
+      builder.addInt32(0);
+    } else {
+      builder.addOffset(offset);
+    }
+  }
+  return builder.endVector();
+}
+
+function createStructWithArray(builder: Builder, values: readonly number[]): number {
+  if (values.length !== 4) {
+    throw new Error("StructWithArray requires exactly four values.");
+  }
+  builder.prep(4, 16);
+  for (let index = values.length - 1; index >= 0; --index) {
+    builder.writeFloat32(values[index] ?? 0);
+  }
+  return builder.offset();
+}
+
+function buildUnionArrayMessage(options: {
+  u?: UnionMember;
+  us: (UnionMember | undefined)[];
+  arr: readonly number[];
+  plain: number;
+}): Uint8Array {
+  const builder = new Builder();
+  const uOffset = options.u == undefined ? 0 : createUnionMember(builder, options.u);
+  const usOffsets = options.us.map((member) =>
+    member == undefined ? 0 : createUnionMember(builder, member),
+  );
+  const usType = createUnionTypeVector(builder, options.us);
+  const us = createUnionValueVector(builder, usOffsets);
+  const struct = createStructWithArray(builder, options.arr);
+
+  builder.startObject(6);
+  // Structs must be added before any other root field so they remain inline.
+  builder.addFieldStruct(4, struct, 0);
+  builder.addFieldInt8(0, options.u?.type ?? UnionType.NONE, UnionType.NONE);
+  builder.addFieldOffset(1, uOffset, 0);
+  builder.addFieldOffset(2, usType, 0);
+  builder.addFieldOffset(3, us, 0);
+  builder.addFieldInt32(5, options.plain, 0);
+  builder.finish(builder.endObject());
+  return Uint8Array.from(builder.asUint8Array());
+}
+
 describe("parseFlatbufferSchema", () => {
   const reflectionSchemaBuffer: Buffer = fs.readFileSync(`${__dirname}/fixtures/reflection.bfbs`);
   const reflectionSchemaUint8 = new Uint8Array(
@@ -404,6 +501,444 @@ describe("parseFlatbufferSchema", () => {
     );
     const { deserialize } = parseFlatbufferSchema("ByteVector", byteVectorSchemaArrayUint8);
     expect(deserialize(byteVectorBin)).toEqual({ data: new Uint8Array([1, 2, 3]) });
+  });
+
+  describe("unions and fixed-length arrays", () => {
+    // Generated from the fixtures directory with:
+    // /opt/homebrew/bin/flatc -b --schema union-array.fbs
+    const unionArraySchemaBuffer: Buffer = fs.readFileSync(
+      `${__dirname}/fixtures/union-array.bfbs`,
+    );
+    const unionArraySchema = new Uint8Array(
+      unionArraySchemaBuffer.buffer,
+      unionArraySchemaBuffer.byteOffset,
+      unionArraySchemaBuffer.byteLength,
+    );
+
+    it("maps union discriminators, synthesized union fields, and fixed array lengths", () => {
+      const { datatypes } = parseFlatbufferSchema("UnionArray.Root", unionArraySchema);
+
+      expect(datatypes.get("UnionArray.Root")?.definitions).toEqual([
+        { name: "plain", type: "int32" },
+        { name: "s", type: "UnionArray.StructWithArray", isComplex: true },
+        { name: "NONE", type: "uint8", isConstant: true, value: 0n },
+        { name: "TableA", type: "uint8", isConstant: true, value: 1n },
+        { name: "TableB", type: "uint8", isConstant: true, value: 2n },
+        { name: "u_type", type: "uint8" },
+        { name: "u", type: "UnionArray.U", isComplex: true },
+        { name: "NONE", type: "uint8", isConstant: true, value: 0n },
+        { name: "TableA", type: "uint8", isConstant: true, value: 1n },
+        { name: "TableB", type: "uint8", isConstant: true, value: 2n },
+        { name: "us_type", type: "uint8", isArray: true },
+        { name: "us", type: "UnionArray.U", isComplex: true, isArray: true },
+      ]);
+      expect(datatypes.get("UnionArray.StructWithArray")?.definitions).toEqual([
+        { name: "arr", type: "float32", isArray: true, arrayLength: 4 },
+      ]);
+      expect(datatypes.get("UnionArray.U")?.definitions).toEqual([
+        { name: "a_only", type: "string" },
+        { name: "conflict", type: "int32" },
+        { name: "shared", type: "int32" },
+        { name: "b_only", type: "bool" },
+      ]);
+      expect(datatypes.has("UnionArray.TableA")).toBe(true);
+      expect(datatypes.has("UnionArray.TableB")).toBe(true);
+    });
+
+    it("deserializes active union members and a mixed union vector", () => {
+      const { deserialize } = parseFlatbufferSchema("UnionArray.Root", unionArraySchema);
+      const message = buildUnionArrayMessage({
+        u: { type: UnionType.TableA, shared: 10, conflict: 11, aOnly: "direct-a" },
+        us: [
+          { type: UnionType.TableA, shared: 20, conflict: 21, aOnly: "vector-a" },
+          { type: UnionType.TableB, shared: 30, conflict: "vector-b", bOnly: true },
+          undefined,
+        ],
+        arr: [1.25, 2.5, 3.75, 5],
+        plain: 101,
+      });
+
+      expect(deserialize(message)).toEqual({
+        u_type: UnionType.TableA,
+        u: { shared: 10, conflict: 11, a_only: "direct-a" },
+        us_type: [UnionType.TableA, UnionType.TableB, UnionType.NONE],
+        us: [
+          { shared: 20, conflict: 21, a_only: "vector-a" },
+          { shared: 30, conflict: "vector-b", b_only: true },
+          undefined,
+        ],
+        s: { arr: [1.25, 2.5, 3.75, 5] },
+        plain: 101,
+      });
+    });
+
+    it("advances past a NONE slot between active union vector members", () => {
+      const { deserialize } = parseFlatbufferSchema("UnionArray.Root", unionArraySchema);
+      const message = buildUnionArrayMessage({
+        u: { type: UnionType.TableA, shared: 1, conflict: 2, aOnly: "direct" },
+        us: [
+          { type: UnionType.TableA, shared: 10, conflict: 11, aOnly: "first-a" },
+          undefined,
+          { type: UnionType.TableB, shared: 20, conflict: "last-b", bOnly: true },
+        ],
+        arr: [1, 2, 3, 4],
+        plain: 5,
+      });
+
+      expect(deserialize(message)).toMatchObject({
+        us_type: [UnionType.TableA, UnionType.NONE, UnionType.TableB],
+        us: [
+          { shared: 10, conflict: 11, a_only: "first-a" },
+          undefined,
+          { shared: 20, conflict: "last-b", b_only: true },
+        ],
+      });
+    });
+
+    it("advances past a leading NONE slot in a union vector", () => {
+      const { deserialize } = parseFlatbufferSchema("UnionArray.Root", unionArraySchema);
+      const message = buildUnionArrayMessage({
+        u: { type: UnionType.TableB, shared: 1, conflict: "direct", bOnly: false },
+        us: [
+          undefined,
+          { type: UnionType.TableA, shared: 30, conflict: 31, aOnly: "middle-a" },
+          { type: UnionType.TableB, shared: 40, conflict: "last-b", bOnly: true },
+        ],
+        arr: [4, 3, 2, 1],
+        plain: 6,
+      });
+
+      expect(deserialize(message)).toMatchObject({
+        us_type: [UnionType.NONE, UnionType.TableA, UnionType.TableB],
+        us: [
+          undefined,
+          { shared: 30, conflict: 31, a_only: "middle-a" },
+          { shared: 40, conflict: "last-b", b_only: true },
+        ],
+      });
+    });
+
+    it("deserializes the other union member and preserves a NONE vector slot", () => {
+      const { deserialize } = parseFlatbufferSchema("UnionArray.Root", unionArraySchema);
+      const message = buildUnionArrayMessage({
+        u: {
+          type: UnionType.TableB,
+          shared: -10,
+          conflict: "direct-b",
+          bOnly: true,
+        },
+        us: [undefined],
+        arr: [-1, 0, 1, 2],
+        plain: -7,
+      });
+
+      expect(deserialize(message)).toEqual({
+        u_type: UnionType.TableB,
+        u: { shared: -10, conflict: "direct-b", b_only: true },
+        us_type: [UnionType.NONE],
+        us: [undefined],
+        s: { arr: [-1, 0, 1, 2] },
+        plain: -7,
+      });
+    });
+
+    it("omits the scalar union value when its discriminator is NONE", () => {
+      const { deserialize } = parseFlatbufferSchema("UnionArray.Root", unionArraySchema);
+      const message = buildUnionArrayMessage({
+        us: [undefined],
+        arr: [0, 0, 0, 0],
+        plain: 0,
+      });
+
+      expect(deserialize(message)).toEqual({
+        u_type: UnionType.NONE,
+        us_type: [UnionType.NONE],
+        us: [undefined],
+        s: { arr: [0, 0, 0, 0] },
+        plain: 0,
+      });
+    });
+  });
+
+  it("registers an empty synthesized union datatype", () => {
+    const fakeSchema = {
+      objects: [{ name: "TestMsg", fields: [], isStruct: false }],
+      enums: [
+        {
+          name: "EmptyUnion",
+          values: [{ name: "NONE", value: 0n, unionType: undefined }],
+          isUnion: true,
+        },
+      ],
+      rootTable: { name: "TestMsg" },
+    };
+    jest
+      .spyOn(Schema, "getRootAsSchema")
+      .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+        typeof Schema.getRootAsSchema
+      >);
+    jest.spyOn(Parser.prototype, "toObjectLambda").mockReturnValue(jest.fn());
+
+    const { datatypes } = parseFlatbufferSchema("TestMsg", new Uint8Array());
+
+    expect(datatypes.get("EmptyUnion")).toEqual({ definitions: [] });
+  });
+
+  it("rejects a struct union member because union members must be tables", () => {
+    const fakeSchema = {
+      objects: [
+        { name: "TestMsg", fields: [], isStruct: false },
+        { name: "StructMember", fields: [], isStruct: true },
+      ],
+      enums: [
+        {
+          name: "InvalidUnion",
+          isUnion: true,
+          values: [
+            { name: "NONE", value: 0n, unionType: undefined },
+            {
+              name: "StructMember",
+              value: 1n,
+              unionType: { baseType: BaseType.Obj, index: 1 },
+            },
+          ],
+        },
+      ],
+      rootTable: { name: "TestMsg" },
+    };
+    jest
+      .spyOn(Schema, "getRootAsSchema")
+      .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+        typeof Schema.getRootAsSchema
+      >);
+
+    expect(() => parseFlatbufferSchema("TestMsg", new Uint8Array())).toThrow(
+      'Invalid schema, union "InvalidUnion" member "StructMember" is not a table.',
+    );
+  });
+
+  it("rejects a union enum name that conflicts with an object datatype", () => {
+    const fakeSchema = {
+      objects: [
+        { name: "TestMsg", fields: [], isStruct: false },
+        { name: "Conflicting", fields: [], isStruct: false },
+      ],
+      enums: [{ name: "Conflicting", values: [], isUnion: true }],
+      rootTable: { name: "TestMsg" },
+    };
+    jest
+      .spyOn(Schema, "getRootAsSchema")
+      .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+        typeof Schema.getRootAsSchema
+      >);
+
+    expect(() => parseFlatbufferSchema("TestMsg", new Uint8Array())).toThrow(
+      'Invalid schema, union enum "Conflicting" conflicts with an object of the same name.',
+    );
+  });
+
+  it("rejects fixed-length arrays with zero length", () => {
+    const fakeSchema = {
+      objects: [
+        {
+          name: "TestStruct",
+          isStruct: true,
+          fields: [
+            {
+              name: "arr",
+              type: {
+                baseType: BaseType.Array,
+                element: BaseType.Float,
+                fixedLength: 0,
+                index: -1,
+              },
+            },
+          ],
+        },
+      ],
+      enums: [],
+      rootTable: { name: "TestStruct" },
+    };
+    jest
+      .spyOn(Schema, "getRootAsSchema")
+      .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+        typeof Schema.getRootAsSchema
+      >);
+
+    expect(() => parseFlatbufferSchema("TestStruct", new Uint8Array())).toThrow(
+      'Invalid schema, fixed-length array field "arr" must have a positive length.',
+    );
+  });
+
+  it.each([BaseType.Union, BaseType.Array])(
+    "rejects fixed-length arrays containing %s",
+    (element) => {
+      const fakeSchema = {
+        objects: [
+          {
+            name: "TestStruct",
+            isStruct: true,
+            fields: [
+              {
+                name: "arr",
+                type: { baseType: BaseType.Array, element, fixedLength: 2, index: -1 },
+              },
+            ],
+          },
+        ],
+        enums: [],
+        rootTable: { name: "TestStruct" },
+      };
+      jest
+        .spyOn(Schema, "getRootAsSchema")
+        .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+          typeof Schema.getRootAsSchema
+        >);
+
+      expect(() => parseFlatbufferSchema("TestStruct", new Uint8Array())).toThrow(
+        `Fixed-length arrays of ${BaseType[element]} are unsupported for field "arr".`,
+      );
+    },
+  );
+
+  it("maps fixed-length arrays of structs as complex arrays", () => {
+    const fakeSchema = {
+      objects: [
+        {
+          name: "OuterStruct",
+          isStruct: true,
+          fields: [
+            {
+              name: "children",
+              type: {
+                baseType: BaseType.Array,
+                element: BaseType.Obj,
+                fixedLength: 3,
+                index: 1,
+              },
+            },
+          ],
+        },
+        {
+          name: "ChildStruct",
+          isStruct: true,
+          fields: [
+            {
+              name: "value",
+              type: { baseType: BaseType.Int, element: BaseType.None, index: -1 },
+            },
+          ],
+        },
+      ],
+      enums: [],
+      rootTable: { name: "OuterStruct" },
+    };
+    jest
+      .spyOn(Schema, "getRootAsSchema")
+      .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+        typeof Schema.getRootAsSchema
+      >);
+    jest.spyOn(Parser.prototype, "toObjectLambda").mockReturnValue(jest.fn());
+
+    const { datatypes } = parseFlatbufferSchema("OuterStruct", new Uint8Array());
+
+    expect(datatypes.get("OuterStruct")?.definitions).toEqual([
+      {
+        name: "children",
+        type: "ChildStruct",
+        isComplex: true,
+        isArray: true,
+        arrayLength: 3,
+      },
+    ]);
+  });
+
+  it("reports a missing field type as an invalid field type", () => {
+    const fakeSchema = {
+      objects: [
+        {
+          name: "TestMsg",
+          isStruct: false,
+          fields: [{ name: "broken", type: undefined }],
+        },
+      ],
+      enums: [],
+      rootTable: { name: "TestMsg" },
+    };
+    jest
+      .spyOn(Schema, "getRootAsSchema")
+      .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+        typeof Schema.getRootAsSchema
+      >);
+
+    expect(() => parseFlatbufferSchema("TestMsg", new Uint8Array())).toThrow(
+      'Invalid schema, field "broken" has an invalid field type.',
+    );
+  });
+
+  it.each([
+    [BaseType.Union, BaseType.None, "u", "Union"],
+    [BaseType.UType, BaseType.None, "u_type", "UType"],
+    [BaseType.Vector, BaseType.Union, "us", "Vector<Union>"],
+    [BaseType.Vector, BaseType.UType, "us_type", "Vector<UType>"],
+  ])("rejects %s fields inside structs", (baseType, element, fieldName, typeName) => {
+    const fakeSchema = {
+      objects: [
+        {
+          name: "MaliciousStruct",
+          isStruct: true,
+          fields: [
+            {
+              name: fieldName,
+              type: { baseType, element, index: 0 },
+            },
+          ],
+        },
+      ],
+      enums: [],
+      rootTable: { name: "MaliciousStruct" },
+    };
+    jest
+      .spyOn(Schema, "getRootAsSchema")
+      .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+        typeof Schema.getRootAsSchema
+      >);
+
+    expect(() => parseFlatbufferSchema("MaliciousStruct", new Uint8Array())).toThrow(
+      `Invalid schema, struct "MaliciousStruct" cannot contain ${typeName} field "${fieldName}".`,
+    );
+  });
+
+  it("rejects paired union vector fields inside a malicious struct schema", () => {
+    const fakeSchema = {
+      objects: [
+        {
+          name: "MaliciousStruct",
+          isStruct: true,
+          fields: [
+            {
+              name: "payload",
+              type: { baseType: BaseType.Vector, element: BaseType.Union, index: 0 },
+            },
+            {
+              name: "payload_type",
+              type: { baseType: BaseType.Vector, element: BaseType.UType, index: 0 },
+            },
+          ],
+        },
+      ],
+      enums: [],
+      rootTable: { name: "MaliciousStruct" },
+    };
+    jest
+      .spyOn(Schema, "getRootAsSchema")
+      .mockReturnValue({ unpack: () => fakeSchema } as unknown as ReturnType<
+        typeof Schema.getRootAsSchema
+      >);
+
+    expect(() => parseFlatbufferSchema("MaliciousStruct", new Uint8Array())).toThrow(
+      'Invalid schema, struct "MaliciousStruct" cannot contain Vector<Union> field "payload".',
+    );
   });
 
   it("throws when simple enum field has undefined values", () => {

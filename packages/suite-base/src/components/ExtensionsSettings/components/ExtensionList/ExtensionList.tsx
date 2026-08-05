@@ -1,11 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
-import { Button, Typography } from "@mui/material";
+import CloudUploadIcon from "@mui/icons-material/CloudUpload";
+import {
+  Button,
+  CircularProgress,
+  IconButton,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import { DataGrid, GridColDef, GridRenderCellParams } from "@mui/x-data-grid";
 import { useSnackbar } from "notistack";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import Logger from "@lichtblick/log";
 import { InstallButton } from "@lichtblick/suite-base/components/ExtensionsSettings/components/ExtensionActionButton/InstallButton";
 import { UninstallButton } from "@lichtblick/suite-base/components/ExtensionsSettings/components/ExtensionActionButton/UninstallButton";
 import {
@@ -22,28 +30,57 @@ import {
   ExtensionOperationStatusLabel,
 } from "@lichtblick/suite-base/components/ExtensionsSettings/types";
 import Stack from "@lichtblick/suite-base/components/Stack";
+import { AllowedFileExtensions } from "@lichtblick/suite-base/constants/allowedFileExtensions";
 import { useAnalytics } from "@lichtblick/suite-base/context/AnalyticsContext";
 import { useExtensionCatalog } from "@lichtblick/suite-base/context/ExtensionCatalogContext";
 import { ExtensionMarketplaceDetail } from "@lichtblick/suite-base/context/ExtensionMarketplaceContext";
+import { useInstallingExtensionsState } from "@lichtblick/suite-base/hooks/useInstallingExtensionsState";
 import { AppEvent } from "@lichtblick/suite-base/services/IAnalytics";
 import { canInstallExtension } from "@lichtblick/suite-base/util/canInstallExtension";
 import isDesktopApp from "@lichtblick/suite-base/util/isDesktopApp";
+
+const log = Logger.getLogger(__filename);
 
 export default function ExtensionList({
   namespace,
   entries,
   filterText,
   selectExtension,
+  allowUploadToOrganization = false,
 }: Readonly<ExtensionListProps>): React.JSX.Element {
   const { t } = useTranslation("extensionsSettings");
-  const installedExtensions = useExtensionCatalog((state) => state.installedExtensions);
-  const uninstallExtension = useExtensionCatalog((state) => state.uninstallExtension);
+  const installedExtensions = useExtensionCatalog(
+    (state) => state.installedExtensions,
+  );
+  const getExtensionPackage = useExtensionCatalog(
+    (state) => state.getExtensionPackage,
+  );
+  const refreshAllExtensions = useExtensionCatalog(
+    (state) => state.refreshAllExtensions,
+  );
+  const uninstallExtension = useExtensionCatalog(
+    (state) => state.uninstallExtension,
+  );
   const { enqueueSnackbar } = useSnackbar();
   const analytics = useAnalytics();
-  const [selectedExtensionIds, setSelectedExtensionIds] = useState<string[]>([]);
+  const [selectedExtensionIds, setSelectedExtensionIds] = useState<string[]>(
+    [],
+  );
   const [isBulkOperating, setIsBulkOperating] = useState(false);
+  const [uploadingExtensionId, setUploadingExtensionId] = useState<
+    string | undefined
+  >();
+  const [fallbackExtension, setFallbackExtension] = useState<
+    ExtensionMarketplaceDetail | undefined
+  >();
+  const uploadInputRef = useRef<HTMLInputElement>(ReactNull);
 
-  const { handleInstall, handleUninstall, operationStatus, isOperating } = useExtensionOperations();
+  const { handleInstall, handleUninstall, operationStatus, isOperating } =
+    useExtensionOperations();
+  const { installFoxeExtensions } = useInstallingExtensionsState({
+    isPlaying: false,
+    playerEvents: { play: undefined },
+  });
   const isExtensionInstalled = useCallback(
     (id: string) =>
       installedExtensions?.some(
@@ -52,12 +89,120 @@ export default function ExtensionList({
     [installedExtensions, namespace],
   );
 
+  const uploadPackage = useCallback(
+    async (
+      extension: ExtensionMarketplaceDetail,
+      buffer: Uint8Array,
+      file: File,
+    ) => {
+      setUploadingExtensionId(extension.id);
+      try {
+        const results = await installFoxeExtensions([
+          { buffer, file, namespace: "org" },
+        ]);
+        const uploadedToServer = results.some((result) =>
+          Boolean(
+            result.loaderResults?.some(
+              (loaderResult) =>
+                loaderResult.loaderType === "server" && loaderResult.success,
+            ),
+          ),
+        );
+        if (uploadedToServer) {
+          try {
+            await refreshAllExtensions();
+          } catch (error) {
+            log.warn(
+              "Extension uploaded, but the extension catalog could not be refreshed",
+              error,
+            );
+          }
+        }
+      } finally {
+        setUploadingExtensionId(undefined);
+      }
+    },
+    [installFoxeExtensions, refreshAllExtensions],
+  );
+
+  const selectOriginalPackage = useCallback(
+    (extension: ExtensionMarketplaceDetail) => {
+      setFallbackExtension(extension);
+      enqueueSnackbar(
+        t("selectOriginalExtensionFile", { name: extension.name }),
+        {
+          variant: "info",
+        },
+      );
+      uploadInputRef.current?.click();
+    },
+    [enqueueSnackbar, t],
+  );
+
+  const handleUploadToOrganization = useCallback(
+    async (extension: ExtensionMarketplaceDetail) => {
+      try {
+        const buffer = await getExtensionPackage("local", extension.id);
+        if (buffer == undefined) {
+          selectOriginalPackage(extension);
+          return;
+        }
+
+        const fileBuffer = new ArrayBuffer(buffer.byteLength);
+        new Uint8Array(fileBuffer).set(buffer);
+        const file = new File(
+          [fileBuffer],
+          `${extension.name}-${extension.version}${AllowedFileExtensions.FOXE}`,
+          { type: "application/octet-stream" },
+        );
+        await uploadPackage(extension, buffer, file);
+      } catch (error) {
+        log.warn(
+          `Unable to read stored extension package ${extension.id}`,
+          error,
+        );
+        selectOriginalPackage(extension);
+      }
+    },
+    [getExtensionPackage, selectOriginalPackage, uploadPackage],
+  );
+
+  const handleFallbackFileSelection = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (file == undefined || fallbackExtension == undefined) {
+        return;
+      }
+      if (!file.name.endsWith(AllowedFileExtensions.FOXE)) {
+        enqueueSnackbar(t("uploadExtensionOnlyFoxe"), { variant: "error" });
+        return;
+      }
+
+      try {
+        const buffer = new Uint8Array(await file.arrayBuffer());
+        await uploadPackage(fallbackExtension, buffer, file);
+        setFallbackExtension(undefined);
+      } catch (error) {
+        log.error(`Error reading file ${file.name}`, error);
+        enqueueSnackbar(t("uploadExtensionReadFailed"), { variant: "error" });
+      }
+    },
+    [enqueueSnackbar, fallbackExtension, t, uploadPackage],
+  );
+
   const handleBulkUninstall = useCallback(async () => {
-    const selectedExtensions = entries.filter((entry) => selectedExtensionIds.includes(entry.id));
-    const extensionsToUninstall = selectedExtensions.filter((ext) => isExtensionInstalled(ext.id));
+    const selectedExtensions = entries.filter((entry) =>
+      selectedExtensionIds.includes(entry.id),
+    );
+    const extensionsToUninstall = selectedExtensions.filter((ext) =>
+      isExtensionInstalled(ext.id),
+    );
 
     if (extensionsToUninstall.length === 0) {
-      enqueueSnackbar("No installed extensions to uninstall from selection", { variant: "info" });
+      enqueueSnackbar("No installed extensions to uninstall from selection", {
+        variant: "info",
+      });
       return;
     }
 
@@ -71,7 +216,9 @@ export default function ExtensionList({
         await new Promise((resolve) => setTimeout(resolve, 100));
         await uninstallExtension(extension.namespace ?? "local", extension.id);
         successCount++;
-        analytics.logEvent(AppEvent.EXTENSION_UNINSTALL, { type: extension.id });
+        analytics.logEvent(AppEvent.EXTENSION_UNINSTALL, {
+          type: extension.id,
+        });
       } catch (error) {
         console.error("Failed to uninstall extension:", error);
         failCount++;
@@ -84,7 +231,9 @@ export default function ExtensionList({
       });
     }
     if (failCount > 0) {
-      enqueueSnackbar(`${failCount} extension(s) failed to uninstall`, { variant: "error" });
+      enqueueSnackbar(`${failCount} extension(s) failed to uninstall`, {
+        variant: "error",
+      });
     }
 
     setIsBulkOperating(false);
@@ -115,15 +264,45 @@ export default function ExtensionList({
 
         if (isInstalled) {
           return (
-            <UninstallButton
-              extension={extension}
-              onAction={handleUninstall}
-              isOperating={isExtensionOperating}
-              operationStatus={operationStatus}
-              stopPropagation
-              label={ExtensionActionsLabel.UNINSTALL}
-              loadingLabel={ExtensionOperationStatusLabel.UNINSTALLING}
-            />
+            <Stack direction="row" gap={1} alignItems="center">
+              {namespace === "local" && allowUploadToOrganization && (
+                <Tooltip
+                  title={
+                    uploadingExtensionId === extension.id
+                      ? t("uploadingExtensionToOrganization")
+                      : t("uploadExtensionToOrganization")
+                  }
+                >
+                  <span>
+                    <IconButton
+                      aria-label={t("uploadExtensionToOrganization")}
+                      data-testid={`upload-extension-to-organization-${extension.id}`}
+                      size="small"
+                      disabled={uploadingExtensionId === extension.id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleUploadToOrganization(extension);
+                      }}
+                    >
+                      {uploadingExtensionId === extension.id ? (
+                        <CircularProgress size={18} />
+                      ) : (
+                        <CloudUploadIcon fontSize="small" />
+                      )}
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+              <UninstallButton
+                extension={extension}
+                onAction={handleUninstall}
+                isOperating={isExtensionOperating}
+                operationStatus={operationStatus}
+                stopPropagation
+                label={ExtensionActionsLabel.UNINSTALL}
+                loadingLabel={ExtensionOperationStatusLabel.UNINSTALLING}
+              />
+            </Stack>
           );
         } else {
           return (
@@ -149,8 +328,12 @@ export default function ExtensionList({
       return generatePlaceholderList(t("noExtensionsAvailable"));
     }
 
-    const selectedExtensions = entries.filter((entry) => selectedExtensionIds.includes(entry.id));
-    const selectedInstalled = selectedExtensions.filter((ext) => isExtensionInstalled(ext.id));
+    const selectedExtensions = entries.filter((entry) =>
+      selectedExtensionIds.includes(entry.id),
+    );
+    const selectedInstalled = selectedExtensions.filter((ext) =>
+      isExtensionInstalled(ext.id),
+    );
 
     return (
       <Stack gap={1}>
@@ -160,7 +343,9 @@ export default function ExtensionList({
             color="text.secondary"
             alignSelf="center"
             paddingY={1}
-            style={{ visibility: selectedInstalled.length > 0 ? "visible" : "hidden" }}
+            style={{
+              visibility: selectedInstalled.length > 0 ? "visible" : "hidden",
+            }}
           >
             {selectedExtensionIds.length} selected
           </Typography>
@@ -186,7 +371,10 @@ export default function ExtensionList({
               pagination: { paginationModel },
               columns: {
                 columnVisibilityModel: {
-                  actions: isDesktopApp() || !entries.some((entry) => canInstallExtension(entry)),
+                  actions:
+                    (namespace === "local" && allowUploadToOrganization) ||
+                    isDesktopApp() ||
+                    !entries.some((entry) => canInstallExtension(entry)),
                 },
               },
             }}
@@ -199,7 +387,8 @@ export default function ExtensionList({
               const isInstalled = installedExtensions
                 ? installedExtensions.some(
                     (installed) =>
-                      installed.id === extension.id && installed.namespace === extension.namespace,
+                      installed.id === extension.id &&
+                      installed.namespace === extension.namespace,
                   )
                 : false;
               selectExtension({ installed: isInstalled, entry: extension });
@@ -223,6 +412,26 @@ export default function ExtensionList({
         </Typography>
       </Stack>
       {renderComponent()}
+      {namespace === "local" && allowUploadToOrganization && (
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept={AllowedFileExtensions.FOXE}
+          name={fallbackExtension?.name}
+          aria-label={
+            fallbackExtension == undefined
+              ? undefined
+              : t("selectOriginalExtensionFile", {
+                  name: fallbackExtension.name,
+                })
+          }
+          style={{ display: "none" }}
+          data-testid="upload-installed-extension-input"
+          onChange={(event) => {
+            void handleFallbackFileSelection(event);
+          }}
+        />
+      )}
     </Stack>
   );
 }

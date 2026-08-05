@@ -3,7 +3,11 @@
 
 import { spawn } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
+import { createReadStream, readFileSync, realpathSync } from "node:fs";
+import { realpath, stat } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_PORT = 8770;
@@ -19,6 +23,31 @@ const MAX_STRING_LENGTH = 4096;
 const MAX_TOPICS = 200;
 const MAX_PAGE = 10_000;
 const MAX_PAGE_SIZE = 100;
+
+const DEFAULT_LAYOUT_PLACEHOLDER =
+  "/*LICHTBLICK_SUITE_DEFAULT_LAYOUT_PLACEHOLDER*/";
+const STATIC_MIME_TYPES = new Map([
+  [".css", "text/css; charset=utf-8"],
+  [".gif", "image/gif"],
+  [".html", "text/html; charset=utf-8"],
+  [".ico", "image/x-icon"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".js", "text/javascript; charset=utf-8"],
+  [".json", "application/json; charset=utf-8"],
+  [".map", "application/json; charset=utf-8"],
+  [".mjs", "text/javascript; charset=utf-8"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".ttf", "font/ttf"],
+  [".txt", "text/plain; charset=utf-8"],
+  [".wasm", "application/wasm"],
+  [".webmanifest", "application/manifest+json; charset=utf-8"],
+  [".webp", "image/webp"],
+  [".woff", "font/woff"],
+  [".woff2", "font/woff2"],
+  [".xml", "application/xml; charset=utf-8"],
+]);
 
 const ERROR_BAD_REQUEST = "bad-request";
 const ERROR_TIMEOUT = "timeout";
@@ -45,7 +74,10 @@ const COMMAND_SPECS = new Map([
     {
       params: options([
         ["page", option("--page", "integer", { min: 1, max: MAX_PAGE })],
-        ["pageSize", option("--page-size", "integer", { min: 1, max: MAX_PAGE_SIZE })],
+        [
+          "pageSize",
+          option("--page-size", "integer", { min: 1, max: MAX_PAGE_SIZE }),
+        ],
         ["id", option("--id", "id")],
         ["botName", option("--bot-name")],
         ["botSn", option("--bot-sn")],
@@ -64,7 +96,10 @@ const COMMAND_SPECS = new Map([
         ["dataDay", option("--data-day")],
         ["dataTos", option("--data-tos")],
         ["orderBy", option("--order-by")],
-        ["orderDir", option("--order-dir", "enum", { values: ["ASC", "DESC"] })],
+        [
+          "orderDir",
+          option("--order-dir", "enum", { values: ["ASC", "DESC"] }),
+        ],
       ]),
     },
   ],
@@ -144,21 +179,35 @@ function requestTimeoutError(message) {
 
 function sanitizeLogMessage(value) {
   const sanitized = String(value)
-    .replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "Authorization: Bearer [REDACTED]")
+    .replace(
+      /authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi,
+      "Authorization: Bearer [REDACTED]",
+    )
     .replace(/\bbearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
     .replace(/\btos:\/\/[^\s"'<>]+/gi, "tos://[REDACTED]")
     .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => {
-      const withoutUserInfo = url.replace(/^(https?:\/\/)[^/?#@\s]+@/i, "$1[REDACTED]@");
-      const requestSuffixIndex = [withoutUserInfo.indexOf("?"), withoutUserInfo.indexOf("#")]
+      const withoutUserInfo = url.replace(
+        /^(https?:\/\/)[^/?#@\s]+@/i,
+        "$1[REDACTED]@",
+      );
+      const requestSuffixIndex = [
+        withoutUserInfo.indexOf("?"),
+        withoutUserInfo.indexOf("#"),
+      ]
         .filter((index) => index >= 0)
-        .reduce((minimum, index) => Math.min(minimum, index), Number.POSITIVE_INFINITY);
+        .reduce(
+          (minimum, index) => Math.min(minimum, index),
+          Number.POSITIVE_INFINITY,
+        );
       return Number.isFinite(requestSuffixIndex)
         ? `${withoutUserInfo.slice(0, requestSuffixIndex)}?[REDACTED]`
         : withoutUserInfo;
     });
   return Array.from(sanitized, (character) => {
     const codePoint = character.codePointAt(0);
-    return codePoint != null && (codePoint <= 0x1f || codePoint === 0x7f) ? " " : character;
+    return codePoint != null && (codePoint <= 0x1f || codePoint === 0x7f)
+      ? " "
+      : character;
   })
     .join("")
     .slice(0, 4096);
@@ -177,7 +226,9 @@ function parsePositiveInteger(value, name) {
 }
 
 function readEnvironmentInteger(value, fallback, name) {
-  return value == null || value === "" ? fallback : parsePositiveInteger(value, name);
+  return value == null || value === ""
+    ? fallback
+    : parsePositiveInteger(value, name);
 }
 
 function validateString(value, key, { allowLeadingDash = false } = {}) {
@@ -220,7 +271,11 @@ function validateValue(value, key, descriptor) {
       }
       return value;
     case "integer":
-      if (!Number.isSafeInteger(value) || value < descriptor.min || value > descriptor.max) {
+      if (
+        !Number.isSafeInteger(value) ||
+        value < descriptor.min ||
+        value > descriptor.max
+      ) {
         throw badRequest(
           `Parameter "${key}" must be an integer between ${descriptor.min} and ${descriptor.max}`,
         );
@@ -256,13 +311,23 @@ function validateValue(value, key, descriptor) {
       return stringValue;
     }
     case "topics":
-      if (!Array.isArray(value) || value.length === 0 || value.length > MAX_TOPICS) {
-        throw badRequest(`Parameter "${key}" must contain between 1 and ${MAX_TOPICS} topics`);
+      if (
+        !Array.isArray(value) ||
+        value.length === 0 ||
+        value.length > MAX_TOPICS
+      ) {
+        throw badRequest(
+          `Parameter "${key}" must contain between 1 and ${MAX_TOPICS} topics`,
+        );
       }
       return value
         .map((topic, index) => {
           const stringValue = validateString(topic, `${key}[${index}]`);
-          if (!stringValue.startsWith("/") || stringValue.includes(",")) {
+          // Topic names are opaque to the CLI and real recordings contain names
+          // without a leading slash (e.g. "aorta/...", "collectd/..."). The only
+          // structural constraint is the comma, because topics are joined with
+          // "," into a single CLI argument below.
+          if (stringValue.includes(",")) {
             throw badRequest(`Parameter "${key}" contains an invalid topic`);
           }
           return stringValue;
@@ -305,6 +370,14 @@ export function buildVtdArgs(command, params) {
     if (!Object.hasOwn(params, key)) {
       continue;
     }
+    if (
+      descriptor.kind === "topics" &&
+      Array.isArray(params[key]) &&
+      params[key].length === 0
+    ) {
+      consumedKeys.add(key);
+      continue;
+    }
     const value = validateValue(params[key], key, descriptor);
     consumedKeys.add(key);
     if (descriptor.kind === "boolean") {
@@ -320,7 +393,9 @@ export function buildVtdArgs(command, params) {
 
   for (const key of Object.keys(params)) {
     if (!consumedKeys.has(key)) {
-      throw badRequest(`Unsupported parameter "${key}" for command "${command}"`);
+      throw badRequest(
+        `Unsupported parameter "${key}" for command "${command}"`,
+      );
     }
   }
 
@@ -336,11 +411,158 @@ function sendJson(response, statusCode, value, corsHeaders) {
   response.end(JSON.stringify(value));
 }
 
+function isWithinRoot(root, target) {
+  const relativePath = relative(root, target);
+  return (
+    relativePath === "" ||
+    (!isAbsolute(relativePath) &&
+      relativePath !== ".." &&
+      !relativePath.startsWith(`..${sep}`))
+  );
+}
+
+function serializeDefaultLayout(defaultLayout) {
+  let parsed;
+  try {
+    parsed = JSON.parse(defaultLayout);
+  } catch {
+    throw new Error("LICHTBLICK_SUITE_DEFAULT_LAYOUT must contain valid JSON");
+  }
+  return JSON.stringify(parsed)
+    .replaceAll("<", "\\u003c")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+}
+
+function createStaticFileConfig(staticRoot, defaultLayout) {
+  if (staticRoot === "") {
+    return undefined;
+  }
+  const root = realpathSync(resolve(staticRoot));
+  const indexPath = realpathSync(join(root, "index.html"));
+  if (!isWithinRoot(root, indexPath)) {
+    throw new Error(
+      "STATIC_ROOT index.html resolves outside the configured root",
+    );
+  }
+  const originalIndex = readFileSync(indexPath, "utf8");
+  const serializedDefaultLayout =
+    defaultLayout == null ? undefined : serializeDefaultLayout(defaultLayout);
+  const indexHtml = Buffer.from(
+    serializedDefaultLayout == null
+      ? originalIndex
+      : originalIndex.replace(DEFAULT_LAYOUT_PLACEHOLDER, () => serializedDefaultLayout),
+    "utf8",
+  );
+  return { indexHtml, indexPath, root };
+}
+
+function decodeStaticPath(rawRequestUrl) {
+  const rawPath = rawRequestUrl.split(/[?#]/u, 1)[0] ?? "/";
+  if (rawPath.includes("\\") || /%00/iu.test(rawPath)) {
+    throw badRequest("Static path contains a forbidden value");
+  }
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(rawPath);
+  } catch {
+    throw badRequest("Static path is not valid URL encoding");
+  }
+  if (
+    !decodedPath.startsWith("/") ||
+    decodedPath.includes("\0") ||
+    decodedPath.includes("\\")
+  ) {
+    throw badRequest("Static path contains a forbidden value");
+  }
+  return decodedPath;
+}
+
+function isMissingFileError(error) {
+  return (
+    error != null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
+}
+
+async function resolveStaticFile(staticFiles, decodedPath) {
+  let candidate = resolve(staticFiles.root, `.${decodedPath}`);
+  if (!isWithinRoot(staticFiles.root, candidate)) {
+    throw badRequest("Static path escapes the configured root");
+  }
+  try {
+    let candidateStat = await stat(candidate);
+    if (candidateStat.isDirectory()) {
+      candidate = join(candidate, "index.html");
+      candidateStat = await stat(candidate);
+    }
+    if (!candidateStat.isFile()) {
+      return undefined;
+    }
+    const realCandidate = await realpath(candidate);
+    if (!isWithinRoot(staticFiles.root, realCandidate)) {
+      throw badRequest("Static path resolves outside the configured root");
+    }
+    return { path: realCandidate, size: candidateStat.size };
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function staticHeaders(path, contentLength, cors) {
+  return {
+    ...cors,
+    "Content-Length": contentLength,
+    "Content-Type":
+      STATIC_MIME_TYPES.get(extname(path).toLowerCase()) ??
+      "application/octet-stream",
+    "X-Content-Type-Options": "nosniff",
+  };
+}
+
+async function sendStaticResponse(request, response, staticFiles, cors) {
+  const decodedPath = decodeStaticPath(request.url ?? "/");
+  const file = await resolveStaticFile(staticFiles, decodedPath);
+  const acceptsHtml = request.headers.accept
+    ?.split(",")
+    .some(
+      (value) => value.split(";", 1)[0]?.trim().toLowerCase() === "text/html",
+    );
+  const useIndex =
+    file?.path === staticFiles.indexPath ||
+    (file == null && acceptsHtml === true);
+
+  if (useIndex) {
+    response.writeHead(
+      200,
+      staticHeaders(staticFiles.indexPath, staticFiles.indexHtml.length, cors),
+    );
+    response.end(request.method === "HEAD" ? undefined : staticFiles.indexHtml);
+    return;
+  }
+  if (file == null) {
+    throw badRequest("Static file was not found", 404);
+  }
+
+  response.writeHead(200, staticHeaders(file.path, file.size, cors));
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
+  await pipeline(createReadStream(file.path), response);
+}
+
 function corsHeaders(allowOrigin, authToken) {
   if (allowOrigin === "") {
     return {};
   }
-  const allowedHeaders = authToken === "" ? "Content-Type" : "Content-Type, Authorization";
+  const allowedHeaders =
+    authToken === "" ? "Content-Type" : "Content-Type, Authorization";
   return {
     "Access-Control-Allow-Headers": allowedHeaders,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -351,7 +573,12 @@ function corsHeaders(allowOrigin, authToken) {
 
 function assertAllowedOrigin(request, allowOrigin) {
   const origin = request.headers.origin;
-  if (origin != null && allowOrigin !== "" && allowOrigin !== "*" && origin !== allowOrigin) {
+  if (
+    origin != null &&
+    allowOrigin !== "" &&
+    allowOrigin !== "*" &&
+    origin !== allowOrigin
+  ) {
     throw badRequest("Origin is not allowed", 403);
   }
 }
@@ -367,7 +594,10 @@ function assertAuthorization(request, authToken) {
   }
   const actualBytes = Buffer.from(actual, "utf8");
   const expectedBytes = Buffer.from(expected, "utf8");
-  if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) {
+  if (
+    actualBytes.length !== expectedBytes.length ||
+    !timingSafeEqual(actualBytes, expectedBytes)
+  ) {
     throw badRequest("Authorization failed", 401);
   }
 }
@@ -440,7 +670,11 @@ function readJsonBody(request, bodyTimeoutMs) {
       }
     };
     const timeout = setTimeout(() => {
-      fail(requestTimeoutError(`Request body was not completed within ${bodyTimeoutMs} ms`));
+      fail(
+        requestTimeoutError(
+          `Request body was not completed within ${bodyTimeoutMs} ms`,
+        ),
+      );
       request.resume();
     }, bodyTimeoutMs);
     timeout.unref?.();
@@ -538,8 +772,12 @@ function executeVtd({
         }
         leaked = true;
         onLeaked();
-        logError("vtd child did not emit close after SIGKILL; process marked leaked");
-        rejectOnce(timeoutError("vtd process did not close after forced termination"));
+        logError(
+          "vtd child did not emit close after SIGKILL; process marked leaked",
+        );
+        rejectOnce(
+          timeoutError("vtd process did not close after forced termination"),
+        );
       }, leakGraceMs);
       leakTimer.unref?.();
       sendSignal("SIGKILL");
@@ -609,7 +847,11 @@ function executeVtd({
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       outputBytes += buffer.length;
       if (outputBytes > maxOutputBytes) {
-        terminate(upstreamError(`vtd output exceeded configured limit of ${maxOutputBytes} bytes`));
+        terminate(
+          upstreamError(
+            `vtd output exceeded configured limit of ${maxOutputBytes} bytes`,
+          ),
+        );
         return;
       }
       if (streamName === "stdout") {
@@ -651,7 +893,9 @@ function normalizeError(error) {
     return error;
   }
   return upstreamError(
-    error instanceof Error ? error.message : `Unexpected error: ${String(error)}`,
+    error instanceof Error
+      ? error.message
+      : `Unexpected error: ${String(error)}`,
   );
 }
 
@@ -669,6 +913,8 @@ export function createVtdSidecarServer({
   ),
   pendingBodyLimit = DEFAULT_PENDING_BODY_LIMIT,
   spawnImpl = spawn,
+  staticRoot = process.env.STATIC_ROOT ?? "",
+  defaultLayout = process.env.LICHTBLICK_SUITE_DEFAULT_LAYOUT,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 } = {}) {
   for (const [value, name] of [
@@ -685,6 +931,7 @@ export function createVtdSidecarServer({
 
   let activeCommands = 0;
   let pendingBodies = 0;
+  const staticFiles = createStaticFileConfig(staticRoot, defaultLayout);
 
   return createHttpServer(async (request, response) => {
     const headers = corsHeaders(allowOrigin, authToken);
@@ -702,6 +949,15 @@ export function createVtdSidecarServer({
           throw badRequest("Method is not allowed", 405);
         }
         sendJson(response, 200, { status: "ok" }, headers);
+        return;
+      }
+
+      if (
+        staticFiles != null &&
+        !requestUrl.pathname.startsWith("/vtd/") &&
+        (request.method === "GET" || request.method === "HEAD")
+      ) {
+        await sendStaticResponse(request, response, staticFiles, headers);
         return;
       }
 
@@ -750,7 +1006,9 @@ export function createVtdSidecarServer({
 
       const disconnectController = new AbortController();
       const onRequestAborted = () => {
-        disconnectController.abort(new DOMException("Client disconnected", "AbortError"));
+        disconnectController.abort(
+          new DOMException("Client disconnected", "AbortError"),
+        );
       };
       const onResponseClose = () => {
         if (!response.writableEnded) {
@@ -798,7 +1056,12 @@ export function createVtdSidecarServer({
       const normalized = normalizeError(error);
       logError(normalized.message);
       if (!response.headersSent && !response.destroyed) {
-        sendJson(response, normalized.statusCode, { error: normalized.category }, headers);
+        sendJson(
+          response,
+          normalized.statusCode,
+          { error: normalized.category },
+          headers,
+        );
       } else {
         response.destroy();
       }
@@ -822,11 +1085,16 @@ function startFromEnvironment() {
   });
 }
 
-if (process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] != null &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   try {
     startFromEnvironment();
   } catch (error) {
-    logError(`startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    logError(
+      `startup failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
     process.exitCode = 1;
   }
 }
