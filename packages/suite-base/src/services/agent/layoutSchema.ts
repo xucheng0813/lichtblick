@@ -8,12 +8,12 @@ import type { LayoutData } from "@lichtblick/suite-base/context/CurrentLayoutCon
 import type { LayoutProposal } from "./types";
 
 /**
- * Panel types contributed by the bundled robot visualization extensions.
+ * Static baseline of panel types the Agent may propose even when no runtime inventory is available.
  *
  * An extension panel's type is `<qualifiedName>.<registeredName>`, where qualifiedName is the
- * extension's displayName. These are literal strings rather than a lookup because the layout
- * allowlist is a security boundary evaluated against untrusted model output, and must not depend on
- * what happens to be installed at the time.
+ * extension's displayName. validateLayoutProposal may additionally accept types from a runtime
+ * installed-panel set derived from PanelCatalog. That trusted host-provided set is the second layer
+ * of the security boundary; it must never be populated from model output.
  */
 export const QUADRUPED_VIZ_PANEL_TYPE = "Quadruped Visualization.Quadruped Visualization";
 export const HUMANOID_VIZ_PANEL_TYPE = "Humanoid Visualization.Humanoid Visualization";
@@ -51,6 +51,9 @@ export type AgentSafeLayoutData = LayoutData & {
 };
 export type ValidatedLayoutProposal = Omit<LayoutProposal, "data"> & {
   data: AgentSafeLayoutData;
+};
+export type ValidateLayoutProposalOptions = {
+  installedPanelTypes?: ReadonlySet<string>;
 };
 
 const allowedPanelTypes = new Set<string>(ALLOWED_PANEL_TYPES);
@@ -97,12 +100,19 @@ function getPanelType(panelId: string): string | undefined {
   return panelId.slice(0, separator);
 }
 
-function validatePanelId(panelId: string, location: string): void {
+function validatePanelId(
+  panelId: string,
+  location: string,
+  installedPanelTypes?: ReadonlySet<string>,
+): void {
   const panelType = getPanelType(panelId);
   if (panelType == undefined) {
     throw new Error(`${location} must match "<type>!<suffix>"`);
   }
-  if (!allowedPanelTypes.has(panelType)) {
+  if (
+    !allowedPanelTypes.has(panelType) &&
+    installedPanelTypes?.has(panelType) !== true
+  ) {
     throw new Error(`${location} uses unsupported panel type "${panelType}"`);
   }
 }
@@ -112,6 +122,11 @@ function validatePanelConfig(
   config: Record<string, unknown>,
 ): void {
   const panelType = getPanelType(panelId);
+  if (panelType == undefined || !allowedPanelTypes.has(panelType)) {
+    // Runtime-installed extension panels have no per-type schema here. Their configs have already
+    // crossed the generic plain-object and JSON graph validation boundary.
+    return;
+  }
   const requiredArrayFields: Partial<Record<AllowedPanelType, readonly string[]>> = {
     Plot: ["paths"],
     StateTransitions: ["paths"],
@@ -247,10 +262,11 @@ function validateMosaicNode(
   panelIds: Set<string>,
   ancestors: Set<object>,
   location: string,
+  installedPanelTypes?: ReadonlySet<string>,
   depth = 0,
 ): asserts node is MosaicNode<string> {
   if (typeof node === "string") {
-    validatePanelId(node, location);
+    validatePanelId(node, location, installedPanelTypes);
     if (panelIds.has(node)) {
       throw new Error(`duplicate panel id "${node}" in layout`);
     }
@@ -300,6 +316,7 @@ function validateMosaicNode(
     panelIds,
     ancestors,
     `${location}.first`,
+    installedPanelTypes,
     depth + 1,
   );
   validateMosaicNode(
@@ -308,6 +325,7 @@ function validateMosaicNode(
     panelIds,
     ancestors,
     `${location}.second`,
+    installedPanelTypes,
     depth + 1,
   );
   ancestors.delete(node);
@@ -318,7 +336,10 @@ function validateMosaicNode(
  * valid application LayoutData, including unsupported panels and values outside the exported
  * resource budgets.
  */
-export function validateLayoutProposalData(data: unknown): AgentSafeLayoutData {
+function validateLayoutProposalDataWithOptions(
+  data: unknown,
+  options?: ValidateLayoutProposalOptions,
+): AgentSafeLayoutData {
   if (!isPlainObject(data)) {
     throw new Error("LayoutProposal.data must be an object");
   }
@@ -362,7 +383,11 @@ export function validateLayoutProposalData(data: unknown): AgentSafeLayoutData {
   }
 
   for (const [panelId, config] of configEntries) {
-    validatePanelId(panelId, `configById key "${panelId}"`);
+    validatePanelId(
+      panelId,
+      `configById key "${panelId}"`,
+      options?.installedPanelTypes,
+    );
     if (!isPlainObject(config)) {
       throw new Error(`configById["${panelId}"] must be an object`);
     }
@@ -371,7 +396,14 @@ export function validateLayoutProposalData(data: unknown): AgentSafeLayoutData {
 
   const panelIds = new Set<string>();
   if (typeof data.layout !== "undefined") {
-    validateMosaicNode(data.layout, configById, panelIds, new Set(), "layout");
+    validateMosaicNode(
+      data.layout,
+      configById,
+      panelIds,
+      new Set(),
+      "layout",
+      options?.installedPanelTypes,
+    );
   }
   for (const [panelId] of configEntries) {
     if (!panelIds.has(panelId)) {
@@ -380,6 +412,10 @@ export function validateLayoutProposalData(data: unknown): AgentSafeLayoutData {
   }
 
   return data as AgentSafeLayoutData;
+}
+
+export function validateLayoutProposalData(data: unknown): AgentSafeLayoutData {
+  return validateLayoutProposalDataWithOptions(data);
 }
 
 export function isValidLayoutProposalData(data: unknown): data is AgentSafeLayoutData {
@@ -391,9 +427,12 @@ export function isValidLayoutProposalData(data: unknown): data is AgentSafeLayou
   }
 }
 
-export function validateLayoutProposal(proposal: LayoutProposal): ValidatedLayoutProposal {
+export function validateLayoutProposal(
+  proposal: LayoutProposal,
+  options?: ValidateLayoutProposalOptions,
+): ValidatedLayoutProposal {
   return {
     ...proposal,
-    data: validateLayoutProposalData(proposal.data),
+    data: validateLayoutProposalDataWithOptions(proposal.data, options),
   };
 }
