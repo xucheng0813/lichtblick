@@ -14,7 +14,10 @@ import SecureCredentialsService from "./SecureCredentialsService";
 
 type SafeStorageApi = Pick<
   SafeStorage,
-  "decryptString" | "encryptString" | "getSelectedStorageBackend" | "isEncryptionAvailable"
+  | "decryptString"
+  | "encryptString"
+  | "getSelectedStorageBackend"
+  | "isEncryptionAvailable"
 >;
 
 function fakeSafeStorage(): SafeStorageApi {
@@ -24,7 +27,9 @@ function fakeSafeStorage(): SafeStorageApi {
       if (!encoded.startsWith("encrypted:")) {
         throw new Error("invalid ciphertext");
       }
-      return Buffer.from(encoded.slice("encrypted:".length), "base64").toString("utf8");
+      return Buffer.from(encoded.slice("encrypted:".length), "base64").toString(
+        "utf8",
+      );
     }),
     encryptString: jest.fn((value) =>
       Buffer.from(`encrypted:${Buffer.from(value).toString("base64")}`),
@@ -35,7 +40,9 @@ function fakeSafeStorage(): SafeStorageApi {
 }
 
 function encryptedValue(value: string): string {
-  return Buffer.from(`encrypted:${Buffer.from(value).toString("base64")}`).toString("base64");
+  return Buffer.from(
+    `encrypted:${Buffer.from(value).toString("base64")}`,
+  ).toString("base64");
 }
 
 function serializeTestValue(value: unknown): string {
@@ -68,7 +75,10 @@ describe("SecureCredentialsService", () => {
       ]),
     ).resolves.toEqual([{ ok: true }, { ok: true }]);
 
-    const contents = await readFile(join(userDataPath, "agent-credentials.json"), "utf8");
+    const contents = await readFile(
+      join(userDataPath, "agent-credentials.json"),
+      "utf8",
+    );
     expect(contents).not.toContain("llm-secret");
     expect(contents).not.toContain("vtd-secret");
     expect(JSON.parse(contents)).toEqual({
@@ -94,6 +104,62 @@ describe("SecureCredentialsService", () => {
     });
     expect(safeStorage.encryptString).toHaveBeenCalledTimes(2);
     expect(safeStorage.decryptString).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts bounded profile keys and rejects arbitrary or malformed keys", async () => {
+    const service = new SecureCredentialsService({
+      safeStorage: fakeSafeStorage(),
+      userDataPath,
+    });
+    const profileKey = "agent.profile.profile-123.llmApiKey";
+
+    await expect(service.set(profileKey, "profile-secret")).resolves.toEqual({
+      ok: true,
+    });
+    await expect(service.get(profileKey)).resolves.toEqual({
+      ok: true,
+      value: "profile-secret",
+    });
+    await expect(
+      service.set("agent.profile.bad_id.llmApiKey", "secret"),
+    ).rejects.toThrow("Unsupported secure credential key");
+    await expect(
+      service.set(`agent.profile.${"a".repeat(65)}.llmApiKey`, "secret"),
+    ).rejects.toThrow("Unsupported secure credential key");
+    await expect(
+      service.get("agent.profile.profile-123.unrelated"),
+    ).rejects.toThrow("Unsupported secure credential key");
+    await expect(
+      service.setMany([
+        {
+          key: "unrelated.key",
+          value: serializeTestValue({ revision: "R1" }),
+        },
+      ] as never),
+    ).resolves.toEqual({ code: "invalid-request", ok: false });
+  });
+
+  it("rejects arbitrary keys already present in the credentials file", async () => {
+    await writeFile(
+      join(userDataPath, "agent-credentials.json"),
+      serializeTestValue({
+        credentials: {
+          "agent.profile.bad_id.llmApiKey": {
+            backend: "gnome_libsecret",
+            ciphertext: encryptedValue("secret"),
+          },
+        },
+        version: 2,
+      }),
+    );
+    const service = new SecureCredentialsService({
+      safeStorage: fakeSafeStorage(),
+      userDataPath,
+    });
+
+    await expect(service.get("agent.llmApiKey")).rejects.toThrow(
+      "Unable to read secure credentials",
+    );
   });
 
   it("does not write any entry when a setMany entry is invalid or encryption fails", async () => {
@@ -126,7 +192,9 @@ describe("SecureCredentialsService", () => {
         },
       ] as never),
     ).resolves.toEqual({ code: "invalid-request", ok: false });
-    await expect(readFile(credentialsPath, "utf8")).resolves.toBe(contentsBefore);
+    await expect(readFile(credentialsPath, "utf8")).resolves.toBe(
+      contentsBefore,
+    );
 
     jest
       .mocked(safeStorage.encryptString)
@@ -150,7 +218,9 @@ describe("SecureCredentialsService", () => {
         },
       ]),
     ).rejects.toThrow("encryption failed");
-    await expect(readFile(credentialsPath, "utf8")).resolves.toBe(contentsBefore);
+    await expect(readFile(credentialsPath, "utf8")).resolves.toBe(
+      contentsBefore,
+    );
   });
 
   it("allows only one concurrent setMany writer for an expected revision", async () => {
@@ -234,19 +304,25 @@ describe("SecureCredentialsService", () => {
     await expect(unavailableService.set("other.key", "secret")).rejects.toThrow(
       "Unsupported secure credential key",
     );
-    await expect(unavailableService.set("agent.llmApiKey", "secret")).resolves.toEqual({
+    await expect(
+      unavailableService.set("agent.llmApiKey", "secret"),
+    ).resolves.toEqual({
       code: "backend-unavailable",
       ok: false,
     });
     expect(unavailable.encryptString).not.toHaveBeenCalled();
 
     const basicText = fakeSafeStorage();
-    jest.mocked(basicText.getSelectedStorageBackend).mockReturnValue("basic_text");
+    jest
+      .mocked(basicText.getSelectedStorageBackend)
+      .mockReturnValue("basic_text");
     const basicTextService = new SecureCredentialsService({
       safeStorage: basicText,
       userDataPath,
     });
-    await expect(basicTextService.set("agent.vtdAuthToken", "secret")).resolves.toEqual({
+    await expect(
+      basicTextService.set("agent.vtdAuthToken", "secret"),
+    ).resolves.toEqual({
       code: "insecure-backend",
       ok: false,
     });
@@ -260,7 +336,10 @@ describe("SecureCredentialsService", () => {
     const safeStorage = fakeSafeStorage();
     const service = new SecureCredentialsService({ safeStorage, userDataPath });
     await service.set("agent.llmApiKey", "preserved-secret");
-    const contentsBefore = await readFile(join(userDataPath, "agent-credentials.json"), "utf8");
+    const contentsBefore = await readFile(
+      join(userDataPath, "agent-credentials.json"),
+      "utf8",
+    );
 
     jest.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
     await expect(service.get("agent.llmApiKey")).resolves.toEqual({
@@ -268,9 +347,9 @@ describe("SecureCredentialsService", () => {
       ok: false,
     });
     expect(safeStorage.decryptString).not.toHaveBeenCalled();
-    await expect(readFile(join(userDataPath, "agent-credentials.json"), "utf8")).resolves.toBe(
-      contentsBefore,
-    );
+    await expect(
+      readFile(join(userDataPath, "agent-credentials.json"), "utf8"),
+    ).resolves.toBe(contentsBefore);
 
     jest.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
     await expect(service.get("agent.llmApiKey")).resolves.toEqual({
@@ -281,7 +360,9 @@ describe("SecureCredentialsService", () => {
 
   it("marks legacy records insecure when the current backend is basic_text", async () => {
     const safeStorage = fakeSafeStorage();
-    jest.mocked(safeStorage.getSelectedStorageBackend).mockReturnValue("basic_text");
+    jest
+      .mocked(safeStorage.getSelectedStorageBackend)
+      .mockReturnValue("basic_text");
     await writeFile(
       join(userDataPath, "agent-credentials.json"),
       serializeTestValue({
@@ -353,7 +434,12 @@ describe("SecureCredentialsService", () => {
     if (corruptContents == undefined) {
       throw new Error("Unable to serialize test credentials");
     }
-    await writeFile(join(userDataPath, "agent-credentials.json"), corruptContents);
-    await expect(service.get("agent.llmApiKey")).rejects.toThrow("invalid ciphertext");
+    await writeFile(
+      join(userDataPath, "agent-credentials.json"),
+      corruptContents,
+    );
+    await expect(service.get("agent.llmApiKey")).rejects.toThrow(
+      "invalid ciphertext",
+    );
   });
 });
