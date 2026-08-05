@@ -99,10 +99,10 @@ class ExtensionsAPI implements IExtensionAPI {
     }
   }
 
-  public async loadContent(id: string): Promise<Uint8Array | undefined> {
+  public async loadContent(extensionId: string): Promise<Uint8Array | undefined> {
     try {
       const { data } = await HttpService.get<ArrayBuffer>(
-        `${this.extensionPath}/${id}/download`,
+        `${this.extensionPath}/${extensionId}/download`,
         undefined,
         { responseType: "arraybuffer" },
       );

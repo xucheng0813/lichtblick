@@ -45,10 +45,10 @@ export class RemoteExtensionLoader implements IExtensionLoader {
     return await this.#remote.list();
   }
 
-  public async loadExtension(id: string): Promise<LoadedExtension> {
-    log.debug("[Remote] Loading extension", id);
+  public async loadExtension(extensionId: string): Promise<LoadedExtension> {
+    log.debug("[Remote] Loading extension", extensionId);
 
-    const foxeFileData = await this.#remote.loadContent(id);
+    const foxeFileData = await this.#remote.loadContent(extensionId);
     if (!foxeFileData) {
       throw new Error(
         "Extension is corrupted or does not exist in the file system.",

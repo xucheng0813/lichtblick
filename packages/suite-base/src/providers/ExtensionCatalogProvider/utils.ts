@@ -60,14 +60,14 @@ export async function loadSingleExtension(
   loader: IExtensionLoader,
   orgCacheLoader: IExtensionLoader | undefined,
 ): Promise<string> {
-  if (loader.namespace === "org" && loader.type === "server" && extension.externalId) {
+  if (loader.namespace === "org" && loader.type === "server") {
     const cachedSource = await tryLoadFromCache(extension, orgCacheLoader).catch((err: unknown) => {
       log.warn(`Cache lookup failed for ${extension.id}, falling back to remote`, err);
       return undefined;
     });
 
     if (cachedSource == undefined) {
-      const { raw, buffer } = await loader.loadExtension(extension.externalId);
+      const { raw, buffer } = await loader.loadExtension(extension.id);
       if (buffer && orgCacheLoader) {
         await orgCacheLoader.installExtension({ foxeFileData: buffer }).catch((err: unknown) => {
           log.warn(`Failed to cache extension ${extension.id}`, err);
@@ -134,11 +134,6 @@ export function removeExtensionData({
       : new Map([...installedCameraModels].filter(([, { extensionId }]) => extensionId !== id)),
   };
 }
-// Returns the extension id to use when calling loader.loadExtension after installation.
-export function getExtensionLoadId(loader: IExtensionLoader, info: ExtensionInfo): string {
-  return loader.namespace === "org" && loader.type === "server" ? info.externalId! : info.id;
-}
-
 export async function tryInstallSingleLoader(
   loader: IExtensionLoader,
   extension: ExtensionData,
@@ -151,7 +146,7 @@ export async function tryInstallSingleLoader(
       externalId: loader.type === "server" ? undefined : currentExternalId,
     });
     const externalId = loader.type === "server" ? info.externalId : undefined;
-    const { raw } = await loader.loadExtension(getExtensionLoadId(loader, info));
+    const { raw } = await loader.loadExtension(info.id);
     const contributionPoints = buildContributionPoints(info, raw);
     return { loaderType: loader.type, success: true, info, contributionPoints, externalId };
   } catch (error) {

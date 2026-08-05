@@ -32,5 +32,5 @@ export const extensionsSettings = {
   installOrganizationExtension: "Install",
   installingOrganizationExtension: "Installing...",
   organizationExtensionInstallFailed:
-    "Could not install organization extension.",
+    "Could not install organization extension: {{reason}}",
 };

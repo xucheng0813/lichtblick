@@ -17,6 +17,12 @@ import {
   commitAgentSettings,
 } from "@lichtblick/suite-base/services/agent/agentSettings";
 import * as agentSettingsModule from "@lichtblick/suite-base/services/agent/agentSettings";
+import {
+  AGENT_PROMPT_MAX_CUSTOM_SKILLS,
+  AGENT_PROMPT_MAX_SKILL_BODY_LENGTH,
+} from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import * as agentPromptsModule from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import * as remotePromptCustomizationModule from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
 import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAppConfiguration";
@@ -250,6 +256,31 @@ function renderSettings(
       <AgentSettings isDesktop={isDesktop} onCommitHandlerChange={onCommitHandlerChange} />
     </AppConfigurationContext.Provider>,
   );
+}
+
+function mockCachedCloudSkills(
+  customSkills: AgentPromptCustomization["customSkills"],
+): void {
+  jest
+    .spyOn(remotePromptCustomizationModule, "readCachedAgentBootstrap")
+    .mockReturnValue({
+      prompt: {
+        customSkills,
+        instructions: "",
+        skillOverrides: {},
+      },
+      syncedAt: "2026-08-05T06:00:00.000Z",
+      version: "cloud-skills-test-version",
+    });
+  setHttpBaseUrl("https://viz.example.com/lichtblick");
+}
+
+async function makeCloudSettingsConfiguration(): Promise<IAppConfiguration> {
+  const configuration = makeMockAppConfiguration([
+    [AppSetting.VIZ_SERVER_WORKSPACE, "cloud-workspace"],
+  ]);
+  await commitAgentSettings(configuration, baseDraft);
+  return configuration;
 }
 
 describe("AgentSettings", () => {
@@ -531,6 +562,188 @@ describe("AgentSettings", () => {
     expect(
       screen.queryByTestId("agent-remote-skill-body-organization-safety"),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders install actions and disables reserved automatic cloud skills with an explanation", async () => {
+    mockCachedCloudSkills([
+      {
+        body: "Cloud layout instructions",
+        id: "lichtblick-layouts",
+        name: "Cloud layouts",
+        whenToUse: "When working with cloud layouts",
+      },
+      {
+        body: "Organization instructions",
+        id: "organization-safety",
+        name: "Organization safety",
+        whenToUse: "When organization policy applies",
+      },
+    ]);
+    const configuration = await makeCloudSettingsConfiguration();
+    renderSettings(configuration);
+
+    const reservedInstall = screen.getByRole("button", {
+      name: "Install Cloud layouts locally",
+    });
+    expect(reservedInstall).toBeDisabled();
+    expect(
+      screen.getByRole("button", {
+        name: "Install Organization safety locally",
+      }),
+    ).toBeEnabled();
+
+    fireEvent.mouseOver(reservedInstall.parentElement!);
+    expect(
+      await screen.findByRole("tooltip", {
+        name: "Automatic cloud skills cannot be installed locally.",
+      }),
+    ).toBeVisible();
+  });
+
+  it("installs a cloud skill through prompt customization and updates local state immediately", async () => {
+    const cloudSkill = {
+      body: "Organization instructions",
+      id: "organization-safety",
+      name: "Organization safety",
+      whenToUse: "When organization policy applies",
+    };
+    mockCachedCloudSkills([cloudSkill]);
+    const configuration = await makeCloudSettingsConfiguration();
+    const writeCustomization = jest
+      .spyOn(agentPromptsModule, "writeAgentPromptCustomization")
+      .mockResolvedValue(undefined);
+    renderSettings(configuration);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Install Organization safety locally",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(writeCustomization).toHaveBeenCalledWith(configuration, {
+        customSkills: [cloudSkill],
+        instructions: "",
+        skillOverrides: {},
+      });
+    });
+    expect(await screen.findByText("Installed locally")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Skills" })).toHaveTextContent(
+      "organization-safety",
+    );
+  });
+
+  it("requires confirmation before overwriting a local skill with the same ID", async () => {
+    const cloudSkill = {
+      body: "Fresh cloud body",
+      id: "organization-safety",
+      name: "Organization safety",
+      whenToUse: "When organization policy applies",
+    };
+    mockCachedCloudSkills([cloudSkill]);
+    const configuration = await makeCloudSettingsConfiguration();
+    await configuration.set(
+      AppSetting.AGENT_PROMPT_CUSTOMIZATION,
+      JSON.stringify({
+        customSkills: [{ ...cloudSkill, body: "Existing local body" }],
+        instructions: "Keep local instructions",
+        skillOverrides: {},
+      } satisfies AgentPromptCustomization),
+    );
+    const writeCustomization = jest
+      .spyOn(agentPromptsModule, "writeAgentPromptCustomization")
+      .mockResolvedValue(undefined);
+    renderSettings(configuration);
+
+    expect(screen.getByText("Installed locally")).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Install Organization safety locally",
+      }),
+    );
+
+    expect(screen.getByText("Overwrite existing local skill?")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Installing Organization safety will overwrite the existing local skill with the same ID.",
+      ),
+    ).toBeVisible();
+    expect(writeCustomization).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Overwrite local skill" }),
+    );
+    await waitFor(() => {
+      expect(writeCustomization).toHaveBeenCalledWith(configuration, {
+        customSkills: [cloudSkill],
+        instructions: "Keep local instructions",
+        skillOverrides: {},
+      });
+    });
+  });
+
+  it("reports local skill count and cloud skill body limits before writing", async () => {
+    const localSkills: AgentPromptCustomization["customSkills"] = Array.from(
+      { length: AGENT_PROMPT_MAX_CUSTOM_SKILLS },
+      (_unused, index) => ({
+        body: "Local body",
+        id: `local-skill-${String(index + 1)}`,
+        name: `Local skill ${String(index + 1)}`,
+        whenToUse: "When testing local limits",
+      }),
+    );
+    mockCachedCloudSkills([
+      {
+        body: "Within the body limit",
+        id: "organization-capacity",
+        name: "Organization capacity",
+        whenToUse: "When testing the count limit",
+      },
+      {
+        body: "x".repeat(AGENT_PROMPT_MAX_SKILL_BODY_LENGTH + 1),
+        id: "organization-long-body",
+        name: "Organization long body",
+        whenToUse: "When testing the body limit",
+      },
+    ]);
+    const configuration = await makeCloudSettingsConfiguration();
+    await configuration.set(
+      AppSetting.AGENT_PROMPT_CUSTOMIZATION,
+      JSON.stringify({
+        customSkills: localSkills,
+        instructions: "",
+        skillOverrides: {},
+      } satisfies AgentPromptCustomization),
+    );
+    const writeCustomization = jest
+      .spyOn(agentPromptsModule, "writeAgentPromptCustomization")
+      .mockResolvedValue(undefined);
+    renderSettings(configuration);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Install Organization capacity locally",
+      }),
+    );
+    expect(
+      screen.getByText(
+        `You can install at most ${String(AGENT_PROMPT_MAX_CUSTOM_SKILLS)} local custom skills.`,
+      ),
+    ).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Install Organization long body locally",
+      }),
+    );
+    expect(
+      screen.getByText(
+        `This skill body exceeds the ${String(
+          AGENT_PROMPT_MAX_SKILL_BODY_LENGTH,
+        )} character limit.`,
+      ),
+    ).toBeVisible();
+    expect(writeCustomization).not.toHaveBeenCalled();
   });
 
   it("forces a full cloud-skill fetch and refreshes the visible cache projection", async () => {

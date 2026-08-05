@@ -166,7 +166,8 @@ describe("ExtensionsSettings", () => {
     mockLoadOrganizationExtension.mockReset();
 
     (useTranslation as jest.Mock).mockReturnValue({
-      t: (key: string) => key,
+      t: (key: string, options?: { reason?: string }) =>
+        options?.reason == undefined ? key : `${key}: ${options.reason}`,
     });
     (useAppConfiguration as jest.Mock).mockReturnValue(
       makeMockAppConfiguration(),
@@ -468,12 +469,39 @@ describe("ExtensionsSettings", () => {
 
       await waitFor(() => {
         expect(mockLoadOrganizationExtension).toHaveBeenCalledWith(
-          extension.externalId,
+          extension.id,
         );
         expect(mockInstallExtensions).toHaveBeenCalledWith("org", [
           { buffer: content, namespace: "org" },
         ]);
       });
+      expect(mockLoadOrganizationExtension).not.toHaveBeenCalledWith(
+        extension.externalId,
+      );
+    });
+
+    it("shows the download failure reason when cloud content is missing", async () => {
+      configureVizServer();
+      const extension = organizationExtension("missing-content", "1.0.0");
+      mockListOrganizationExtensions.mockResolvedValue([extension]);
+      mockLoadOrganizationExtension.mockResolvedValue(undefined);
+
+      render(<ExtensionsSettings />);
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "installOrganizationExtension",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(enqueueSnackbarMock).toHaveBeenCalledWith(
+          "organizationExtensionInstallFailed: 404",
+          { variant: "error" },
+        );
+      });
+      expect(mockInstallExtensions).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalled();
+      (console.error as jest.Mock).mockClear();
     });
 
     it("refreshes the cloud list", async () => {

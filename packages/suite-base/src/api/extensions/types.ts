@@ -9,7 +9,7 @@ import { ExtensionInfo } from "@lichtblick/suite-base/types/Extensions";
 export interface IExtensionAPI {
   createOrUpdate(extension: ExtensionInfoWorkspace, file: File): Promise<StoredExtension>;
   get(id: string): Promise<StoredExtension | undefined>;
-  loadContent(fileId: string): Promise<Uint8Array | undefined>;
+  loadContent(extensionId: string): Promise<Uint8Array | undefined>;
   list(): Promise<ExtensionInfo[]>;
   remove(id: string): Promise<boolean>;
   readonly workspace: string;
