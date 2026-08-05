@@ -6,7 +6,9 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
-import { isAbsolute } from "path";
+import { accessSync, constants as fsConstants } from "fs";
+import { homedir } from "os";
+import { delimiter, isAbsolute, join, resolve as resolvePath } from "path";
 import { StringDecoder } from "string_decoder";
 
 import type { VtdInvokeCommand, VtdInvokeErrorCode } from "../common/types";
@@ -335,16 +337,53 @@ function parseCommand(value: unknown): VtdInvokeCommand {
   return value as VtdInvokeCommand;
 }
 
-function executablePath(): string {
+let cachedVtdExecutable: string | undefined;
+
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function invalidateVtdExecutableCache(): void {
+  cachedVtdExecutable = undefined;
+}
+
+export function resolveVtdExecutable(): string {
+  if (cachedVtdExecutable != undefined) {
+    return cachedVtdExecutable;
+  }
+
   const configuredExecutable = process.env.VTD_CLI_PATH;
-  if (configuredExecutable == undefined || configuredExecutable.length === 0) {
-    // Production packaging is responsible for providing a trusted vtd on PATH.
-    return "vtd";
+  if (configuredExecutable != undefined && configuredExecutable.length > 0) {
+    if (!isAbsolute(configuredExecutable)) {
+      throw cliError("process", "VTD_CLI_PATH must be an absolute path");
+    }
+    cachedVtdExecutable = configuredExecutable;
+    return configuredExecutable;
   }
-  if (!isAbsolute(configuredExecutable)) {
-    throw cliError("process", "VTD_CLI_PATH must be an absolute path");
+
+  const candidates = [join(homedir(), ".local", "bin", "vtd"), "/usr/local/bin/vtd"];
+  if (process.platform === "darwin") {
+    candidates.push("/opt/homebrew/bin/vtd");
   }
-  return configuredExecutable;
+  for (const pathEntry of (process.env.PATH ?? "").split(delimiter)) {
+    candidates.push(resolvePath(pathEntry.length > 0 ? pathEntry : ".", "vtd"));
+  }
+
+  for (const candidate of new Set(candidates)) {
+    if (isExecutable(candidate)) {
+      cachedVtdExecutable = candidate;
+      return candidate;
+    }
+  }
+
+  // Keep the historical fallback so spawn still produces the stable not-found classification.
+  cachedVtdExecutable = "vtd";
+  return cachedVtdExecutable;
 }
 
 function appendTail(existing: Uint8Array, chunk: Uint8Array, maximumBytes: number): Uint8Array {
@@ -409,7 +448,7 @@ export default class VtdCliService {
     // Treat every renderer value as hostile and finish all validation before consuming a slot.
     const command = parseCommand(commandValue);
     const args = buildArgs(command, params);
-    const executable = executablePath();
+    const executable = resolveVtdExecutable();
 
     if (this.#activeInvocations.has(invocationKey)) {
       throw cliError("duplicate-request", "Duplicate vtd request id");

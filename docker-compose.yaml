@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
+# SPDX-License-Identifier: MPL-2.0
+
+# Lichtblick Web + VTD 单镜像本地编排
+# 用法：cp .env.example .env，填入 VTD_DOWNLOAD_URL / VTD_SHA256（构建期必填）与 AUTH_TOKEN（生产必设），
+# 然后执行：docker compose up --build
+
+services:
+  # 单个 Node 容器同源托管 Web 静态文件与 /vtd/* API。
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.allinone
+      args:
+        # vtd-linux-x86 内网发布下载地址，来自 .env，构建期必填
+        VTD_DOWNLOAD_URL: ${VTD_DOWNLOAD_URL}
+        # 同一发布流程提供的 SHA-256 摘要，来自 .env，构建期必填；校验不通过则构建失败
+        VTD_SHA256: ${VTD_SHA256}
+    ports:
+      # 浏览器与 VTD API 统一通过 http://localhost:8080 访问。
+      - "8080:8080"
+    environment:
+      # Sidecar Bearer 令牌；默认空 = 不鉴权。生产环境强烈建议必须设置为强随机长令牌
+      AUTH_TOKEN: ${AUTH_TOKEN:-}
+    healthcheck:
+      # 用容器内 node 探测 GET /healthz，响应非 200 视为不健康并触发重启
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

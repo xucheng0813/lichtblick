@@ -7,11 +7,26 @@
 
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { EventEmitter } from "events";
+import { accessSync, constants as fsConstants } from "fs";
+import { homedir } from "os";
+import { delimiter } from "path";
 
-import VtdCliService, { VtdCliError } from "./VtdCliService";
+import VtdCliService, {
+  invalidateVtdExecutableCache,
+  resolveVtdExecutable,
+  VtdCliError,
+} from "./VtdCliService";
 
 jest.mock("child_process", () => ({
   spawn: jest.fn(),
+}));
+jest.mock("fs", () => ({
+  ...jest.requireActual("fs"),
+  accessSync: jest.fn(),
+}));
+jest.mock("os", () => ({
+  ...jest.requireActual("os"),
+  homedir: jest.fn(),
 }));
 
 type FakeChild = EventEmitter & {
@@ -21,6 +36,12 @@ type FakeChild = EventEmitter & {
 };
 
 const mockSpawn = spawn as jest.MockedFunction<typeof spawn>;
+const mockAccessSync = accessSync as jest.MockedFunction<typeof accessSync>;
+const mockHomedir = homedir as jest.MockedFunction<typeof homedir>;
+
+function missingExecutable(): NodeJS.ErrnoException {
+  return Object.assign(new Error("not executable"), { code: "ENOENT" });
+}
 
 function createFakeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
@@ -45,6 +66,8 @@ function finishWithJson(child: FakeChild, value: unknown): void {
 
 describe("VtdCliService", () => {
   const originalCliPath = process.env.VTD_CLI_PATH;
+  const originalPath = process.env.PATH;
+  const originalPlatform = process.platform;
   let requestSequence = 0;
 
   async function invoke(
@@ -60,8 +83,15 @@ describe("VtdCliService", () => {
   beforeEach(() => {
     jest.useRealTimers();
     mockSpawn.mockReset();
+    mockAccessSync.mockReset().mockImplementation(() => {
+      throw missingExecutable();
+    });
+    mockHomedir.mockReset().mockReturnValue("/Users/test");
+    invalidateVtdExecutableCache();
     requestSequence = 0;
     delete process.env.VTD_CLI_PATH;
+    process.env.PATH = "";
+    Object.defineProperty(process, "platform", { value: originalPlatform });
   });
 
   afterAll(() => {
@@ -70,6 +100,56 @@ describe("VtdCliService", () => {
     } else {
       process.env.VTD_CLI_PATH = originalCliPath;
     }
+    if (originalPath == undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  });
+
+  it("probes executable candidates in order before falling back to PATH", () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    process.env.PATH = ["/custom/bin", "/another/bin"].join(delimiter);
+    const attempts: string[] = [];
+    mockAccessSync.mockImplementation((candidate) => {
+      attempts.push(String(candidate));
+      if (candidate === "/another/bin/vtd") {
+        return;
+      }
+      throw missingExecutable();
+    });
+
+    expect(resolveVtdExecutable()).toBe("/another/bin/vtd");
+    expect(attempts).toEqual([
+      "/Users/test/.local/bin/vtd",
+      "/usr/local/bin/vtd",
+      "/opt/homebrew/bin/vtd",
+      "/custom/bin/vtd",
+      "/another/bin/vtd",
+    ]);
+    expect(mockAccessSync.mock.calls.every(([, mode]) => mode === fsConstants.X_OK)).toBe(true);
+  });
+
+  it("caches the resolved executable until explicitly invalidated", () => {
+    mockAccessSync.mockImplementation((candidate) => {
+      if (candidate === "/usr/local/bin/vtd") {
+        return;
+      }
+      throw missingExecutable();
+    });
+    expect(resolveVtdExecutable()).toBe("/usr/local/bin/vtd");
+
+    mockAccessSync.mockImplementation((candidate) => {
+      if (candidate === "/Users/test/.local/bin/vtd") {
+        return;
+      }
+      throw missingExecutable();
+    });
+    expect(resolveVtdExecutable()).toBe("/usr/local/bin/vtd");
+
+    invalidateVtdExecutableCache();
+    expect(resolveVtdExecutable()).toBe("/Users/test/.local/bin/vtd");
   });
 
   it("rejects non-whitelisted commands, parameters, and request IDs before spawning", async () => {
@@ -270,6 +350,7 @@ describe("VtdCliService", () => {
     );
     finishWithJson(child, { "/imu": 1 });
     await invocation;
+    expect(mockAccessSync).not.toHaveBeenCalled();
   });
 
   it.each([
