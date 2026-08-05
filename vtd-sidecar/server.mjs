@@ -370,6 +370,14 @@ export function buildVtdArgs(command, params) {
     if (!Object.hasOwn(params, key)) {
       continue;
     }
+    if (
+      descriptor.kind === "topics" &&
+      Array.isArray(params[key]) &&
+      params[key].length === 0
+    ) {
+      consumedKeys.add(key);
+      continue;
+    }
     const value = validateValue(params[key], key, descriptor);
     consumedKeys.add(key);
     if (descriptor.kind === "boolean") {

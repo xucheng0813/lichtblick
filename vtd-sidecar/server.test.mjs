@@ -548,6 +548,40 @@ test("accepts topic names without a leading slash and rejects commas", async () 
   }
 });
 
+test("treats an empty slice topics array the same as an omitted topics field", async () => {
+  const spawnCalls = [];
+  const server = createVtdSidecarServer({
+    spawnImpl: (...args) => {
+      spawnCalls.push(args);
+      return createMockChild({ stdout: '{"mcap_slice_id":"slice-all"}' });
+    },
+  });
+  const port = await listen(server);
+
+  try {
+    const omitted = await sendRequest(port, {
+      body: { id: "1234" },
+      path: "/vtd/slice-store",
+    });
+    const empty = await sendRequest(port, {
+      body: { id: "1234", topics: [] },
+      path: "/vtd/slice-store",
+    });
+
+    assert.equal(omitted.statusCode, 200);
+    assert.equal(empty.statusCode, 200);
+    assert.deepEqual(
+      spawnCalls.map(([_command, args]) => args),
+      [
+        ["slice-store", "1234", "--json"],
+        ["slice-store", "1234", "--json"],
+      ],
+    );
+  } finally {
+    await close(server);
+  }
+});
+
 test("maps slice topics and nanosecond strings without losing precision", async () => {
   const spawnCalls = [];
   const server = createVtdSidecarServer({

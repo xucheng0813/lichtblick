@@ -22,6 +22,7 @@ import {
   VtdPermissionError,
   VtdTimeoutError,
 } from "./errors";
+import { normalizeVtdSliceParams } from "./normalizeVtdSliceParams";
 import type {
   IVtdClient,
   VtdRecord,
@@ -167,7 +168,9 @@ export default class DesktopVtdClient implements IVtdClient {
     params: VtdSliceParams,
     signal?: AbortSignal,
   ): Promise<{ mcapSliceId: string; raw: unknown }> {
-    return normalizeVtdSliceStoreResponse(await this.#invoke("slice-store", params, signal));
+    return normalizeVtdSliceStoreResponse(
+      await this.#invoke("slice-store", normalizeVtdSliceParams(params), signal),
+    );
   }
 
   public async sliceGet(
