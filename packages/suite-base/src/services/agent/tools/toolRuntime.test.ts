@@ -295,6 +295,13 @@ describe("toolRuntime", () => {
       raw: {},
     });
     expect(deps.vtdClient.sliceStore.mock.calls).toEqual([[input, undefined]]);
+
+    deps.vtdClient.sliceStore.mockClear();
+    await runVtdSliceStoreTool({ id: "record-1" }, deps);
+    const paramsWithoutTopics = deps.vtdClient.sliceStore.mock.calls[0]?.[0];
+    expect(paramsWithoutTopics).toStrictEqual({ id: "record-1" });
+    expect(Object.hasOwn(paramsWithoutTopics ?? {}, "topics")).toBe(false);
+
     await expect(
       runVtdSliceStoreTool({ id: "record-1", startNs: "1.5" }, deps),
     ).rejects.toThrow(

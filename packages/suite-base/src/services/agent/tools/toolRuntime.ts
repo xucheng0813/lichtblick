@@ -563,11 +563,14 @@ export async function runVtdSliceStoreTool(
 ): Promise<Awaited<ReturnType<IVtdClient["sliceStore"]>>> {
   const toolName = "vtd_slice_store";
   const input = requireRecord(value, toolName);
+  const topics = optionalStringArray(input, "topics", toolName);
+  const startNs = optionalDecimalString(input, "startNs", toolName);
+  const endNs = optionalDecimalString(input, "endNs", toolName);
   const params: VtdSliceParams = {
     id: requireString(input, "id", toolName),
-    topics: optionalStringArray(input, "topics", toolName),
-    startNs: optionalDecimalString(input, "startNs", toolName),
-    endNs: optionalDecimalString(input, "endNs", toolName),
+    ...(topics == undefined ? {} : { topics }),
+    ...(startNs == undefined ? {} : { startNs }),
+    ...(endNs == undefined ? {} : { endNs }),
   };
   return await runDependency(
     async () => await deps.vtdClient.sliceStore(params, context.signal),

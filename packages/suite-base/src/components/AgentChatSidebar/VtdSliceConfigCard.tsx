@@ -19,6 +19,7 @@ import Log from "@lichtblick/log";
 import {
   type AgentChatState,
   type VtdSliceProgress,
+  type VtdSliceRequest,
   useAgentChat,
 } from "@lichtblick/suite-base/context/AgentChatContext";
 import type { VtdRecord } from "@lichtblick/suite-base/services/vtd/types";
@@ -26,6 +27,10 @@ import type { VtdRecord } from "@lichtblick/suite-base/services/vtd/types";
 const log = Log.getLogger(__filename);
 
 const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
+
+// Mirror of the slice-store server limit (vtd-sidecar): more than this many explicit topics is
+// rejected with a 400. A full selection is sent by omitting the topics field instead.
+const MAX_SLICE_TOPICS = 200;
 
 type SliceCardStatus = "configuring" | "slicing" | "loading" | "done" | "error";
 type FailureKind = "topics" | "slice";
@@ -236,7 +241,8 @@ export function VtdSliceConfigCard({
       timeRange == undefined ||
       operationRef.current ||
       selectedTopics.size === 0 ||
-      selectedRange[0] >= selectedRange[1]
+      selectedRange[0] >= selectedRange[1] ||
+      (selectedTopics.size > MAX_SLICE_TOPICS && selectedTopics.size !== topics.length)
     ) {
       return;
     }
@@ -246,21 +252,25 @@ export function VtdSliceConfigCard({
     setStatus("slicing");
     const startNs = offsetToNanoseconds(timeRange, selectedRange[0]);
     const endNs = offsetToNanoseconds(timeRange, selectedRange[1]);
-    try {
-      await sliceVtdRecord(
-        {
+    // Selecting every available topic is expressed by omitting the topics field entirely: the
+    // slice server rejects more than MAX_SLICE_TOPICS explicit topics, and normalizeVtdSliceParams
+    // removes an absent topics field, which the server interprets as "all topics".
+    const allTopicsSelected = topics.length > 0 && selectedTopics.size === topics.length;
+    const sliceRequest: VtdSliceRequest = allTopicsSelected
+      ? { id: record.id, startNs: startNs.toString(), endNs: endNs.toString() }
+      : {
           id: record.id,
           topics: [...selectedTopics].sort(),
           startNs: startNs.toString(),
           endNs: endNs.toString(),
-        },
-        (progress) => {
-          lastProgressRef.current = progress;
-          if (mountedRef.current) {
-            setStatus(progress);
-          }
-        },
-      );
+        };
+    try {
+      await sliceVtdRecord(sliceRequest, (progress) => {
+        lastProgressRef.current = progress;
+        if (mountedRef.current) {
+          setStatus(progress);
+        }
+      });
       if (mountedRef.current) {
         setStatus("done");
       }
@@ -273,7 +283,7 @@ export function VtdSliceConfigCard({
     } finally {
       operationRef.current = false;
     }
-  }, [record.id, selectedRange, selectedTopics, sliceVtdRecord, timeRange]);
+  }, [record.id, selectedRange, selectedTopics, sliceVtdRecord, timeRange, topics]);
 
   const retry = useCallback(() => {
     if (failureKind === "topics") {
@@ -288,8 +298,13 @@ export function VtdSliceConfigCard({
     timeRange == undefined ? undefined : offsetToNanoseconds(timeRange, selectedRange[0]);
   const endNs =
     timeRange == undefined ? undefined : offsetToNanoseconds(timeRange, selectedRange[1]);
+  const allTopicsSelected = topics.length > 0 && selectedTopics.size === topics.length;
+  const topicLimitExceeded = !allTopicsSelected && selectedTopics.size > MAX_SLICE_TOPICS;
   const validSelection =
-    timeRange != undefined && selectedTopics.size > 0 && selectedRange[0] < selectedRange[1];
+    timeRange != undefined &&
+    selectedTopics.size > 0 &&
+    !topicLimitExceeded &&
+    selectedRange[0] < selectedRange[1];
 
   return (
     <Paper className={classes.root} data-testid="vtd-slice-config-card" variant="outlined">
@@ -406,6 +421,11 @@ export function VtdSliceConfigCard({
                     />
                   ))}
                 </div>
+                {topicLimitExceeded && (
+                  <Typography color="error" role="alert" variant="caption">
+                    {t("topicsLimitExceeded", { max: MAX_SLICE_TOPICS })}
+                  </Typography>
+                )}
               </>
             )}
           </div>

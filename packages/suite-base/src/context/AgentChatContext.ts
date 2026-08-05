@@ -20,7 +20,8 @@ export type VtdSliceProgress = "slicing" | "loading";
 
 export type VtdSliceRequest = {
   id: string;
-  topics: string[];
+  /** Omitted to slice every topic; the slice server rejects an explicit list beyond its topic cap. */
+  topics?: string[];
   startNs: string;
   endNs: string;
 };

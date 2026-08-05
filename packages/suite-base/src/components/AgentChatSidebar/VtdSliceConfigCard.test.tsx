@@ -83,6 +83,7 @@ describe("VtdSliceConfigCard", () => {
           slicing: "Slicing",
           timeRange: "Time range",
           topicsFailed: "Topics failed",
+          topicsLimitExceeded: `At most ${interpolationValue(options?.max)} topics can be selected. Select all to include every topic, or choose fewer.`,
           topicsLoading: "Loading topics",
         };
         if (key === "topicMessageCount") {
@@ -156,6 +157,9 @@ describe("VtdSliceConfigCard", () => {
     fireEvent.change(sliders[0]!, { target: { value: 1250 } });
     fireEvent.change(sliders[1]!, { target: { value: 597500 } });
 
+    // Deselect one topic so the submission is a partial selection with explicit topics.
+    fireEvent.click(screen.getByRole("checkbox", { name: "/camera (2 messages)" }));
+
     fireEvent.click(screen.getByRole("button", { name: "Start slicing" }));
 
     await waitFor(() => {
@@ -163,12 +167,51 @@ describe("VtdSliceConfigCard", () => {
     });
     expect(sliceVtdRecord.mock.calls[0]?.[0]).toEqual({
       id: "record-1",
-      topics: ["/camera", "/imu"],
+      topics: ["/imu"],
       startNs: "1912689870088297225",
       endNs: "1912690466338297225",
     });
     expect(sliceVtdRecord.mock.calls[0]?.[1]).toEqual(expect.any(Function));
     expect(await screen.findByText("Slice done")).toBeInTheDocument();
+  });
+
+  it("omits the topics field when every available topic is selected", async () => {
+    renderCard();
+    await screen.findByRole("checkbox", { name: "/imu (12 messages)" });
+
+    // Both checkboxes start checked, i.e. the whole topic list is selected.
+    fireEvent.click(screen.getByRole("button", { name: "Start slicing" }));
+
+    await waitFor(() => {
+      expect(sliceVtdRecord).toHaveBeenCalledTimes(1);
+    });
+    expect(sliceVtdRecord.mock.calls[0]?.[0]).toEqual({
+      id: "record-1",
+      startNs: "1912689868838297225",
+      endNs: "1912690468838297225",
+    });
+  });
+
+  it("blocks partial selections above the 200-topic cap with an explanatory error", async () => {
+    const manyTopics = Object.fromEntries(
+      Array.from({ length: 250 }, (_, index) => [`/topic${index}`, 1]),
+    );
+    getVtdTopics.mockResolvedValue(manyTopics);
+    renderCard();
+    const firstTopic = await screen.findByRole("checkbox", { name: "/topic0 (1 messages)" });
+    expect(firstTopic).toBeChecked();
+
+    // Deselect one topic: 249 of 250 is a partial selection above the cap.
+    fireEvent.click(firstTopic);
+    expect(screen.getByRole("alert")).toHaveTextContent("At most 200 topics can be selected");
+    expect(screen.getByRole("button", { name: "Start slicing" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start slicing" }));
+    expect(sliceVtdRecord).not.toHaveBeenCalled();
+
+    // Re-selecting everything (all selected) clears the error and re-enables the button.
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start slicing" })).toBeEnabled();
   });
 
   it("renders slicing, loading, and done states", async () => {

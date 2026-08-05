@@ -56,6 +56,8 @@ export const agentChat = {
   topicsLoading: "Loading topics…",
   topicsFailed: "Failed to load topics.",
   noTopics: "No topics are available for this record.",
+  topicsLimitExceeded:
+    "At most {{max}} topics can be selected. Select all to include every topic, or choose fewer.",
   timeRange: "Time range",
   sliceStartTime: "Slice start time",
   sliceEndTime: "Slice end time",

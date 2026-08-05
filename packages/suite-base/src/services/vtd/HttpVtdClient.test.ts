@@ -225,6 +225,28 @@ describe("HttpVtdClient", () => {
     ]);
   });
 
+  it("omits empty or unselected topics from slice-store request bodies", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({ mcap_slice_id: "slice-all-1", tos: "tos://slice-1" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ mcap_slice_id: "slice-all-2", tos: "tos://slice-2" }),
+      );
+    const client = new HttpVtdClient("http://sidecar", mockFetch);
+
+    await client.sliceStore({ id: "record-1", topics: [] });
+    await client.sliceStore({ id: "record-2", topics: undefined });
+
+    const bodies = mockFetch.mock.calls.map(([_request, init]) => {
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected a JSON request body");
+      }
+      return JSON.parse(init.body) as unknown;
+    });
+    expect(bodies).toStrictEqual([{ id: "record-1" }, { id: "record-2" }]);
+  });
+
   it("classifies HTTP status errors with structured response data", async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ error: "bad filter" }, 400));
 
