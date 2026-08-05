@@ -247,7 +247,13 @@ describe("DesktopVtdClient", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(errorType);
-    expect(error).toMatchObject({ command: "detail", message: `main ${code}` });
+    expect(error).toMatchObject({
+      command: "detail",
+      message:
+        code === "not-found"
+          ? "main not-found Install it from Settings → AI Assistant."
+          : `main ${code}`,
+    });
   });
 
   it("classifies bridge rejection and malformed envelopes", async () => {

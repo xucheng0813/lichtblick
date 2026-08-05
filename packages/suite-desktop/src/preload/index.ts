@@ -29,9 +29,11 @@ import {
   SecureCredentialSetManyResult,
   SecureCredentialSetResult,
   Storage,
+  VtdInstallResult,
   VtdInvokeCommand,
   VtdInvokeCommandParams,
   VtdInvokeResult,
+  VtdStatus,
 } from "../common/types";
 import { LICHTBLICK_PRODUCT_NAME, LICHTBLICK_PRODUCT_VERSION } from "../common/webpackDefines";
 
@@ -156,6 +158,12 @@ export function main(): void {
     },
     async cancelVtd(requestId: string): Promise<void> {
       await ipcRenderer.invoke("vtd:cancel", requestId);
+    },
+    async vtdStatus(): Promise<VtdStatus> {
+      return await ipcRenderer.invoke("vtd:status");
+    },
+    async vtdInstall(): Promise<VtdInstallResult> {
+      return await ipcRenderer.invoke("vtd:install");
     },
     // Trust boundary: installed extensions run as full-privilege code in this same renderer realm
     // and are intentionally trusted at the same level as built-in application code. These APIs

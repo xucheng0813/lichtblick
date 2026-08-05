@@ -12,6 +12,8 @@ export type VtdRecord = {
   triggerType?: string;
   dataType?: string;
   triggerTime?: string;
+  dataStartNs?: string;
+  dataEndNs?: string;
   sizeBytes?: number;
   raw: unknown;
 };
