@@ -47,8 +47,23 @@ export const appSettings = {
   agentRemoteSkillAutomatic: "Automatic",
   agentRemoteSkillCollapse: "Collapse {{name}}",
   agentRemoteSkillExpand: "Expand {{name}}",
+  agentRemoteSkillInstall: "Install locally",
+  agentRemoteSkillInstallBodyTooLong:
+    "This skill body exceeds the {{limit}} character limit.",
+  agentRemoteSkillInstallFailed: "Could not install cloud skill: {{error}}",
+  agentRemoteSkillInstallLimit:
+    "You can install at most {{limit}} local custom skills.",
+  agentRemoteSkillInstallNamed: "Install {{name}} locally",
+  agentRemoteSkillInstallReserved:
+    "Automatic cloud skills cannot be installed locally.",
+  agentRemoteSkillInstalled: "Installed locally",
   agentRemoteSkillOrganization: "Organization custom",
   agentRemoteSkillOverrides: "Overridden cloud skill IDs",
+  agentRemoteSkillOverwriteCancel: "Cancel",
+  agentRemoteSkillOverwriteConfirm: "Overwrite local skill",
+  agentRemoteSkillOverwriteMessage:
+    "Installing {{name}} will overwrite the existing local skill with the same ID.",
+  agentRemoteSkillOverwriteTitle: "Overwrite existing local skill?",
   agentRemoteSkills: "Cloud skills",
   agentRemoteSkillsEmpty: "No cloud skills were provided.",
   agentRemoteSkillsFetch: "Fetch now",

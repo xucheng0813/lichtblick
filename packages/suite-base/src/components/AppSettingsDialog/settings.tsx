@@ -11,6 +11,7 @@ import ComputerIcon from "@mui/icons-material/Computer";
 import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import QuestionAnswerOutlinedIcon from "@mui/icons-material/QuestionAnswerOutlined";
 import WebIcon from "@mui/icons-material/Web";
@@ -39,6 +40,7 @@ import {
   Select,
   SelectChangeEvent,
   TextField,
+  Tooltip,
   ToggleButton,
   ToggleButtonGroup,
   ToggleButtonGroupProps,
@@ -85,6 +87,8 @@ import {
 } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
 import type { MemoryEntry } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
 import {
+  AGENT_PROMPT_MAX_CUSTOM_SKILLS,
+  AGENT_PROMPT_MAX_SKILL_BODY_LENGTH,
   readAgentPromptCustomization,
   resolveSkills,
   writeAgentPromptCustomization,
@@ -1446,6 +1450,7 @@ function AgentSettingsForm({
  * text even after the built-in has been updated.
  */
 type SkillView = "edit" | "preview";
+type CustomSkill = AgentPromptCustomization["customSkills"][number];
 
 const AUTOMATIC_REMOTE_SKILL_IDS = new Set([
   "lichtblick-layouts",
@@ -1501,6 +1506,12 @@ function AgentPromptSettings(): React.ReactElement {
   const [remoteSkillsFetchError, setRemoteSkillsFetchError] = useState<string>();
   const [remoteSkillsFetchSucceeded, setRemoteSkillsFetchSucceeded] = useState(false);
   const [expandedRemoteSkillId, setExpandedRemoteSkillId] = useState<string>();
+  const [installingRemoteSkillId, setInstallingRemoteSkillId] =
+    useState<string>();
+  const [remoteSkillInstallError, setRemoteSkillInstallError] =
+    useState<string>();
+  const [pendingRemoteSkillOverwrite, setPendingRemoteSkillOverwrite] =
+    useState<CustomSkill>();
 
   const skills = useMemo(() => resolveSkills(draft), [draft]);
   const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
@@ -1585,6 +1596,81 @@ function AgentPromptSettings(): React.ReactElement {
     }
   };
 
+  const validateRemoteSkillInstall = (skill: CustomSkill): boolean => {
+    if (skill.body.length > AGENT_PROMPT_MAX_SKILL_BODY_LENGTH) {
+      setRemoteSkillInstallError(
+        t("agentRemoteSkillInstallBodyTooLong", {
+          limit: AGENT_PROMPT_MAX_SKILL_BODY_LENGTH,
+        }),
+      );
+      return false;
+    }
+    const alreadyInstalled = draft.customSkills.some(
+      (localSkill) => localSkill.id === skill.id,
+    );
+    if (
+      !alreadyInstalled &&
+      draft.customSkills.length >= AGENT_PROMPT_MAX_CUSTOM_SKILLS
+    ) {
+      setRemoteSkillInstallError(
+        t("agentRemoteSkillInstallLimit", {
+          limit: AGENT_PROMPT_MAX_CUSTOM_SKILLS,
+        }),
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const persistRemoteSkill = async (skill: CustomSkill): Promise<void> => {
+    const localSkill: CustomSkill = {
+      body: skill.body,
+      id: skill.id,
+      name: skill.name,
+      whenToUse: skill.whenToUse,
+    };
+    const alreadyInstalled = draft.customSkills.some(
+      (candidate) => candidate.id === localSkill.id,
+    );
+    const next: AgentPromptCustomization = {
+      ...draft,
+      customSkills: alreadyInstalled
+        ? draft.customSkills.map((candidate) =>
+            candidate.id === localSkill.id ? localSkill : candidate,
+          )
+        : [...draft.customSkills, localSkill],
+    };
+    setInstallingRemoteSkillId(localSkill.id);
+    setRemoteSkillInstallError(undefined);
+    try {
+      await writeAgentPromptCustomization(appConfiguration, next);
+      setDraft(next);
+      setSelectedSkillId(localSkill.id);
+      setError(undefined);
+      setSaved(true);
+    } catch (caught) {
+      setRemoteSkillInstallError(
+        t("agentRemoteSkillInstallFailed", {
+          error: caught instanceof Error ? caught.message : String(caught),
+        }),
+      );
+    } finally {
+      setInstallingRemoteSkillId(undefined);
+    }
+  };
+
+  const requestRemoteSkillInstall = (skill: CustomSkill): void => {
+    setRemoteSkillInstallError(undefined);
+    if (!validateRemoteSkillInstall(skill)) {
+      return;
+    }
+    if (draft.customSkills.some((localSkill) => localSkill.id === skill.id)) {
+      setPendingRemoteSkillOverwrite(skill);
+      return;
+    }
+    void persistRemoteSkill(skill);
+  };
+
   return (
     <Stack gap={1.5}>
       <FormLabel>{t("agentPrompt")}:</FormLabel>
@@ -1623,6 +1709,9 @@ function AgentPromptSettings(): React.ReactElement {
               {remoteSkills.map((skill) => {
                 const expanded = expandedRemoteSkillId === skill.id;
                 const automatic = AUTOMATIC_REMOTE_SKILL_IDS.has(skill.id);
+                const installed = draft.customSkills.some(
+                  (localSkill) => localSkill.id === skill.id,
+                );
                 const bodyId = `agent-remote-skill-body-${skill.id}`;
                 return (
                   <ListItem
@@ -1631,41 +1720,80 @@ function AgentPromptSettings(): React.ReactElement {
                     key={skill.id}
                   >
                     <Stack className={classes.remoteSkillItemContent} gap={0.5}>
-                      <Button
-                        aria-controls={expanded ? bodyId : undefined}
-                        aria-expanded={expanded}
-                        aria-label={t(
-                          expanded
-                            ? "agentRemoteSkillCollapse"
-                            : "agentRemoteSkillExpand",
-                          { name: skill.name },
-                        )}
-                        className={classes.remoteSkillButton}
-                        onClick={() => {
-                          setExpandedRemoteSkillId(expanded ? undefined : skill.id);
-                        }}
-                      >
-                        <Stack className={classes.remoteSkillItemContent} gap={0.25}>
-                          <Stack direction="row" alignItems="center" gap={1}>
-                            <strong>{skill.name}</strong>
-                            <code>{skill.id}</code>
-                            <Chip
-                              label={t(
-                                automatic
-                                  ? "agentRemoteSkillAutomatic"
-                                  : "agentRemoteSkillOrganization",
-                              )}
-                              size="small"
-                            />
-                          </Stack>
-                          <span
-                            className={classes.remoteSkillWhenToUse}
-                            title={skill.whenToUse}
+                      <Stack direction="row" alignItems="center" gap={0.5}>
+                        <Button
+                          aria-controls={expanded ? bodyId : undefined}
+                          aria-expanded={expanded}
+                          aria-label={t(
+                            expanded
+                              ? "agentRemoteSkillCollapse"
+                              : "agentRemoteSkillExpand",
+                            { name: skill.name },
+                          )}
+                          className={classes.remoteSkillButton}
+                          onClick={() => {
+                            setExpandedRemoteSkillId(expanded ? undefined : skill.id);
+                          }}
+                        >
+                          <Stack
+                            className={classes.remoteSkillItemContent}
+                            gap={0.25}
                           >
-                            {skill.whenToUse}
+                            <Stack direction="row" alignItems="center" gap={1}>
+                              <strong>{skill.name}</strong>
+                              <code>{skill.id}</code>
+                              <Chip
+                                label={t(
+                                  automatic
+                                    ? "agentRemoteSkillAutomatic"
+                                    : "agentRemoteSkillOrganization",
+                                )}
+                                size="small"
+                              />
+                              {installed && (
+                                <Chip
+                                  label={t("agentRemoteSkillInstalled")}
+                                  size="small"
+                                />
+                              )}
+                            </Stack>
+                            <span
+                              className={classes.remoteSkillWhenToUse}
+                              title={skill.whenToUse}
+                            >
+                              {skill.whenToUse}
+                            </span>
+                          </Stack>
+                        </Button>
+                        <Tooltip
+                          title={t(
+                            automatic
+                              ? "agentRemoteSkillInstallReserved"
+                              : "agentRemoteSkillInstall",
+                          )}
+                        >
+                          <span>
+                            <IconButton
+                              aria-label={t("agentRemoteSkillInstallNamed", {
+                                name: skill.name,
+                              })}
+                              disabled={
+                                automatic || installingRemoteSkillId != undefined
+                              }
+                              onClick={() => {
+                                requestRemoteSkillInstall(skill);
+                              }}
+                              size="small"
+                            >
+                              {installingRemoteSkillId === skill.id ? (
+                                <CircularProgress size={18} />
+                              ) : (
+                                <DownloadOutlinedIcon fontSize="small" />
+                              )}
+                            </IconButton>
                           </span>
-                        </Stack>
-                      </Button>
+                        </Tooltip>
+                      </Stack>
                       {expanded && (
                         <div
                           className={classes.remoteSkillBody}
@@ -1705,8 +1833,48 @@ function AgentPromptSettings(): React.ReactElement {
               {t("agentRemoteSkillsFetchSucceeded")}
             </Alert>
           )}
+          {remoteSkillInstallError != undefined && (
+            <Alert severity="error">{remoteSkillInstallError}</Alert>
+          )}
         </Stack>
       )}
+
+      <Dialog
+        open={pendingRemoteSkillOverwrite != undefined}
+        onClose={() => {
+          setPendingRemoteSkillOverwrite(undefined);
+        }}
+      >
+        <DialogTitle>{t("agentRemoteSkillOverwriteTitle")}</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {t("agentRemoteSkillOverwriteMessage", {
+              name: pendingRemoteSkillOverwrite?.name ?? "",
+            })}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setPendingRemoteSkillOverwrite(undefined);
+            }}
+          >
+            {t("agentRemoteSkillOverwriteCancel")}
+          </Button>
+          <Button
+            onClick={() => {
+              const skill = pendingRemoteSkillOverwrite;
+              setPendingRemoteSkillOverwrite(undefined);
+              if (skill != undefined) {
+                void persistRemoteSkill(skill);
+              }
+            }}
+            variant="contained"
+          >
+            {t("agentRemoteSkillOverwriteConfirm")}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {workspace != undefined && <Divider />}
 

@@ -716,6 +716,36 @@ describe("ExtensionCatalogProvider", () => {
       expect(serverInstall).not.toHaveBeenCalled();
       expect(cacheInstall).toHaveBeenCalledTimes(1);
     });
+
+    it("loads an uploaded org extension by extension id after server installation", async () => {
+      const extensionInfo = ExtensionBuilder.extensionInfo({
+        externalId: "2",
+        id: "publisher.extension",
+        namespace: "org",
+      });
+      const loadExtension = jest.fn().mockResolvedValue({ raw: defaultSource });
+      const serverLoader = createMockLoader({
+        getExtensions: jest.fn().mockResolvedValue([]),
+        installExtension: jest.fn().mockResolvedValue(extensionInfo),
+        loadExtension,
+        namespace: "org",
+        type: "server",
+      });
+      const { result } = await setup({ loadersOverride: [serverLoader] });
+
+      await act(async () => {
+        await result.current.installExtensions("org", [
+          {
+            buffer: new Uint8Array([1, 2, 3]),
+            file: new File(["extension"], "extension.foxe"),
+            namespace: "org",
+          },
+        ]);
+      });
+
+      expect(loadExtension).toHaveBeenCalledWith(extensionInfo.id);
+      expect(loadExtension).not.toHaveBeenCalledWith(extensionInfo.externalId);
+    });
   });
 
   describe("uninstallExtension", () => {
@@ -1344,7 +1374,7 @@ describe("ExtensionCatalogProvider", () => {
         loadCachedMock,
         cacheInstallMock,
         loadRemoteMock,
-        externalId,
+        extensionId,
         cacheLoader,
         serverLoader,
         remoteExtension,
@@ -1361,7 +1391,7 @@ describe("ExtensionCatalogProvider", () => {
 
       // Then
       await waitFor(() => {
-        expect(loadRemoteMock).toHaveBeenCalledWith(externalId);
+        expect(loadRemoteMock).toHaveBeenCalledWith(extensionId);
       });
       await waitFor(() => {
         expect(cacheInstallMock).toHaveBeenCalledWith({ foxeFileData: buffer });
@@ -1381,7 +1411,7 @@ describe("ExtensionCatalogProvider", () => {
         cacheInstallMock,
         remoteExtension,
         loadRemoteMock,
-        externalId,
+        extensionId,
         cacheLoader,
         serverLoader,
       } = setupLoaders({
@@ -1395,7 +1425,7 @@ describe("ExtensionCatalogProvider", () => {
       });
 
       await waitFor(() => {
-        expect(loadRemoteMock).toHaveBeenCalledWith(externalId);
+        expect(loadRemoteMock).toHaveBeenCalledWith(extensionId);
       });
       await waitFor(() => {
         expect(cacheInstallMock).toHaveBeenCalledWith({ foxeFileData: buffer });
@@ -1412,7 +1442,7 @@ describe("ExtensionCatalogProvider", () => {
         cacheInstallMock,
         remoteExtension,
         loadRemoteMock,
-        externalId,
+        extensionId,
         cacheLoader,
         serverLoader,
       } = setupLoaders({
@@ -1427,7 +1457,7 @@ describe("ExtensionCatalogProvider", () => {
 
       // Then
       await waitFor(() => {
-        expect(loadRemoteMock).toHaveBeenCalledWith(externalId);
+        expect(loadRemoteMock).toHaveBeenCalledWith(extensionId);
       });
       await waitFor(() => {
         expect(cacheInstallMock).toHaveBeenCalledWith({ foxeFileData: buffer });

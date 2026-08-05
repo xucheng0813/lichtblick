@@ -339,9 +339,9 @@ describe("ExtensionsAPI", () => {
   });
 
   describe("loadContent", () => {
-    it("should load extension content by file id", async () => {
+    it("should load extension content by extension id", async () => {
       // Given
-      const id = BasicBuilder.string();
+      const extensionId = BasicBuilder.string();
       const mockContent = new ArrayBuffer(8);
       const mockUint8Array = new Uint8Array(mockContent);
 
@@ -350,10 +350,10 @@ describe("ExtensionsAPI", () => {
       mockHttpService.get = mockGet;
 
       // When
-      const result = await extensionsAPI.loadContent(id);
+      const result = await extensionsAPI.loadContent(extensionId);
 
       // Then
-      expect(mockGet).toHaveBeenCalledWith(`extensions/${id}/download`, undefined, {
+      expect(mockGet).toHaveBeenCalledWith(`extensions/${extensionId}/download`, undefined, {
         responseType: "arraybuffer",
       });
       expect(result).toEqual(mockUint8Array);
@@ -361,14 +361,14 @@ describe("ExtensionsAPI", () => {
 
     it("should return undefined when content not found", async () => {
       // Given
-      const fileId = BasicBuilder.string();
+      const extensionId = BasicBuilder.string();
 
       const mockHttpService = jest.mocked(HttpService);
       const mockGet = jest.fn().mockRejectedValue(new HttpError("Not Found", 404, "Not Found"));
       mockHttpService.get = mockGet;
 
       // When
-      const result = await extensionsAPI.loadContent(fileId);
+      const result = await extensionsAPI.loadContent(extensionId);
 
       // Then
       expect(result).toBeUndefined();
@@ -376,7 +376,7 @@ describe("ExtensionsAPI", () => {
 
     it("should throw error for other HTTP errors", async () => {
       // Given
-      const fileId = BasicBuilder.string();
+      const extensionId = BasicBuilder.string();
 
       const mockHttpService = jest.mocked(HttpService);
       const mockGet = jest
@@ -385,7 +385,7 @@ describe("ExtensionsAPI", () => {
       mockHttpService.get = mockGet;
 
       // When Then
-      await expect(extensionsAPI.loadContent(fileId)).rejects.toThrow("Internal Server Error");
+      await expect(extensionsAPI.loadContent(extensionId)).rejects.toThrow("Internal Server Error");
     });
   });
 

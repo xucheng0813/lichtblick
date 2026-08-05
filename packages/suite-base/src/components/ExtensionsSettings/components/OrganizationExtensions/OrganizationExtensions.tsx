@@ -24,6 +24,7 @@ import {
   UseInstallingExtensionsState,
   useExtensionCatalog,
 } from "@lichtblick/suite-base/context/ExtensionCatalogContext";
+import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
 import { ExtensionInfo } from "@lichtblick/suite-base/types/Extensions";
 
 const log = Logger.getLogger(__filename);
@@ -35,6 +36,16 @@ type OrganizationExtensionsProps = {
   installFoxeExtensions: UseInstallingExtensionsState["installFoxeExtensions"];
   workspace: string;
 };
+
+function getDownloadErrorReason(error: unknown): string {
+  if (error instanceof HttpError) {
+    return String(error.status);
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
 
 function getInstallationStatus(
   extension: ExtensionInfo,
@@ -108,13 +119,10 @@ export default function OrganizationExtensions({
     async (extension: ExtensionInfo) => {
       setInstallingExtensionId(extension.id);
       try {
-        const content = await api.loadContent(
-          extension.externalId ?? extension.id,
-        );
+        const content = await api.loadContent(extension.id);
         if (content == undefined) {
-          throw new Error(
-            `No package content returned for extension ${extension.id}`,
-          );
+          // ExtensionsAPI returns undefined only when the download endpoint returns 404.
+          throw new Error("404");
         }
         await installFoxeExtensions([{ buffer: content, namespace: "org" }]);
       } catch (error) {
@@ -122,9 +130,12 @@ export default function OrganizationExtensions({
           `Error installing organization extension ${extension.id}`,
           error,
         );
-        enqueueSnackbar(t("organizationExtensionInstallFailed"), {
-          variant: "error",
-        });
+        enqueueSnackbar(
+          t("organizationExtensionInstallFailed", {
+            reason: getDownloadErrorReason(error),
+          }),
+          { variant: "error" },
+        );
       } finally {
         setInstallingExtensionId(undefined);
       }
