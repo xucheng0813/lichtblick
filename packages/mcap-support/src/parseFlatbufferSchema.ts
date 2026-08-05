@@ -59,9 +59,60 @@ function flatbufferString(unchecked: string | Uint8Array | null | undefined): st
   throw new Error(`Expected string, found ${typeof unchecked}`);
 }
 
+function baseTypeName(type: BaseType): string {
+  const baseTypeNames = BaseType as unknown as Record<number, string | undefined>;
+  return baseTypeNames[type] ?? `unknown (${type})`;
+}
+
+function unionEnum(schema: SchemaT, enumIndex: number, fieldName: string) {
+  const enumDefinition = schema.enums[enumIndex];
+  if (enumDefinition?.isUnion !== true) {
+    throw new Error(`Invalid schema, missing union enum for field "${fieldName}".`);
+  }
+  return enumDefinition;
+}
+
+function typeForUnionField(
+  schema: SchemaT,
+  field: FieldT,
+  shape: "scalar" | "array",
+): MessageDefinitionField[] {
+  const fieldName = flatbufferString(field.name);
+  const fieldType = field.type;
+  if (fieldType == undefined) {
+    throw new Error(`Invalid schema, field "${fieldName}" has an invalid field type.`);
+  }
+  const enumDefinition = unionEnum(schema, fieldType.index, fieldName);
+  const isArray = shape === "array";
+  const definitions: MessageDefinitionField[] = enumDefinition.values.map((enumValue) => ({
+    name: flatbufferString(enumValue.name),
+    type: "uint8",
+    isConstant: true,
+    value: enumValue.value,
+  }));
+
+  definitions.push({
+    name: `${fieldName}_type`,
+    type: "uint8",
+    ...(isArray && { isArray: true }),
+  });
+  definitions.push({
+    name: fieldName,
+    type: flatbufferString(enumDefinition.name),
+    isComplex: true,
+    ...(isArray && { isArray: true }),
+  });
+  return definitions;
+}
+
 function typeForField(schema: SchemaT, field: FieldT): MessageDefinitionField[] {
+  const fieldName = flatbufferString(field.name);
+  if (field.type == undefined) {
+    throw new Error(`Invalid schema, field "${fieldName}" has an invalid field type.`);
+  }
+
   const fields: MessageDefinitionField[] = [];
-  switch (field.type?.baseType) {
+  switch (field.type.baseType) {
     case BaseType.UType:
     case BaseType.Bool:
     case BaseType.Byte:
@@ -97,19 +148,23 @@ function typeForField(schema: SchemaT, field: FieldT): MessageDefinitionField[] 
           });
         }
       }
-      fields.push({ name: flatbufferString(field.name), type: simpleType });
+      fields.push({ name: fieldName, type: simpleType });
       break;
     }
     case BaseType.Vector:
       switch (field.type.element) {
         case BaseType.Vector:
-        case BaseType.Union:
         case BaseType.Array:
         case BaseType.None:
-          throw new Error("Vectors of vectors, unions, arrays, and None's are unsupported.");
+          throw new Error(
+            `Vectors of ${baseTypeName(field.type.element)} are unsupported for field "${fieldName}".`,
+          );
+        case BaseType.Union:
+          fields.push(...typeForUnionField(schema, field, "array"));
+          break;
         case BaseType.Obj:
           fields.push({
-            name: flatbufferString(field.name),
+            name: fieldName,
             type: flatbufferString(schema.objects[field.type.index]?.name),
             isComplex: true,
             isArray: true,
@@ -133,25 +188,211 @@ function typeForField(schema: SchemaT, field: FieldT): MessageDefinitionField[] 
               });
             }
           }
-          fields.push({ name: flatbufferString(field.name), type, isArray: true });
+          fields.push({ name: fieldName, type, isArray: true });
           break;
         }
       }
       break;
     case BaseType.Obj:
       fields.push({
-        name: flatbufferString(field.name),
+        name: fieldName,
         type: flatbufferString(schema.objects[field.type.index]?.name),
         isComplex: true,
       });
       break;
     case BaseType.Union:
-    case BaseType.Array:
+      fields.push(...typeForUnionField(schema, field, "scalar"));
+      break;
+    case BaseType.Array: {
+      if (!Number.isInteger(field.type.fixedLength) || field.type.fixedLength <= 0) {
+        throw new Error(
+          `Invalid schema, fixed-length array field "${fieldName}" must have a positive length.`,
+        );
+      }
+      switch (field.type.element) {
+        case BaseType.UType:
+        case BaseType.Bool:
+        case BaseType.Byte:
+        case BaseType.UByte:
+        case BaseType.Short:
+        case BaseType.UShort:
+        case BaseType.Int:
+        case BaseType.UInt:
+        case BaseType.Long:
+        case BaseType.ULong:
+        case BaseType.Float:
+        case BaseType.Double:
+          fields.push({
+            name: fieldName,
+            type: typeForSimpleField(field.type.element),
+            isArray: true,
+            arrayLength: field.type.fixedLength,
+          });
+          break;
+        case BaseType.Obj: {
+          const elementObject = schema.objects[field.type.index];
+          if (elementObject == undefined) {
+            throw new Error(
+              `Invalid schema, missing object for fixed-length array field "${fieldName}".`,
+            );
+          }
+          const elementName = flatbufferString(elementObject.name);
+          if (!elementObject.isStruct) {
+            throw new Error(
+              `Invalid schema, fixed-length array field "${fieldName}" references non-struct object "${elementName}".`,
+            );
+          }
+          fields.push({
+            name: fieldName,
+            type: elementName,
+            isComplex: true,
+            isArray: true,
+            arrayLength: field.type.fixedLength,
+          });
+          break;
+        }
+        case BaseType.Union:
+        case BaseType.Array:
+          throw new Error(
+            `Fixed-length arrays of ${baseTypeName(field.type.element)} are unsupported for field "${fieldName}".`,
+          );
+        default:
+          throw new Error(
+            `Invalid fixed-length array element type ${baseTypeName(
+              field.type.element,
+            )} for field "${fieldName}".`,
+          );
+      }
+      break;
+    }
     case BaseType.MaxBaseType:
-    case undefined:
-      throw new Error("Unions and Arrays are not supported in mcap-support currently.");
+      throw new Error(`Unsupported field type ${baseTypeName(field.type.baseType)}.`);
   }
   return fields;
+}
+
+function unionDiscriminatorFieldNames(objectFields: FieldT[]): Set<string> {
+  const names = new Set<string>();
+  for (const field of objectFields) {
+    if (
+      field.type?.baseType === BaseType.Union ||
+      (field.type?.baseType === BaseType.Vector && field.type.element === BaseType.Union)
+    ) {
+      names.add(`${flatbufferString(field.name)}_type`);
+    }
+  }
+  return names;
+}
+
+function validateStructUnionFields(objectName: string, objectFields: FieldT[]): void {
+  for (const field of objectFields) {
+    const baseType = field.type?.baseType;
+    const elementType = field.type?.element;
+    let unsupportedType: string | undefined;
+    if (baseType === BaseType.Union || baseType === BaseType.UType) {
+      unsupportedType = baseTypeName(baseType);
+    } else if (
+      baseType === BaseType.Vector &&
+      (elementType === BaseType.Union || elementType === BaseType.UType)
+    ) {
+      unsupportedType = `Vector<${baseTypeName(elementType)}>`;
+    }
+
+    if (unsupportedType != undefined) {
+      throw new Error(
+        `Invalid schema, struct "${objectName}" cannot contain ${unsupportedType} field "${flatbufferString(
+          field.name,
+        )}".`,
+      );
+    }
+  }
+}
+
+function validateUnionDiscriminators(objectName: string, objectFields: FieldT[]): void {
+  for (const field of objectFields) {
+    const isUnion = field.type?.baseType === BaseType.Union;
+    const isUnionVector =
+      field.type?.baseType === BaseType.Vector && field.type.element === BaseType.Union;
+    if (!isUnion && !isUnionVector) {
+      continue;
+    }
+
+    const fieldName = flatbufferString(field.name);
+    const discriminatorName = `${fieldName}_type`;
+    const discriminator = objectFields.find(
+      (candidate) => flatbufferString(candidate.name) === discriminatorName,
+    );
+    const validType = isUnionVector
+      ? discriminator?.type?.baseType === BaseType.Vector &&
+        discriminator.type.element === BaseType.UType
+      : discriminator?.type?.baseType === BaseType.UType;
+    if (!validType || discriminator?.type?.index !== field.type?.index) {
+      throw new Error(
+        `Invalid schema, union field "${objectName}.${fieldName}" has an invalid or missing discriminator field "${discriminatorName}".`,
+      );
+    }
+  }
+}
+
+function addUnionDatatypes(schema: SchemaT, datatypes: MessageDefinitionMap): void {
+  for (const enumDefinition of schema.enums) {
+    if (!enumDefinition.isUnion) {
+      continue;
+    }
+    const unionName = flatbufferString(enumDefinition.name);
+    if (datatypes.has(unionName)) {
+      throw new Error(
+        `Invalid schema, union enum "${unionName}" conflicts with an object of the same name.`,
+      );
+    }
+    const definitions: MessageDefinitionField[] = [];
+    const definitionsByName = new Map<string, MessageDefinitionField>();
+    for (const enumValue of enumDefinition.values) {
+      if (enumValue.value <= 0n) {
+        continue;
+      }
+      const unionType = enumValue.unionType;
+      if (unionType?.baseType !== BaseType.Obj) {
+        throw new Error(
+          `Invalid schema, union "${unionName}" member "${flatbufferString(
+            enumValue.name,
+          )}" is not a table.`,
+        );
+      }
+      const memberObject = schema.objects[unionType.index];
+      if (memberObject == undefined) {
+        throw new Error(
+          `Invalid schema, missing table for union "${unionName}" member "${flatbufferString(
+            enumValue.name,
+          )}".`,
+        );
+      }
+      const memberName = flatbufferString(memberObject.name);
+      if (memberObject.isStruct) {
+        throw new Error(
+          `Invalid schema, union "${unionName}" member "${memberName}" is not a table.`,
+        );
+      }
+      const memberDefinitions = datatypes.get(memberName)?.definitions;
+      if (memberDefinitions == undefined) {
+        throw new Error(
+          `Invalid schema, missing table datatype "${memberName}" for union "${unionName}".`,
+        );
+      }
+      for (const definition of memberDefinitions) {
+        const existing = definitionsByName.get(definition.name);
+        if (existing != undefined) {
+          // Identical names and types are deduplicated. If the types differ, retain the first
+          // declaration: a union value can only hold one member at runtime, and first-wins keeps
+          // the synthesized path superset deterministic.
+          continue;
+        }
+        definitionsByName.set(definition.name, definition);
+        definitions.push(definition);
+      }
+    }
+    datatypes.set(unionName, { definitions });
+  }
 }
 
 /**
@@ -179,11 +420,28 @@ export function parseFlatbufferSchema(
     if (object?.fields == undefined) {
       continue;
     }
+    const objectName = flatbufferString(object.name);
+    if (object.isStruct) {
+      validateStructUnionFields(objectName, object.fields);
+    }
+    validateUnionDiscriminators(objectName, object.fields);
+    const discriminatorNames = unionDiscriminatorFieldNames(object.fields);
     for (const field of object.fields) {
+      if (discriminatorNames.has(flatbufferString(field.name))) {
+        continue;
+      }
+      if (field.type?.baseType === BaseType.Array && !object.isStruct) {
+        throw new Error(
+          `Invalid schema, fixed-length array field "${objectName}.${flatbufferString(
+            field.name,
+          )}" is not inside a struct.`,
+        );
+      }
       fields = fields.concat(typeForField(schema, field));
     }
-    datatypes.set(flatbufferString(object.name), { definitions: fields });
+    datatypes.set(objectName, { definitions: fields });
   }
+  addUnionDatatypes(schema, datatypes);
   if (typeIndex === -1) {
     if (schema.rootTable?.name !== schemaName) {
       throw new Error(

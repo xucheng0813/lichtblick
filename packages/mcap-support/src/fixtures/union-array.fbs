@@ -1,0 +1,36 @@
+// SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
+// SPDX-License-Identifier: MPL-2.0
+
+// Regenerate with: /opt/homebrew/bin/flatc -b --schema union-array.fbs
+
+namespace UnionArray;
+
+table TableA {
+  shared: int32;
+  conflict: int32;
+  a_only: string;
+}
+
+table TableB {
+  shared: int32;
+  conflict: string;
+  b_only: bool;
+}
+
+union U {
+  TableA,
+  TableB,
+}
+
+struct StructWithArray {
+  arr: [float32:4];
+}
+
+table Root {
+  u: U;
+  us: [U];
+  s: StructWithArray;
+  plain: int32;
+}
+
+root_type Root;
