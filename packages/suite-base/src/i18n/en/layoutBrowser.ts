@@ -8,14 +8,24 @@
 export const layoutBrowser = {
   cancel: "Cancel",
   descriptionLabel: "Layout description",
-  descriptionPlaceholder: "e.g. Use this layout to view device diagnostics data and fault trends",
+  descriptionPlaceholder:
+    "e.g. Use this layout to view device diagnostics data and fault trends",
   descriptionSaveFailed: "Failed to save description",
   editDescription: "Edit description",
   editDescriptionText:
     "Explain what “{{layoutName}}” is for. The description will be used to generate AI assistant skills.",
   editDescriptionTitle: "Edit layout description",
+  layoutName: "Layout name",
   layoutNotSyncedToServer:
     "Layout has not been synced to the server yet, please try again later.",
+  orgCanEdit: "Organization can edit",
+  orgReadOnly: "Organization read-only",
+  permission: "Permission",
   readOnlyLayout: "Read-only layout",
   save: "Save",
+  upload: "Upload",
+  uploadFailed: "Failed to upload to organization",
+  uploadSuccess: "Uploaded to organization",
+  uploadToOrg: "Upload to organization…",
+  uploadToOrgTitle: "Upload layout to organization",
 };

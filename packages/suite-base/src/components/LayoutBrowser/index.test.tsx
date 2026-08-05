@@ -22,8 +22,8 @@ import { useWorkspaceActions } from "@lichtblick/suite-base/context/Workspace/us
 import { useAppConfigurationValue } from "@lichtblick/suite-base/hooks/useAppConfigurationValue";
 import { useConfirm } from "@lichtblick/suite-base/hooks/useConfirm";
 import { useLayoutNavigation } from "@lichtblick/suite-base/hooks/useLayoutNavigation";
-import { usePrompt } from "@lichtblick/suite-base/hooks/usePrompt";
 import { layoutBrowser as layoutBrowserZh } from "@lichtblick/suite-base/i18n/zh/layoutBrowser";
+import { AppEvent } from "@lichtblick/suite-base/services/IAnalytics";
 import { Layout } from "@lichtblick/suite-base/services/ILayoutStorage";
 import MockLayoutManager from "@lichtblick/suite-base/services/LayoutManager/MockLayoutManager";
 import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
@@ -34,6 +34,7 @@ import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAp
 import { BasicBuilder } from "@lichtblick/test-builders";
 
 import LayoutBrowser from "./index";
+import { UploadToOrgOptions } from "./types";
 
 jest.mock("react-i18next", () => ({
   useTranslation: jest.fn(),
@@ -70,10 +71,6 @@ jest.mock("@lichtblick/suite-base/hooks/useLayoutNavigation", () => ({
 
 jest.mock("@lichtblick/suite-base/hooks/useConfirm", () => ({
   useConfirm: jest.fn(),
-}));
-
-jest.mock("@lichtblick/suite-base/hooks/usePrompt", () => ({
-  usePrompt: jest.fn(),
 }));
 
 jest.mock("@lichtblick/suite-base/hooks/useAppConfigurationValue", () => ({
@@ -148,7 +145,6 @@ describe("LayoutBrowser", () => {
     (useCurrentLayoutActions as jest.Mock).mockReturnValue({ setSelectedLayoutId: jest.fn() });
     (useCurrentUser as jest.Mock).mockReturnValue({ signIn: undefined });
     (useConfirm as jest.Mock).mockReturnValue([jest.fn(), undefined]);
-    (usePrompt as jest.Mock).mockReturnValue([jest.fn(), undefined]);
     (useAppConfigurationValue as jest.Mock).mockReturnValue([true, jest.fn()]);
     (useWorkspaceStore as jest.Mock).mockReturnValue({ personal: true, shared: true });
     (useWorkspaceActions as jest.Mock).mockReturnValue({
@@ -377,6 +373,7 @@ describe("LayoutBrowser", () => {
     let setSharedExpandedMock: jest.Mock;
     let onSelectLayoutMock: jest.Mock;
     let logEventMock: jest.Mock;
+    let enqueueSnackbarMock: jest.Mock;
 
     const originalLayoutSectionMock = jest.requireMock("./LayoutSection").default;
 
@@ -385,8 +382,12 @@ describe("LayoutBrowser", () => {
       setSharedExpandedMock = jest.fn();
       onSelectLayoutMock = jest.fn().mockResolvedValue(undefined);
       logEventMock = jest.fn().mockResolvedValue(undefined);
+      enqueueSnackbarMock = jest.fn();
 
       (useAnalytics as jest.Mock).mockReturnValue({ logEvent: logEventMock });
+      (jest.requireMock("notistack").useSnackbar as jest.Mock).mockReturnValue({
+        enqueueSnackbar: enqueueSnackbarMock,
+      });
       (useWorkspaceStore as jest.Mock).mockReturnValue({ personal: true, shared: true });
       (useWorkspaceActions as jest.Mock).mockReturnValue({
         layoutBrowserActions: {
@@ -495,32 +496,51 @@ describe("LayoutBrowser", () => {
       });
     });
 
-    it("expands shared section when sharing a layout", async () => {
-      // GIVEN
-      const layout = LayoutBuilder.layout();
-      const newLayout = LayoutBuilder.layout();
-      const promptMock = jest.fn().mockResolvedValue("Shared Layout");
-      (usePrompt as jest.Mock).mockReturnValue([promptMock, undefined]);
-      mockLayoutManager.saveNewLayout = jest.fn().mockResolvedValue(newLayout);
+    it.each(["ORG_READ", "ORG_WRITE"] as const)(
+      "uploads a personal layout with %s permission and expands the shared section",
+      async (permission) => {
+        // GIVEN
+        const layout = LayoutBuilder.layout();
+        const newLayout = LayoutBuilder.layout();
+        mockLayoutManager.saveNewLayout = jest.fn().mockResolvedValue(newLayout);
 
-      let capturedOnShare: ((item: Layout) => void) | undefined;
-      jest.requireMock("./LayoutSection").default = jest
-        .fn()
-        .mockImplementation((props: { onShare: (item: Layout) => void }) => {
-          capturedOnShare = props.onShare;
-          return <div data-testid="layout-section" />;
+        let capturedOnShare:
+          | ((item: Layout, options: UploadToOrgOptions) => Promise<boolean>)
+          | undefined;
+        jest.requireMock("./LayoutSection").default = jest
+          .fn()
+          .mockImplementation(
+            (props: {
+              onShare: (item: Layout, options: UploadToOrgOptions) => Promise<boolean>;
+            }) => {
+              capturedOnShare = props.onShare;
+              return <div data-testid="layout-section" />;
+            },
+          );
+
+        render(<LayoutBrowser />);
+
+        // WHEN
+        await act(async () => {
+          await expect(
+            capturedOnShare!(layout, { name: "Shared Layout", permission }),
+          ).resolves.toBe(true);
         });
 
-      render(<LayoutBrowser />);
-
-      // WHEN
-      capturedOnShare!(layout);
-
-      // THEN
-      await waitFor(() => {
+        // THEN
+        expect(mockLayoutManager.saveNewLayout).toHaveBeenCalledWith({
+          name: "Shared Layout",
+          data: layout.working?.data ?? layout.baseline.data,
+          permission,
+        });
         expect(setSharedExpandedMock).toHaveBeenCalledWith(true);
-      });
-    });
+        expect(onSelectLayoutMock).toHaveBeenCalledWith(newLayout);
+        expect(logEventMock).toHaveBeenCalledWith(AppEvent.LAYOUT_SHARE, { permission });
+        expect(enqueueSnackbarMock).toHaveBeenCalledWith("已上传到组织", {
+          variant: "success",
+        });
+      },
+    );
 
     it("expands personal section when making a personal copy", async () => {
       // GIVEN

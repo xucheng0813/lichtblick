@@ -50,7 +50,6 @@ import useCallbackWithToast from "@lichtblick/suite-base/hooks/useCallbackWithTo
 import { useLayoutActions } from "@lichtblick/suite-base/hooks/useLayoutActions";
 import { useLayoutNavigation } from "@lichtblick/suite-base/hooks/useLayoutNavigation";
 import { useLayoutTransfer } from "@lichtblick/suite-base/hooks/useLayoutTransfer";
-import { usePrompt } from "@lichtblick/suite-base/hooks/usePrompt";
 import { defaultPlaybackConfig } from "@lichtblick/suite-base/providers/CurrentLayoutProvider/reducers";
 import { AppEvent } from "@lichtblick/suite-base/services/IAnalytics";
 import {
@@ -66,6 +65,7 @@ import {
 
 import LayoutSection from "./LayoutSection";
 import { useStyles } from "./index.style";
+import { UploadToOrgOptions } from "./types";
 
 const log = Logger.getLogger(__filename);
 
@@ -83,7 +83,6 @@ export default function LayoutBrowser({
   const { t } = useTranslation("layoutBrowser");
   const layoutManager = useLayoutManager();
   const appConfiguration = useAppConfiguration();
-  const [prompt, promptModal] = usePrompt();
   const analytics = useAnalytics();
   const workspace = resolveWorkspace(appConfiguration);
   const layoutsAPI = useMemo(
@@ -256,26 +255,26 @@ export default function LayoutBrowser({
     analytics,
   ]);
 
-  const onShareLayout = useCallbackWithToast(
-    async (item: Layout) => {
-      const name = await prompt({
-        title: "Share a copy with your organization",
-        subText: "Shared layouts can be used and changed by other members of your organization.",
-        initialValue: item.name,
-        label: "Layout name",
-      });
-      if (name != undefined) {
+  const onShareLayout = useCallback(
+    async (item: Layout, { name, permission }: UploadToOrgOptions): Promise<boolean> => {
+      try {
         const newLayout = await layoutManager.saveNewLayout({
           name,
           data: item.working?.data ?? item.baseline.data,
-          permission: "ORG_WRITE",
+          permission,
         });
-        analytics.logEvent(AppEvent.LAYOUT_SHARE, { permission: item.permission });
+        analytics.logEvent(AppEvent.LAYOUT_SHARE, { permission });
         setSharedSectionExpanded(true);
         await onSelectLayout(newLayout);
+        enqueueSnackbar(t("uploadSuccess"), { variant: "success" });
+        return true;
+      } catch (error) {
+        log.error(error);
+        enqueueSnackbar(t("uploadFailed"), { variant: "error" });
+        return false;
       }
     },
-    [analytics, layoutManager, onSelectLayout, prompt, setSharedSectionExpanded],
+    [analytics, enqueueSnackbar, layoutManager, onSelectLayout, setSharedSectionExpanded, t],
   );
 
   const onMakePersonalCopy = useCallbackWithToast(
@@ -366,7 +365,6 @@ export default function LayoutBrowser({
         </IconButton>,
       ].filter(Boolean)}
     >
-      {promptModal}
       {confirmModal}
       <Stack
         fullHeight

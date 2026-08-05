@@ -10,12 +10,19 @@ import { StoreApi, useStore } from "zustand";
 
 import { CameraModelsMap } from "@lichtblick/den/image/types";
 import { useGuaranteedContext } from "@lichtblick/hooks";
-import { ExtensionPanelRegistration, Immutable, PanelSettings } from "@lichtblick/suite";
+import {
+  ExtensionPanelRegistration,
+  Immutable,
+  PanelSettings,
+} from "@lichtblick/suite";
 import { ExtensionSettings } from "@lichtblick/suite-base/components/PanelSettings/types";
 import { TopicAliasFunctions } from "@lichtblick/suite-base/players/TopicAliasingPlayer/TopicAliasingPlayer";
 import { TypeExtensionLoader } from "@lichtblick/suite-base/services/extension/IExtensionLoader";
 import { Namespace } from "@lichtblick/suite-base/types";
-import { ExtensionInfo } from "@lichtblick/suite-base/types/Extensions";
+import {
+  ExtensionInfo,
+  ExtensionPanelMetadata,
+} from "@lichtblick/suite-base/types/Extensions";
 import { InstalledMessageConverter } from "@lichtblick/suite-base/types/messageConverters";
 
 export type ExtensionData = {
@@ -25,9 +32,11 @@ export type ExtensionData = {
 };
 
 export type RegisteredPanel = {
+  extensionDescription?: string;
   extensionId: string;
   extensionName: string;
   extensionNamespace?: Namespace;
+  meta?: ExtensionPanelMetadata;
   registration: ExtensionPanelRegistration;
 };
 
@@ -36,7 +45,9 @@ export type InstallExtensionsResult = {
   info?: ExtensionInfo;
   error?: unknown;
   extensionName?: string;
-  loaderResults?: (Pick<LoadExtensionsResult, "loaderType" | "success"> & { error?: unknown })[];
+  loaderResults?: (Pick<LoadExtensionsResult, "loaderType" | "success"> & {
+    error?: unknown;
+  })[];
 };
 
 export type LoadExtensionsResult = {
@@ -47,7 +58,9 @@ export type LoadExtensionsResult = {
 };
 
 export type UseInstallingExtensionsState = {
-  installFoxeExtensions: (extensionsData: ExtensionData[]) => Promise<void>;
+  installFoxeExtensions: (
+    extensionsData: ExtensionData[],
+  ) => Promise<InstallExtensionsResult[]>;
 };
 
 export type UseInstallingExtensionsStateProps = {
@@ -71,9 +84,16 @@ export type ExtensionCatalog = Immutable<{
     namespace: Namespace,
     extensions: ExtensionData[],
   ) => Promise<InstallExtensionsResult[]>;
+  getExtensionPackage: (
+    namespace: Namespace,
+    id: string,
+  ) => Promise<Uint8Array | undefined>;
   isExtensionInstalled: (extensionId: string) => boolean;
   markExtensionAsInstalled: (extensionId: string) => void;
-  mergeState: (info: ExtensionInfo, contributionPoints: ContributionPoints) => void;
+  mergeState: (
+    info: ExtensionInfo,
+    contributionPoints: ContributionPoints,
+  ) => void;
   refreshAllExtensions: () => Promise<void>;
   uninstallExtension: (namespace: Namespace, id: string) => Promise<void>;
   unMarkExtensionAsInstalled: (extensionId: string) => void;
@@ -95,11 +115,13 @@ export type ContributionPoints = {
   cameraModels: CameraModelsMap;
 };
 
-export const ExtensionCatalogContext = createContext<undefined | StoreApi<ExtensionCatalog>>(
-  undefined,
-);
+export const ExtensionCatalogContext = createContext<
+  undefined | StoreApi<ExtensionCatalog>
+>(undefined);
 
-export function useExtensionCatalog<T>(selector: (registry: ExtensionCatalog) => T): T {
+export function useExtensionCatalog<T>(
+  selector: (registry: ExtensionCatalog) => T,
+): T {
   const context = useGuaranteedContext(ExtensionCatalogContext);
   return useStore(context, selector);
 }

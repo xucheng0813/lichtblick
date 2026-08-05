@@ -124,6 +124,17 @@ describe("LayoutRow rendering", () => {
     expect(screen.getByTestId("delete-layout")).toBeInTheDocument();
   });
 
+  it("opens the upload-to-organization dialog from the personal layout menu", () => {
+    renderComponent();
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+    fireEvent.click(screen.getByTestId("upload-layout-to-org"));
+
+    expect(screen.getByRole("dialog", { name: "上传布局到组织" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "布局名称" })).toHaveValue(layoutName);
+    expect(screen.getByRole("radio", { name: "组织可编辑" })).toBeChecked();
+  });
+
   it("shows edit description only for a synced remote layout when viz-server is configured", () => {
     const remoteLayout = {
       ...defaultLayout,
@@ -235,7 +246,7 @@ describe("LayoutRow rendering", () => {
     expect(screen.getByTestId("delete-layout")).toBeDisabled();
     expect(screen.getByText("Save changes").closest("button")).toBeDisabled();
     expect(screen.queryByTestId("edit-layout-description")).not.toBeInTheDocument();
-    expect(screen.queryByText("Share with team…")).not.toBeInTheDocument();
+    expect(screen.queryByText("上传到组织…")).not.toBeInTheDocument();
     expect(screen.getByTestId("duplicate-layout")).toBeEnabled();
     expect(screen.getAllByText("只读布局")).toHaveLength(3);
   });
@@ -264,7 +275,7 @@ describe("LayoutRow rendering", () => {
       expect(screen.getByTestId("edit-layout-description")).toBeInTheDocument();
       expect(screen.queryByText("只读布局")).not.toBeInTheDocument();
       expect(
-        screen.queryByText("Share with team…")?.closest("button")?.hasAttribute("disabled"),
+        screen.queryByText("上传到组织…")?.closest("button")?.hasAttribute("disabled"),
       ).toBe(permission === "CREATOR_WRITE" ? false : undefined);
     },
   );

@@ -14,6 +14,7 @@ import { Layout } from "@lichtblick/suite-base/services/ILayoutStorage";
 
 import LayoutRow from "./LayoutRow";
 import { useLayoutSectionStyles } from "./LayoutSection.style";
+import { UploadToOrgOptions } from "./types";
 
 export default function LayoutSection({
   title,
@@ -51,7 +52,7 @@ export default function LayoutSection({
   onRename: (item: Layout, newName: string) => void;
   onDuplicate: (item: Layout) => void;
   onDelete: (item: Layout) => void;
-  onShare: (item: Layout) => void;
+  onShare: (item: Layout, options: UploadToOrgOptions) => Promise<boolean>;
   onExport: (item: Layout) => void;
   onOverwrite: (item: Layout) => void;
   onRevert: (item: Layout) => void;

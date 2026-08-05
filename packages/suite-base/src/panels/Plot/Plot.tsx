@@ -33,6 +33,7 @@ import { PlotProps, TooltipStateSetter } from "@lichtblick/suite-base/panels/Plo
 import { useStyles } from "./Plot.style";
 import { PlotCoordinator } from "./PlotCoordinator";
 import { PlotLegend } from "./PlotLegend";
+import useAutoSeedPlotPaths from "./hooks/useAutoSeedPlotPaths";
 import useGlobalSync from "./hooks/useGlobalSync";
 import usePlotDataHandling from "./hooks/usePlotDataHandling";
 import usePlotPanelSettings from "./hooks/usePlotPanelSettings";
@@ -41,6 +42,7 @@ import useSubscriptions from "./hooks/useSubscriptions";
 
 const Plot = (props: PlotProps): React.JSX.Element => {
   const { saveConfig, config } = props;
+  useAutoSeedPlotPaths(config, saveConfig);
   const {
     paths: series,
     showLegend,

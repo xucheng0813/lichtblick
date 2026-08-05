@@ -15,4 +15,5 @@ export type ExtensionListProps = {
   entries: Immutable<ExtensionMarketplaceDetail>[];
   filterText: string;
   selectExtension: (newFocusedExtension: FocusedExtension) => void;
+  allowUploadToOrganization?: boolean;
 };

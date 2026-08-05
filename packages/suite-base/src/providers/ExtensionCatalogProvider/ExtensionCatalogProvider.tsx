@@ -39,10 +39,12 @@ const log = Logger.getLogger(__filename);
 
 function createExtensionRegistryStore(
   loaders: readonly IExtensionLoader[],
-  mockMessageConverters: readonly RegisterMessageConverterArgs<unknown>[] | undefined,
+  mockMessageConverters:
+    readonly RegisterMessageConverterArgs<unknown>[] | undefined,
 ): StoreApi<ExtensionCatalog> {
   const orgCacheLoader: IExtensionLoader | undefined = loaders.find(
-    (extensionLoader) => extensionLoader.namespace === "org" && extensionLoader.type === "browser",
+    (extensionLoader) =>
+      extensionLoader.namespace === "org" && extensionLoader.type === "browser",
   );
 
   return createStore((set, get) => {
@@ -67,12 +69,35 @@ function createExtensionRegistryStore(
       return new Uint8Array(await res.arrayBuffer());
     };
 
-    const installExtensions = async (namespace: Namespace, extensions: ExtensionData[]) => {
-      const namespaceLoaders = loaders.filter((loader) => loader.namespace === namespace);
+    const installExtensions = async (
+      namespace: Namespace,
+      extensions: ExtensionData[],
+    ) => {
+      const namespaceLoaders = loaders.filter(
+        (loader) => loader.namespace === namespace,
+      );
       if (namespaceLoaders.length === 0) {
         throw new Error(`No extension loader found for namespace ${namespace}`);
       }
       return await promisesInBatch(extensions, namespaceLoaders);
+    };
+
+    const getExtensionPackage = async (
+      namespace: Namespace,
+      id: string,
+    ): Promise<Uint8Array | undefined> => {
+      const localLoaderType = isDesktopApp() ? "filesystem" : "browser";
+      const loaderType: TypeExtensionLoader =
+        namespace === "local" ? localLoaderType : "server";
+      const loader = loaders.find(
+        (candidate) =>
+          candidate.namespace === namespace && candidate.type === loaderType,
+      );
+      if (!loader) {
+        return undefined;
+      }
+      const loadedExtension = await loader.loadExtension(id);
+      return loadedExtension.buffer;
     };
 
     // Installs a single extension through all matching loaders sequentially.
@@ -87,15 +112,27 @@ function createExtensionRegistryStore(
       let hasAnySuccess = false;
       let externalId: string | undefined;
 
-      // Sort loaders to prioritize server loaders first (to get externalId)
-      const sortedLoaders = _.sortBy(extensionLoaders, serverLoaderFirst);
+      // A package downloaded from the organization server already exists remotely. Install it only
+      // into the device cache; server loaders require the original File when uploading a new copy.
+      const applicableLoaders =
+        extension.file == undefined
+          ? extensionLoaders.filter((loader) => loader.type !== "server")
+          : extensionLoaders;
+
+      // Sort loaders to prioritize server loaders first (to get externalId) for new uploads.
+      const sortedLoaders = _.sortBy(applicableLoaders, serverLoaderFirst);
 
       for (const loader of sortedLoaders) {
-        const result = await tryInstallSingleLoader(loader, extension, externalId);
+        const result = await tryInstallSingleLoader(
+          loader,
+          extension,
+          externalId,
+        );
 
         if (result.success) {
           externalId = result.externalId ?? externalId;
-          extensionName = result.info.displayName || result.info.name || extensionName;
+          extensionName =
+            result.info.displayName || result.info.name || extensionName;
 
           // Only merge state once for the first successful installation
           if (!hasAnySuccess) {
@@ -109,7 +146,11 @@ function createExtensionRegistryStore(
         loaderResults.push(
           result.success
             ? { loaderType: result.loaderType, success: true }
-            : { loaderType: result.loaderType, success: false, error: result.error },
+            : {
+                loaderType: result.loaderType,
+                success: false,
+                error: result.error,
+              },
         );
       }
 
@@ -139,7 +180,8 @@ function createExtensionRegistryStore(
     ): Promise<InstallExtensionsResult[]> {
       return await Promise.all(
         batch.map(
-          async (extension) => await installExtensionWithLoaders(extension, extensionLoaders),
+          async (extension) =>
+            await installExtensionWithLoaders(extension, extensionLoaders),
         ),
       );
     }
@@ -160,7 +202,10 @@ function createExtensionRegistryStore(
           extensionUniqueKey,
         ),
         installedPanels: { ...state.installedPanels, ...panels },
-        installedMessageConverters: [...state.installedMessageConverters!, ...messageConverters],
+        installedMessageConverters: [
+          ...state.installedMessageConverters!,
+          ...messageConverters,
+        ],
         installedTopicAliasFunctions: [
           ...state.installedTopicAliasFunctions!,
           ...topicAliasFunctions,
@@ -185,14 +230,22 @@ function createExtensionRegistryStore(
       try {
         installedExtensions.push(extension);
 
-        const { messageConverters, panelSettings, panels, topicAliasFunctions, cameraModels } =
-          contributionPoints;
+        const {
+          messageConverters,
+          panelSettings,
+          panels,
+          topicAliasFunctions,
+          cameraModels,
+        } = contributionPoints;
         const unwrappedExtensionSource = await loadSingleExtension(
           extension,
           loader,
           orgCacheLoader,
         );
-        const newContributionPoints = buildContributionPoints(extension, unwrappedExtensionSource);
+        const newContributionPoints = buildContributionPoints(
+          extension,
+          unwrappedExtensionSource,
+        );
 
         _.assign(panels, newContributionPoints.panels);
         _.merge(panelSettings, newContributionPoints.panelSettings);
@@ -287,10 +340,12 @@ function createExtensionRegistryStore(
 
     const uninstallExtension = async (namespace: Namespace, id: string) => {
       const localLoaderType = isDesktopApp() ? "filesystem" : "browser";
-      const loaderType: TypeExtensionLoader = namespace === "local" ? localLoaderType : "server";
+      const loaderType: TypeExtensionLoader =
+        namespace === "local" ? localLoaderType : "server";
 
       const namespaceLoader = loaders.find(
-        (loader) => loader.namespace === namespace && loader.type === loaderType,
+        (loader) =>
+          loader.namespace === namespace && loader.type === loaderType,
       );
       if (!namespaceLoader) {
         throw new Error("No extension loader found for namespace " + namespace);
@@ -316,10 +371,15 @@ function createExtensionRegistryStore(
       }
 
       set((state) =>
-        removeExtensionData({ id: extension.id, namespace: extension.namespace!, state }),
+        removeExtensionData({
+          id: extension.id,
+          namespace: extension.namespace!,
+          state,
+        }),
       );
 
-      const stillInstalled = get().installedExtensions?.some((ext) => ext.id === id) ?? false;
+      const stillInstalled =
+        get().installedExtensions?.some((ext) => ext.id === id) ?? false;
       if (!stillInstalled) {
         get().unMarkExtensionAsInstalled(id);
       }
@@ -327,6 +387,7 @@ function createExtensionRegistryStore(
 
     return {
       downloadExtension,
+      getExtensionPackage,
       installExtensions,
       isExtensionInstalled,
       markExtensionAsInstalled,
@@ -342,8 +403,11 @@ function createExtensionRegistryStore(
       loadedExtensions: new Set<string>(),
       panelSettings: _.merge(
         {},
-        ...(mockMessageConverters ?? []).map(({ fromSchemaName, panelSettings }) =>
-          _.mapValues(panelSettings, (settings) => ({ [fromSchemaName]: settings })),
+        ...(mockMessageConverters ?? []).map(
+          ({ fromSchemaName, panelSettings }) =>
+            _.mapValues(panelSettings, (settings) => ({
+              [fromSchemaName]: settings,
+            })),
         ),
       ),
     };
@@ -358,7 +422,9 @@ export default function ExtensionCatalogProvider({
   loaders: readonly IExtensionLoader[];
   mockMessageConverters?: readonly RegisterMessageConverterArgs<unknown>[];
 }>): React.JSX.Element {
-  const [store] = useState(createExtensionRegistryStore(loaders, mockMessageConverters));
+  const [store] = useState(
+    createExtensionRegistryStore(loaders, mockMessageConverters),
+  );
 
   // Request an initial refresh on first mount
   const refreshAllExtensions = store.getState().refreshAllExtensions;
@@ -369,6 +435,8 @@ export default function ExtensionCatalogProvider({
   }, [refreshAllExtensions]);
 
   return (
-    <ExtensionCatalogContext.Provider value={store}>{children}</ExtensionCatalogContext.Provider>
+    <ExtensionCatalogContext.Provider value={store}>
+      {children}
+    </ExtensionCatalogContext.Provider>
   );
 }
