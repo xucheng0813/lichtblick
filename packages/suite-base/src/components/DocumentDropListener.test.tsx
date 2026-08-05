@@ -259,5 +259,99 @@ describe("<DocumentDropListener> onDrop useCallback", () => {
       expect.objectContaining({ namespace: "local" }),
     );
     expect(document.body.textContent).not.toContain("Choose Installation Location");
+    expect(document.querySelector("input[type='checkbox']")).toBeNull();
+  });
+
+  it("installs locally and then uploads the extension when the option is checked", async () => {
+    mockWorkspace = "configured-workspace";
+    mockHttpBaseUrl = "https://api.example.com";
+    onDropSpy.mockResolvedValue(undefined);
+
+    root.render(
+      <SnackbarProvider>
+        <ThemeProvider isDark={false}>
+          <DocumentDropListener allowedExtensions={[".foxe"]} onDrop={onDropSpy} />
+        </ThemeProvider>
+      </SnackbarProvider>,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const extensionFile = new File(["content"], "extension.foxe");
+    const dropEvent = new MouseEvent("drop", { bubbles: true, cancelable: true });
+    (dropEvent as any).dataTransfer = {
+      items: [
+        {
+          getAsFile: () => extensionFile,
+          webkitGetAsEntry: () => ({ isFile: true }),
+        },
+      ],
+    };
+    await act(async () => {
+      document.dispatchEvent(dropEvent);
+    });
+
+    const checkbox = document.querySelector<HTMLInputElement>("input[type='checkbox']");
+    const installButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Install",
+    );
+    expect(checkbox).not.toBeNull();
+    expect(installButton).toBeDefined();
+    await act(async () => {
+      checkbox?.click();
+      installButton?.click();
+      await Promise.resolve();
+    });
+    expect(onDropSpy).toHaveBeenCalledTimes(2);
+    expect(onDropSpy.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ files: [extensionFile], namespace: "local" }),
+    );
+    expect(onDropSpy.mock.calls[1]?.[0]).toEqual({
+      files: [extensionFile],
+      namespace: "org",
+    });
+    expect(onDropSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      onDropSpy.mock.invocationCallOrder[1]!,
+    );
+  });
+
+  it("only installs locally when organization upload is not checked", async () => {
+    mockWorkspace = "configured-workspace";
+    mockHttpBaseUrl = "https://api.example.com";
+    onDropSpy.mockResolvedValue(undefined);
+
+    root.render(
+      <SnackbarProvider>
+        <ThemeProvider isDark={false}>
+          <DocumentDropListener allowedExtensions={[".foxe"]} onDrop={onDropSpy} />
+        </ThemeProvider>
+      </SnackbarProvider>,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const extensionFile = new File(["content"], "extension.foxe");
+    const dropEvent = new MouseEvent("drop", { bubbles: true, cancelable: true });
+    (dropEvent as any).dataTransfer = {
+      items: [
+        {
+          getAsFile: () => extensionFile,
+          webkitGetAsEntry: () => ({ isFile: true }),
+        },
+      ],
+    };
+    await act(async () => {
+      document.dispatchEvent(dropEvent);
+    });
+    const installButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Install",
+    );
+    expect(installButton).toBeDefined();
+    await act(async () => {
+      installButton?.click();
+      await Promise.resolve();
+    });
+    expect(onDropSpy).toHaveBeenCalledTimes(1);
+    expect(onDropSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ files: [extensionFile], namespace: "local" }),
+    );
   });
 });

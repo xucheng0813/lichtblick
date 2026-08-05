@@ -27,6 +27,7 @@ describe("NamespaceSelectionModal", () => {
       new File(["content"], "layout.json", { type: "application/json" }),
       new File(["content"], "extension.foxe", { type: "application/octet-stream" }),
     ],
+    allowUploadToOrganization: true,
   };
 
   beforeEach(() => {
@@ -95,7 +96,9 @@ describe("NamespaceSelectionModal", () => {
       fireEvent.click(screen.getByText("Install"));
 
       // Then
-      expect(props.onSelect).toHaveBeenCalledWith("local");
+      expect(props.onSelect).toHaveBeenCalledWith("local", {
+        uploadToOrganization: false,
+      });
       expect(props.onClose).toHaveBeenCalled();
     });
   });
@@ -111,7 +114,9 @@ describe("NamespaceSelectionModal", () => {
       fireEvent.click(screen.getByText("Install"));
 
       // Then
-      expect(props.onSelect).toHaveBeenCalledWith("org");
+      expect(props.onSelect).toHaveBeenCalledWith("org", {
+        uploadToOrganization: false,
+      });
       expect(props.onClose).toHaveBeenCalled();
     });
   });
@@ -128,6 +133,36 @@ describe("NamespaceSelectionModal", () => {
       // Then
       expect(props.onClose).toHaveBeenCalled();
       expect(props.onSelect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("when user also uploads a local extension to the organization", () => {
+    it("should include the upload option in the selection", () => {
+      const props = { ...defaultProps };
+      renderWithProviders(<NamespaceSelectionModal {...props} />);
+
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: "Also upload extensions to the organization",
+        }),
+      );
+      fireEvent.click(screen.getByText("Install"));
+
+      expect(props.onSelect).toHaveBeenCalledWith("local", {
+        uploadToOrganization: true,
+      });
+    });
+
+    it("should not show the upload option when organization upload is unavailable", () => {
+      renderWithProviders(
+        <NamespaceSelectionModal {...defaultProps} allowUploadToOrganization={false} />,
+      );
+
+      expect(
+        screen.queryByRole("checkbox", {
+          name: "Also upload extensions to the organization",
+        }),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -187,7 +222,7 @@ describe("NamespaceSelectionModal", () => {
       // Then
       expect(screen.getByText("Local")).toBeInTheDocument();
       expect(screen.getByText("Organization")).toBeInTheDocument();
-      expect(screen.getByText(/Install only on this device/)).toBeInTheDocument();
+      expect(screen.getByText(/Install on this device first/)).toBeInTheDocument();
       expect(screen.getByText(/Install for your entire organization/)).toBeInTheDocument();
     });
   });

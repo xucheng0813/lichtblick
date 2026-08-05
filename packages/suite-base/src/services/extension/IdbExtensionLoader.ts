@@ -19,6 +19,7 @@ import {
 import { ALLOWED_FILES } from "@lichtblick/suite-base/services/extension/types";
 import decompressFile from "@lichtblick/suite-base/services/extension/utils/decompressFile";
 import extractFoxeFileContent from "@lichtblick/suite-base/services/extension/utils/extractFoxeFileContent";
+import { parseExtensionPanelsMeta } from "@lichtblick/suite-base/services/extension/utils/parseExtensionPanelsMeta";
 import validatePackageInfo from "@lichtblick/suite-base/services/extension/utils/validatePackageInfo";
 import { Namespace } from "@lichtblick/suite-base/types";
 import { ExtensionInfo } from "@lichtblick/suite-base/types/Extensions";
@@ -64,10 +65,13 @@ export class IdbExtensionLoader implements IExtensionLoader {
       ALLOWED_FILES.EXTENSION,
     );
     if (!rawExtensionFile) {
-      throw new Error(`Extension is corrupted: missing ${ALLOWED_FILES.EXTENSION}`);
+      throw new Error(
+        `Extension is corrupted: missing ${ALLOWED_FILES.EXTENSION}`,
+      );
     }
 
     return {
+      buffer: extension.content,
       raw: rawExtensionFile,
     };
   }
@@ -79,18 +83,34 @@ export class IdbExtensionLoader implements IExtensionLoader {
     log.debug("[IndexedDB] Installing extension");
 
     const decompressedData = await decompressFile(foxeFileData);
-    const rawPackageFile = await extractFoxeFileContent(decompressedData, ALLOWED_FILES.PACKAGE);
+    const rawPackageFile = await extractFoxeFileContent(
+      decompressedData,
+      ALLOWED_FILES.PACKAGE,
+    );
     if (!rawPackageFile) {
       throw new Error(
         `Corrupted extension. File "${ALLOWED_FILES.PACKAGE}" is missing in the extension source.`,
       );
     }
-    const readme = (await extractFoxeFileContent(decompressedData, ALLOWED_FILES.README)) ?? "";
+    const readme =
+      (await extractFoxeFileContent(decompressedData, ALLOWED_FILES.README)) ??
+      "";
     const changelog =
-      (await extractFoxeFileContent(decompressedData, ALLOWED_FILES.CHANGELOG)) ?? "";
+      (await extractFoxeFileContent(
+        decompressedData,
+        ALLOWED_FILES.CHANGELOG,
+      )) ?? "";
 
-    const rawInfo = validatePackageInfo(JSON.parse(rawPackageFile) as Partial<ExtensionInfo>);
-    const normalizedPublisher = rawInfo.publisher.replace(/[^A-Za-z0-9_\s]+/g, "");
+    const parsedPackage = JSON.parse(rawPackageFile) as Record<string, unknown>;
+    const panelsMeta = parseExtensionPanelsMeta(parsedPackage.lichtblickPanels);
+    const extensionInfoFields = { ...parsedPackage };
+    delete extensionInfoFields.lichtblickPanels;
+    delete extensionInfoFields.panelsMeta;
+    const rawInfo = validatePackageInfo(extensionInfoFields);
+    const normalizedPublisher = rawInfo.publisher.replace(
+      /[^A-Za-z0-9_\s]+/g,
+      "",
+    );
 
     const newExtension: StoredExtension = {
       content: foxeFileData,
@@ -98,6 +118,7 @@ export class IdbExtensionLoader implements IExtensionLoader {
         ...rawInfo,
         id: `${normalizedPublisher}.${rawInfo.name}`,
         namespace: this.namespace,
+        panelsMeta,
         qualifiedName: rawInfo.displayName || rawInfo.name,
         readme,
         changelog,

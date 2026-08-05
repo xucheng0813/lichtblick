@@ -18,7 +18,9 @@ jest.mock("@lichtblick/log", () => ({
   })),
 }));
 
-const MockedExtensionsAPI = ExtensionsAPI as jest.MockedClass<typeof ExtensionsAPI>;
+const MockedExtensionsAPI = ExtensionsAPI as jest.MockedClass<
+  typeof ExtensionsAPI
+>;
 
 describe("RemoteExtensionLoader", () => {
   let mockExtensionsAPI: jest.Mocked<ExtensionsAPI>;
@@ -59,8 +61,12 @@ describe("RemoteExtensionLoader", () => {
     it("When getting an existing extension, Then should return extension info", async () => {
       // Given
       const extensionId = BasicBuilder.string();
-      const mockExtensionInfo = ExtensionBuilder.extensionInfo({ id: extensionId });
-      const mockStoredExtension = ExtensionBuilder.storedExtension({ info: mockExtensionInfo });
+      const mockExtensionInfo = ExtensionBuilder.extensionInfo({
+        id: extensionId,
+      });
+      const mockStoredExtension = ExtensionBuilder.storedExtension({
+        info: mockExtensionInfo,
+      });
       const getSpy = jest.spyOn(mockExtensionsAPI, "get");
       mockExtensionsAPI.get.mockResolvedValue(mockStoredExtension);
 
@@ -167,7 +173,7 @@ describe("RemoteExtensionLoader", () => {
 
       const zip = new JSZip();
       zip.file(ALLOWED_FILES.PACKAGE, JSON.stringify(mockPackageJson) ?? "");
-      zip.file(ALLOWED_FILES.EXTENSION, BasicBuilder.string());
+      zip.file(ALLOWED_FILES.EXTENSION, "extension-content");
       zip.file(ALLOWED_FILES.README, BasicBuilder.string());
       zip.file(ALLOWED_FILES.CHANGELOG, BasicBuilder.string());
       const mockFoxeData = await zip.generateAsync({ type: "uint8array" });
@@ -178,7 +184,10 @@ describe("RemoteExtensionLoader", () => {
       createOrUpdateSpy.mockResolvedValue(mockStoredExtension);
 
       // When
-      const result = await loader.installExtension({ foxeFileData: mockFoxeData, file: mockFile });
+      const result = await loader.installExtension({
+        foxeFileData: mockFoxeData,
+        file: mockFile,
+      });
 
       // Then
       expect(createOrUpdateSpy).toHaveBeenCalledWith(
@@ -197,6 +206,47 @@ describe("RemoteExtensionLoader", () => {
       expect(result).toBe(mockStoredExtension.info);
     });
 
+    it("When panel metadata is present, Then should persist its validated form", async () => {
+      const mockPackageJson = {
+        name: "panel-metadata-extension",
+        namespace: mockNamespace,
+        publisher: "Acme",
+        version: "1.0.0",
+        lichtblickPanels: {
+          Diagnostics: {
+            description: "Shows diagnostic state.",
+            schemas: ["diagnostic_msgs/DiagnosticArray"],
+          },
+        },
+      };
+      const zip = new JSZip();
+      zip.file(ALLOWED_FILES.PACKAGE, JSON.stringify(mockPackageJson) ?? "");
+      zip.file(ALLOWED_FILES.EXTENSION, "extension-content");
+      const mockFile = {} as File;
+      const mockStoredExtension = ExtensionBuilder.storedExtension();
+      const createOrUpdateSpy = jest.spyOn(mockExtensionsAPI, "createOrUpdate");
+      createOrUpdateSpy.mockResolvedValue(mockStoredExtension);
+
+      await loader.installExtension({
+        foxeFileData: await zip.generateAsync({ type: "uint8array" }),
+        file: mockFile,
+      });
+
+      expect(createOrUpdateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          info: expect.objectContaining({
+            panelsMeta: {
+              Diagnostics: {
+                description: "Shows diagnostic state.",
+                schemas: ["diagnostic_msgs/DiagnosticArray"],
+              },
+            },
+          }),
+        }),
+        mockFile,
+      );
+    });
+
     it("When installing extension without file parameter, Then should throw error", async () => {
       // Given
       const zip = new JSZip();
@@ -205,7 +255,10 @@ describe("RemoteExtensionLoader", () => {
 
       // When & Then - Should throw error
       await expect(
-        loader.installExtension({ foxeFileData: mockFoxeData, file: undefined }),
+        loader.installExtension({
+          foxeFileData: mockFoxeData,
+          file: undefined,
+        }),
       ).rejects.toThrow("File is required to install extension in server.");
     });
 
@@ -246,7 +299,10 @@ describe("RemoteExtensionLoader", () => {
       createOrUpdateSpy.mockResolvedValue(mockStoredExtension);
 
       // When
-      const result = await loader.installExtension({ foxeFileData: mockFoxeData, file: mockFile });
+      const result = await loader.installExtension({
+        foxeFileData: mockFoxeData,
+        file: mockFile,
+      });
 
       // Then - validatePackageInfo lowercases the name
       expect(createOrUpdateSpy).toHaveBeenCalledWith(

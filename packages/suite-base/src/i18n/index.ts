@@ -10,10 +10,12 @@ import LanguageDetector, { DetectorOptions } from "i18next-browser-languagedetec
 import { initReactI18next } from "react-i18next";
 
 import * as en from "./en";
-import * as zh from "./zh";
+// zh resources exist under ./zh but are deliberately NOT registered yet: only the
+// layoutBrowser namespace is translated, and registering zh makes zh-locale
+// browsers render a mixed-language UI. Re-add zh here once coverage is complete.
 import { SESSION_STORAGE_I18N_LANGUAGE } from "../constants/browserStorageKeys";
 
-export const translations = { en, zh };
+export const translations = { en };
 
 export type Language = keyof typeof translations;
 

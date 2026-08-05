@@ -19,6 +19,7 @@ import {
   ContributionPoints,
   RegisteredPanel,
 } from "@lichtblick/suite-base/context/ExtensionCatalogContext";
+import { parseExtensionPanelsMeta } from "@lichtblick/suite-base/services/extension/utils/parseExtensionPanelsMeta";
 import { ExtensionInfo } from "@lichtblick/suite-base/types/Extensions";
 import { InstalledMessageConverter } from "@lichtblick/suite-base/types/messageConverters";
 
@@ -35,6 +36,7 @@ export function buildContributionPoints(
   const panelSettings: ExtensionSettings = {};
   const topicAliasFunctions: ContributionPoints["topicAliasFunctions"] = [];
   const cameraModels: CameraModelsMap = new Map();
+  const panelsMeta = parseExtensionPanelsMeta(extension.panelsMeta);
 
   log.debug(`Mounting extension ${extension.qualifiedName}`);
 
@@ -54,7 +56,9 @@ export function buildContributionPoints(
     mode: extensionMode,
 
     registerPanel: (registration: ExtensionPanelRegistration) => {
-      log.debug(`Extension ${extension.qualifiedName} registering panel: ${registration.name}`);
+      log.debug(
+        `Extension ${extension.qualifiedName} registering panel: ${registration.name}`,
+      );
 
       const panelId = `${extension.qualifiedName}.${registration.name}`;
       if (panels[panelId]) {
@@ -63,14 +67,18 @@ export function buildContributionPoints(
       }
 
       panels[panelId] = {
+        extensionDescription: extension.description,
         extensionId: extension.id,
         extensionName: extension.qualifiedName,
         extensionNamespace: extension.namespace,
+        meta: panelsMeta?.[registration.name],
         registration,
       };
     },
 
-    registerMessageConverter: <Src>(messageConverter: RegisterMessageConverterArgs<Src>) => {
+    registerMessageConverter: <Src>(
+      messageConverter: RegisterMessageConverterArgs<Src>,
+    ) => {
       log.debug(
         `Extension ${extension.qualifiedName} registering message converter from: ${messageConverter.fromSchemaName} to: ${messageConverter.toSchemaName}`,
       );
@@ -81,9 +89,12 @@ export function buildContributionPoints(
         extensionId: extension.id,
       } as InstalledMessageConverter);
 
-      const converterSettings = _.mapValues(messageConverter.panelSettings, (settings) => ({
-        [messageConverter.fromSchemaName]: settings,
-      }));
+      const converterSettings = _.mapValues(
+        messageConverter.panelSettings,
+        (settings) => ({
+          [messageConverter.fromSchemaName]: settings,
+        }),
+      );
 
       _.merge(panelSettings, converterSettings);
     },
@@ -93,7 +104,9 @@ export function buildContributionPoints(
     },
 
     registerCameraModel({ name, modelBuilder }: RegisterCameraModelArgs) {
-      log.debug(`Extension ${extension.qualifiedName} registering camera model: ${name}`);
+      log.debug(
+        `Extension ${extension.qualifiedName} registering camera model: ${name}`,
+      );
 
       cameraModels.set(name, { extensionId: extension.id, modelBuilder });
     },

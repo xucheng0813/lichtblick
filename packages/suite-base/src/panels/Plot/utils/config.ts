@@ -79,6 +79,7 @@ export type PlotLegendDisplay = "floating" | "top" | "left" | "none";
 
 export type PlotConfig = DeprecatedPlotConfig & {
   paths: PlotPath[];
+  autoSeeded?: boolean;
   minXValue?: number;
   maxXValue?: number;
   minYValue?: string | number;

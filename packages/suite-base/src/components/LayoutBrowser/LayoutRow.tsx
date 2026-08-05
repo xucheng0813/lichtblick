@@ -40,7 +40,8 @@ import {
 
 import { EditLayoutDescriptionDialog } from "./EditLayoutDescriptionDialog";
 import { StyledListItem, StyledMenuItem } from "./LayoutRow.style";
-import { LayoutActionMenuItem } from "./types";
+import { UploadToOrgDialog } from "./UploadToOrgDialog";
+import { LayoutActionMenuItem, UploadToOrgOptions } from "./types";
 
 function canEditLayoutDescription(
   layout: Layout,
@@ -80,7 +81,7 @@ export default React.memo(function LayoutRow({
   onRename: (item: Layout, newName: string) => void;
   onDuplicate: (item: Layout) => void;
   onDelete: (item: Layout) => void;
-  onShare: (item: Layout) => void;
+  onShare: (item: Layout, options: UploadToOrgOptions) => Promise<boolean>;
   onExport: (item: Layout) => void;
   onOverwrite: (item: Layout) => void;
   onRevert: (item: Layout) => void;
@@ -94,6 +95,7 @@ export default React.memo(function LayoutRow({
 
   const [editingName, setEditingName] = useState(false);
   const [editingDescription, setEditingDescription] = useState(false);
+  const [uploadingToOrg, setUploadingToOrg] = useState(false);
   const [nameFieldValue, setNameFieldValue] = useState("");
   const [isOnline, setIsOnline] = useState(layoutManager.isOnline);
   const [contextMenuTarget, setContextMenuTarget] = useState<
@@ -160,10 +162,15 @@ export default React.memo(function LayoutRow({
   }, [layout, onDuplicate, onMakePersonalCopy]);
 
   const shareAction = useCallback(() => {
-    if (!layoutIsReadOnly(layout)) {
-      onShare(layout);
+    if (!layoutIsReadOnly(layout) && isOnline && !multiSelection) {
+      setUploadingToOrg(true);
     }
-  }, [layout, onShare]);
+  }, [isOnline, layout, multiSelection]);
+
+  const uploadToOrg = useCallback(
+    async (options: UploadToOrgOptions) => await onShare(layout, options),
+    [layout, onShare],
+  );
 
   const exportAction = useCallback(() => {
     onExport(layout);
@@ -285,8 +292,9 @@ export default React.memo(function LayoutRow({
       !layoutIsShared(layout) && {
         type: "item",
         key: "share",
-        text: "Share with team…",
+        text: t("uploadToOrg"),
         onClick: shareAction,
+        "data-testid": "upload-layout-to-org",
         disabled: readOnly || !isOnline || multiSelection,
         secondaryText: readOnly ? t("readOnlyLayout") : !isOnline ? "Offline" : undefined,
       },
@@ -406,6 +414,14 @@ export default React.memo(function LayoutRow({
         onSave={async (description) =>
           (await onSetDescription?.(layout.id, description)) ?? false
         }
+      />
+      <UploadToOrgDialog
+        layoutName={layout.name}
+        open={uploadingToOrg}
+        onClose={() => {
+          setUploadingToOrg(false);
+        }}
+        onUpload={uploadToOrg}
       />
       <ListItemButton
         data-testid="layout-list-item"

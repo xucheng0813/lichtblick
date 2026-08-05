@@ -26,9 +26,11 @@ jest.mock("@lichtblick/suite-base/context/ExtensionCatalogContext", () => ({
 }));
 
 const mockEnqueueSnackbar = jest.fn();
+const mockCloseSnackbar = jest.fn();
 jest.mock("notistack", () => ({
   ...jest.requireActual("notistack"),
   useSnackbar: () => ({
+    closeSnackbar: mockCloseSnackbar,
     enqueueSnackbar: mockEnqueueSnackbar,
   }),
 }));
@@ -75,6 +77,9 @@ describe("ExtensionList Component", () => {
   ];
   const mockFilterText = "Extension";
   const mockSelectExtension = jest.fn();
+  const mockGetExtensionPackage = jest.fn();
+  const mockInstallExtensions = jest.fn();
+  const mockRefreshAllExtensions = jest.fn();
 
   const emptyMockEntries: Immutable<ExtensionMarketplaceDetail>[] = [];
 
@@ -82,7 +87,10 @@ describe("ExtensionList Component", () => {
     // Mock useExtensionCatalog as a Zustand selector hook
     (useExtensionCatalog as jest.Mock).mockImplementation((selector) => {
       const mockState = {
+        getExtensionPackage: mockGetExtensionPackage,
+        installExtensions: mockInstallExtensions,
         installedExtensions: [],
+        refreshAllExtensions: mockRefreshAllExtensions,
         uninstallExtension: jest.fn(),
       };
       return selector(mockState);
@@ -90,6 +98,10 @@ describe("ExtensionList Component", () => {
 
     // Clear mock call history
     mockEnqueueSnackbar.mockClear();
+    mockCloseSnackbar.mockClear();
+    mockGetExtensionPackage.mockReset();
+    mockInstallExtensions.mockReset();
+    mockRefreshAllExtensions.mockReset();
   });
 
   it("renders the list of extensions correctly", () => {
@@ -213,12 +225,16 @@ describe("ExtensionList Component", () => {
       );
 
       // When
-      const checkboxes = screen.getAllByRole("checkbox", { name: /select row/i });
+      const checkboxes = screen.getAllByRole("checkbox", {
+        name: /select row/i,
+      });
       fireEvent.click(checkboxes[0]!); // Select first extension
       fireEvent.click(checkboxes[1]!); // Select second extension
 
       // Then
-      const uninstallButton = await screen.findByRole("button", { name: "Uninstall 2" });
+      const uninstallButton = await screen.findByRole("button", {
+        name: "Uninstall 2",
+      });
       expect(uninstallButton).toBeInTheDocument();
 
       // When
@@ -262,13 +278,17 @@ describe("ExtensionList Component", () => {
       );
 
       // When
-      const checkboxes = screen.getAllByRole("checkbox", { name: /select row/i });
+      const checkboxes = screen.getAllByRole("checkbox", {
+        name: /select row/i,
+      });
       fireEvent.click(checkboxes[0]!); // Select first extension
       fireEvent.click(checkboxes[1]!); // Select second extension
 
       // Then - should show selected count but no uninstall button
       expect(screen.getByText("2 selected")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /uninstall/i })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /uninstall/i }),
+      ).not.toBeInTheDocument();
     });
 
     it("shows snackbar when only some selected extensions are installed", async () => {
@@ -291,12 +311,16 @@ describe("ExtensionList Component", () => {
       );
 
       // When
-      const checkboxes = screen.getAllByRole("checkbox", { name: /select row/i });
+      const checkboxes = screen.getAllByRole("checkbox", {
+        name: /select row/i,
+      });
       fireEvent.click(checkboxes[0]!); // installed
       fireEvent.click(checkboxes[1]!); // not installed
 
       // Then
-      const uninstallButton = await screen.findByRole("button", { name: "Uninstall 1" });
+      const uninstallButton = await screen.findByRole("button", {
+        name: "Uninstall 1",
+      });
       expect(uninstallButton).toBeInTheDocument();
 
       // When
@@ -335,11 +359,15 @@ describe("ExtensionList Component", () => {
       );
 
       // When
-      const checkboxes = screen.getAllByRole("checkbox", { name: /select row/i });
+      const checkboxes = screen.getAllByRole("checkbox", {
+        name: /select row/i,
+      });
       fireEvent.click(checkboxes[0]!);
       fireEvent.click(checkboxes[1]!);
 
-      const uninstallButton = await screen.findByRole("button", { name: "Uninstall 2" });
+      const uninstallButton = await screen.findByRole("button", {
+        name: "Uninstall 2",
+      });
       fireEvent.click(uninstallButton);
 
       // Then
@@ -349,9 +377,12 @@ describe("ExtensionList Component", () => {
           "1 extension(s) uninstalled successfully",
           { variant: "success" },
         );
-        expect(mockEnqueueSnackbar).toHaveBeenCalledWith("1 extension(s) failed to uninstall", {
-          variant: "error",
-        });
+        expect(mockEnqueueSnackbar).toHaveBeenCalledWith(
+          "1 extension(s) failed to uninstall",
+          {
+            variant: "error",
+          },
+        );
       });
 
       // Restore console.error to its original implementation after the test
@@ -371,18 +402,24 @@ describe("ExtensionList Component", () => {
         />,
       );
 
-      const checkboxes = screen.getAllByRole("checkbox", { name: /select row/i });
+      const checkboxes = screen.getAllByRole("checkbox", {
+        name: /select row/i,
+      });
       fireEvent.click(checkboxes[0]!);
       fireEvent.click(checkboxes[1]!);
 
-      const uninstallButton = await screen.findByRole("button", { name: "Uninstall 2" });
+      const uninstallButton = await screen.findByRole("button", {
+        name: "Uninstall 2",
+      });
 
       // When
       fireEvent.click(uninstallButton);
 
       // Then
       await waitFor(() => {
-        expect(screen.queryByRole("button", { name: /uninstall/i })).not.toBeInTheDocument();
+        expect(
+          screen.queryByRole("button", { name: /uninstall/i }),
+        ).not.toBeInTheDocument();
       });
     });
   });
@@ -394,7 +431,9 @@ describe("ExtensionList Component", () => {
 
     it("renders an Install button for an extension that is not installed", () => {
       // Given
-      const entry = ExtensionBuilder.extensionMarketplaceDetail({ namespace: "org" });
+      const entry = ExtensionBuilder.extensionMarketplaceDetail({
+        namespace: "org",
+      });
 
       // When
       render(
@@ -407,12 +446,16 @@ describe("ExtensionList Component", () => {
       );
 
       // Then
-      expect(screen.getByRole("button", { name: "Install" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Install" }),
+      ).toBeInTheDocument();
     });
 
     it("renders an Uninstall button for an extension that is installed", () => {
       // Given
-      const entry = ExtensionBuilder.extensionMarketplaceDetail({ namespace: "org" });
+      const entry = ExtensionBuilder.extensionMarketplaceDetail({
+        namespace: "org",
+      });
 
       (useExtensionCatalog as jest.Mock).mockImplementation((selector) => {
         const mockState = {
@@ -433,7 +476,227 @@ describe("ExtensionList Component", () => {
       );
 
       // Then
-      expect(screen.getByRole("button", { name: "Uninstall" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Uninstall" }),
+      ).toBeInTheDocument();
+    });
+
+    it("shows organization upload for an installed local extension when configured", () => {
+      const entry = ExtensionBuilder.extensionMarketplaceDetail({
+        namespace: "local",
+      });
+      (useExtensionCatalog as jest.Mock).mockImplementation((selector) =>
+        selector({
+          getExtensionPackage: mockGetExtensionPackage,
+          installExtensions: mockInstallExtensions,
+          installedExtensions: [entry],
+          refreshAllExtensions: mockRefreshAllExtensions,
+          uninstallExtension: jest.fn(),
+        }),
+      );
+
+      render(
+        <ExtensionList
+          namespace="local"
+          entries={[entry]}
+          filterText=""
+          selectExtension={jest.fn()}
+          allowUploadToOrganization
+        />,
+      );
+
+      const uploadButton = screen.getByRole("button", {
+        name: "Upload extension to organization",
+      });
+      expect(uploadButton).toBeInTheDocument();
+      expect(uploadButton).not.toHaveTextContent(
+        "Upload extension to organization",
+      );
+      expect(uploadButton.querySelector("svg")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Upload extension to organization"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not show organization upload for an installed org extension", () => {
+      const entry = ExtensionBuilder.extensionMarketplaceDetail({
+        namespace: "org",
+      });
+      (useExtensionCatalog as jest.Mock).mockImplementation((selector) =>
+        selector({
+          getExtensionPackage: mockGetExtensionPackage,
+          installExtensions: mockInstallExtensions,
+          installedExtensions: [entry],
+          refreshAllExtensions: mockRefreshAllExtensions,
+          uninstallExtension: jest.fn(),
+        }),
+      );
+
+      render(
+        <ExtensionList
+          namespace="org"
+          entries={[entry]}
+          filterText=""
+          selectExtension={jest.fn()}
+          allowUploadToOrganization
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", {
+          name: "Upload extension to organization",
+        }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not show organization upload when the viz server is not configured", () => {
+      const entry = ExtensionBuilder.extensionMarketplaceDetail({
+        namespace: "local",
+      });
+      (useExtensionCatalog as jest.Mock).mockImplementation((selector) =>
+        selector({
+          getExtensionPackage: mockGetExtensionPackage,
+          installExtensions: mockInstallExtensions,
+          installedExtensions: [entry],
+          refreshAllExtensions: mockRefreshAllExtensions,
+          uninstallExtension: jest.fn(),
+        }),
+      );
+
+      render(
+        <ExtensionList
+          namespace="local"
+          entries={[entry]}
+          filterText=""
+          selectExtension={jest.fn()}
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", {
+          name: "Upload extension to organization",
+        }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("uploads the stored local package and refreshes the extension catalog", async () => {
+      const entry = ExtensionBuilder.extensionMarketplaceDetail({
+        id: "publisher.extension",
+        name: "Extension",
+        namespace: "local",
+        version: "1.2.3",
+      });
+      const storedPackage = new Uint8Array([1, 2, 3]);
+      mockGetExtensionPackage.mockResolvedValue(storedPackage);
+      mockInstallExtensions.mockResolvedValue([
+        {
+          success: true,
+          extensionName: entry.name,
+          loaderResults: [
+            { loaderType: "server", success: true },
+            { loaderType: "browser", success: true },
+          ],
+        },
+      ]);
+      mockRefreshAllExtensions.mockResolvedValue(undefined);
+      (useExtensionCatalog as jest.Mock).mockImplementation((selector) =>
+        selector({
+          getExtensionPackage: mockGetExtensionPackage,
+          installExtensions: mockInstallExtensions,
+          installedExtensions: [entry],
+          refreshAllExtensions: mockRefreshAllExtensions,
+          uninstallExtension: jest.fn(),
+        }),
+      );
+      render(
+        <ExtensionList
+          namespace="local"
+          entries={[entry]}
+          filterText=""
+          selectExtension={jest.fn()}
+          allowUploadToOrganization
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Upload extension to organization",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(mockRefreshAllExtensions).toHaveBeenCalledTimes(1);
+      });
+      expect(mockGetExtensionPackage).toHaveBeenCalledWith("local", entry.id);
+      expect(mockInstallExtensions).toHaveBeenCalledWith("org", [
+        expect.any(Object),
+      ]);
+      const uploaded = mockInstallExtensions.mock.calls[0]?.[1]?.[0] as
+        { buffer: Uint8Array; file?: File; namespace?: string } | undefined;
+      expect(uploaded?.buffer).toEqual(storedPackage);
+      expect(uploaded?.file?.name).toBe("Extension-1.2.3.foxe");
+      expect(uploaded?.namespace).toBe("org");
+      expect(mockEnqueueSnackbar).toHaveBeenCalledWith(
+        "Successfully installed all 1 extensions.",
+        expect.objectContaining({ variant: "success" }),
+      );
+    });
+
+    it("shows an error and does not refresh when organization upload fails", async () => {
+      const entry = ExtensionBuilder.extensionMarketplaceDetail({
+        namespace: "local",
+      });
+      mockGetExtensionPackage.mockResolvedValue(new Uint8Array([1]));
+      mockInstallExtensions.mockResolvedValue([
+        {
+          success: false,
+          extensionName: entry.name,
+          loaderResults: [
+            {
+              loaderType: "server",
+              success: false,
+              error: new Error("offline"),
+            },
+            {
+              loaderType: "browser",
+              success: false,
+              error: new Error("cache"),
+            },
+          ],
+        },
+      ]);
+      (useExtensionCatalog as jest.Mock).mockImplementation((selector) =>
+        selector({
+          getExtensionPackage: mockGetExtensionPackage,
+          installExtensions: mockInstallExtensions,
+          installedExtensions: [entry],
+          refreshAllExtensions: mockRefreshAllExtensions,
+          uninstallExtension: jest.fn(),
+        }),
+      );
+      render(
+        <ExtensionList
+          namespace="local"
+          entries={[entry]}
+          filterText=""
+          selectExtension={jest.fn()}
+          allowUploadToOrganization
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Upload extension to organization",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(mockEnqueueSnackbar).toHaveBeenCalledWith(
+          "Failed to install all 1 extensions.",
+          expect.objectContaining({ variant: "error" }),
+        );
+      });
+      expect(mockRefreshAllExtensions).not.toHaveBeenCalled();
     });
   });
 });

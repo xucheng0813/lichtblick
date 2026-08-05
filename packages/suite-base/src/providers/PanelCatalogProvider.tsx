@@ -23,7 +23,9 @@ type PanelProps = {
   saveConfig: SaveConfig<unknown>;
 };
 
-export default function PanelCatalogProvider(props: PropsWithChildren): React.ReactElement {
+export default function PanelCatalogProvider(
+  props: PropsWithChildren,
+): React.ReactElement {
   const { t } = useTranslation("panels");
 
   const extensionPanels = useExtensionCatalog((state) => state.installedPanels);
@@ -46,6 +48,7 @@ export default function PanelCatalogProvider(props: PropsWithChildren): React.Re
       PanelWrapper.defaultConfig = {};
       return {
         category: "misc",
+        description: panel.meta?.description ?? panel.extensionDescription,
         title: panel.registration.name,
         type: panelType,
         module: async () => ({ default: Panel(PanelWrapper) }),
@@ -93,6 +96,8 @@ export default function PanelCatalogProvider(props: PropsWithChildren): React.Re
   }, [panelsByType, visiblePanels]);
 
   return (
-    <PanelCatalogContext.Provider value={provider}>{props.children}</PanelCatalogContext.Provider>
+    <PanelCatalogContext.Provider value={provider}>
+      {props.children}
+    </PanelCatalogContext.Provider>
   );
 }

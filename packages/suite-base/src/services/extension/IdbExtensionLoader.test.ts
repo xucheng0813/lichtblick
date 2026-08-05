@@ -47,7 +47,8 @@ const packageJson: Record<string, unknown> = {
   version: "0.0.1",
 };
 
-const expectedReadme = "# studio-extension-turtlesim\n\n## _A Foxglove Studio Extension_\n";
+const expectedReadme =
+  "# studio-extension-turtlesim\n\n## _A Foxglove Studio Extension_\n";
 const expectedChangelog =
   "# studio-extension-turtlesim version history\n\n## 0.0.0\n\n- Alpha testing\n";
 
@@ -75,7 +76,9 @@ describe("IdbExtensionLoader", () => {
 
   beforeEach(() => {
     (openDB as jest.Mock).mockReturnValue({
-      transaction: jest.fn().mockReturnValue({ db: { put: mockPut, delete: mockDelete } }),
+      transaction: jest
+        .fn()
+        .mockReturnValue({ db: { put: mockPut, delete: mockDelete } }),
       getAll: mockGetAll,
       get: mockGet,
       delete: mockDelete,
@@ -91,7 +94,9 @@ describe("IdbExtensionLoader", () => {
       const foxe = fs.readFileSync(EXT_FILE_TURTLESIM);
       const loader = new IdbExtensionLoader("local");
 
-      await loader.installExtension({ foxeFileData: foxe as unknown as Uint8Array });
+      await loader.installExtension({
+        foxeFileData: foxe as unknown as Uint8Array,
+      });
 
       expect(mockPut).toHaveBeenCalledWith(
         METADATA_STORE_NAME,
@@ -121,7 +126,9 @@ describe("IdbExtensionLoader", () => {
       mockGetAll.mockReturnValue([info]);
       const loader = new IdbExtensionLoader("org");
 
-      await loader.installExtension({ foxeFileData: foxe as unknown as Uint8Array });
+      await loader.installExtension({
+        foxeFileData: foxe as unknown as Uint8Array,
+      });
 
       expect(mockPut).toHaveBeenCalledWith(
         METADATA_STORE_NAME,
@@ -142,6 +149,65 @@ describe("IdbExtensionLoader", () => {
       expect((await loader.getExtensions())[0]).toBe(info);
     });
 
+    it("parses optional panel metadata from package.json", async () => {
+      const zip = new JSZip();
+      zip.file(
+        ALLOWED_FILES.PACKAGE,
+        JSON.stringify({
+          name: "panel-metadata-extension",
+          publisher: "Acme",
+          version: "1.0.0",
+          lichtblickPanels: {
+            Camera: {
+              description: "Shows camera images.",
+              schemas: ["sensor_msgs/Image"],
+            },
+          },
+        }) ?? "",
+      );
+      zip.file(ALLOWED_FILES.EXTENSION, "extension-content");
+      const loader = new IdbExtensionLoader("local");
+
+      const result = await loader.installExtension({
+        foxeFileData: await zip.generateAsync({ type: "uint8array" }),
+      });
+
+      expect(result.panelsMeta).toEqual({
+        Camera: {
+          description: "Shows camera images.",
+          schemas: ["sensor_msgs/Image"],
+        },
+      });
+      expect(result).not.toHaveProperty("lichtblickPanels");
+    });
+
+    it("ignores malformed panel metadata fields", async () => {
+      const zip = new JSZip();
+      zip.file(
+        ALLOWED_FILES.PACKAGE,
+        JSON.stringify({
+          name: "invalid-panel-metadata-extension",
+          publisher: "Acme",
+          version: "1.0.0",
+          lichtblickPanels: {
+            Broken: "not-an-object",
+            Mixed: { description: 42, schemas: ["sensor_msgs/Image", 7] },
+            Valid: { description: "Still valid." },
+          },
+        }) ?? "",
+      );
+      zip.file(ALLOWED_FILES.EXTENSION, "extension-content");
+      const loader = new IdbExtensionLoader("local");
+
+      const result = await loader.installExtension({
+        foxeFileData: await zip.generateAsync({ type: "uint8array" }),
+      });
+
+      expect(result.panelsMeta).toEqual({
+        Valid: { description: "Still valid." },
+      });
+    });
+
     it("When installing extension with missing package.json, Then should throw error", async () => {
       // Given
       const zip = new JSZip();
@@ -150,7 +216,9 @@ describe("IdbExtensionLoader", () => {
       const loader = new IdbExtensionLoader("local");
 
       // When & Then - Should throw error
-      await expect(loader.installExtension({ foxeFileData: mockFoxeData })).rejects.toThrow(
+      await expect(
+        loader.installExtension({ foxeFileData: mockFoxeData }),
+      ).rejects.toThrow(
         `Corrupted extension. File "${ALLOWED_FILES.PACKAGE}" is missing in the extension source.`,
       );
     });
@@ -172,7 +240,9 @@ describe("IdbExtensionLoader", () => {
       const loader = new IdbExtensionLoader("local");
 
       // When
-      const result = await loader.installExtension({ foxeFileData: mockFoxeData });
+      const result = await loader.installExtension({
+        foxeFileData: mockFoxeData,
+      });
 
       // Then - validatePackageInfo lowercases the name
       expect(result.qualifiedName).toBe(name.toLowerCase());
@@ -196,7 +266,9 @@ describe("IdbExtensionLoader", () => {
       const loader = new IdbExtensionLoader("local");
 
       // When
-      const result = await loader.installExtension({ foxeFileData: mockFoxeData });
+      const result = await loader.installExtension({
+        foxeFileData: mockFoxeData,
+      });
 
       // Then
       expect(result.readme).toBe("");
@@ -221,7 +293,11 @@ describe("IdbExtensionLoader", () => {
 
       const result = await loader.loadExtension(extension.info.id);
 
-      expect(mockGet).toHaveBeenCalledWith(EXTENSION_STORE_NAME, extension.info.id);
+      expect(mockGet).toHaveBeenCalledWith(
+        EXTENSION_STORE_NAME,
+        extension.info.id,
+      );
+      expect(result.buffer).toEqual(extension.content);
       expect(result.raw).toContain(rawContent);
     });
 
@@ -244,7 +320,9 @@ describe("IdbExtensionLoader", () => {
       };
       mockGet.mockResolvedValue(undefined);
 
-      await expect(loader.loadExtension(extension.info.id)).rejects.toThrow("Extension not found");
+      await expect(loader.loadExtension(extension.info.id)).rejects.toThrow(
+        "Extension not found",
+      );
     });
 
     it("should throw an error if the main extension script is missing", async () => {
@@ -280,10 +358,15 @@ describe("IdbExtensionLoader", () => {
       });
       const loader = new IdbExtensionLoader("local");
 
-      await loader.installExtension({ foxeFileData: foxe as unknown as Uint8Array });
+      await loader.installExtension({
+        foxeFileData: foxe as unknown as Uint8Array,
+      });
       const result = await loader.getExtension(expectedInfo.id);
 
-      expect(mockGet).toHaveBeenCalledWith(EXTENSION_STORE_NAME, expectedInfo.id);
+      expect(mockGet).toHaveBeenCalledWith(
+        EXTENSION_STORE_NAME,
+        expectedInfo.id,
+      );
       expect(result).toBe(expectedInfo);
     });
   });
@@ -296,8 +379,16 @@ describe("IdbExtensionLoader", () => {
       await loader.uninstallExtension(extensionId);
 
       expect(mockDelete).toHaveBeenCalledTimes(2);
-      expect(mockDelete).toHaveBeenNthCalledWith(1, METADATA_STORE_NAME, extensionId);
-      expect(mockDelete).toHaveBeenNthCalledWith(2, EXTENSION_STORE_NAME, extensionId);
+      expect(mockDelete).toHaveBeenNthCalledWith(
+        1,
+        METADATA_STORE_NAME,
+        extensionId,
+      );
+      expect(mockDelete).toHaveBeenNthCalledWith(
+        2,
+        EXTENSION_STORE_NAME,
+        extensionId,
+      );
     });
   });
 });
