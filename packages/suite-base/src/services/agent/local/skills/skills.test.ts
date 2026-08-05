@@ -153,4 +153,91 @@ describe("skill registry", () => {
     expect(catalog).toContain("float32[]");
     expect(catalog).toContain('"visible": true');
   });
+
+  it("registers the complete collectd metric and conversion reference", () => {
+    const collectd = SKILL_REGISTRY.get("collectd-metrics")!;
+    expect(collectd.id).toBe("collectd-metrics");
+    expect(collectd.whenToUse).toContain("collectd/*");
+    expect(collectd.whenToUse).toMatch(
+      /CPU.*memory.*disk.*network.*process.*thermal/i,
+    );
+    expect(collectd.body.length).toBeLessThanOrEqual(20_000);
+
+    for (const keyword of [
+      "diff_rate",
+      "ValuesPercentage=true",
+      "CPU cores",
+      "bytes/s",
+      "NaN",
+    ]) {
+      expect(collectd.body).toContain(keyword);
+    }
+
+    for (const plugin of [
+      "cpu",
+      "memory",
+      "load",
+      "df",
+      "disk",
+      "interface",
+      "irq",
+      "tasks_cpu",
+      "processes",
+      "soc_thermal",
+      "perf_trigger",
+      "vita_basic",
+    ]) {
+      expect(collectd.body).toContain(plugin);
+    }
+
+    for (const metric of [
+      "cpu-user",
+      "cpu-system",
+      "cpu-idle",
+      "cpu-wait",
+      "cpu-nice",
+      "cpu-softirq",
+      "cpu-interrupt",
+      "cpu-steal",
+      "memory-used",
+      "memory-free",
+      "memory-buffered",
+      "memory-cached",
+      "memory-slab_recl",
+      "memory-slab_unrecl",
+      "load-shortterm",
+      "load-midterm",
+      "load-longterm",
+      "df_complex-used",
+      "df_complex-free",
+      "df_complex-reserved",
+      "df_inodes-used",
+      "df_inodes-free",
+      "df_inodes-reserved",
+      "disk_octets",
+      "disk_ops",
+      "disk_time",
+      "disk_merged",
+      "disk_io_time",
+      "weighted_io_time",
+      "pending_operations",
+      "if_octets",
+      "if_packets",
+      "if_errors",
+      "if_dropped",
+      "irq-<name>",
+      "proc_cpu (user)",
+      "proc_cpu (syst)",
+      "ps_rss",
+      "proc_cpu (thread, user)",
+      "proc_cpu (thread, syst)",
+      "temperature-cpu_<n>",
+      "temperature-mcu_<n>",
+      "temperature-bpu_<n>",
+      "percent-bpu_0",
+      "gauge-heartbeat",
+    ]) {
+      expect(collectd.body).toContain(metric);
+    }
+  });
 });

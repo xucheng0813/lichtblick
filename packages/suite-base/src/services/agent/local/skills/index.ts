@@ -5,6 +5,7 @@
 // License, v2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
+import { COLLECTD_METRICS_SKILL } from "./collectdMetrics";
 import { LAYOUT_AUTHORING_SKILL } from "./layoutAuthoring";
 import { PANEL_CATALOG_SKILL } from "./panelCatalog";
 import { ROBOT_VIZ_SKILL } from "./robotViz";
@@ -16,6 +17,7 @@ import { VTD_TRIGGER_SKILL } from "./vtdTrigger";
 export type { Skill } from "./types";
 
 const SKILLS: readonly Skill[] = [
+  COLLECTD_METRICS_SKILL,
   VTD_QUERY_SKILL,
   VTD_SLICE_SKILL,
   VTD_TRIGGER_SKILL,
