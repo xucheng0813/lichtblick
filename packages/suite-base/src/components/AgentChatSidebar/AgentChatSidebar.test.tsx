@@ -41,7 +41,16 @@ const translations: Record<string, string> = {
   previousProposalApplying: "Previous proposal is still applying",
   showEarlierMessages: "Show earlier messages",
   imageHasAdditionalParameters: "Includes additional parameters",
+  loadData: "Load data",
+  loadDataFailed: "Failed to load data. Try again.",
   toolDecisionFailed: "Could not update the tool run. Try again.",
+  executionExpand: "Expand execution process",
+  executionCollapse: "Collapse execution process",
+  executionRunning: "Running",
+  "profileSelector.label": "Agent profile",
+  "profileSelector.orgDefault": "Org default",
+  "profileSelector.appliesToFutureMessages":
+    "The new profile applies to future messages in this conversation.",
   "status.idle": "Idle",
   "status.connecting": "Connecting",
   "status.streaming": "Streaming",
@@ -72,6 +81,16 @@ const startNewConversation = jest.fn();
 const switchConversation = jest.fn().mockResolvedValue(undefined);
 const deleteConversation = jest.fn().mockResolvedValue(undefined);
 const refreshConversations = jest.fn().mockResolvedValue(undefined);
+const selectProfile = jest.fn();
+const loadVtdRecord =
+  jest.fn<ReturnType<AgentChatState["actions"]["loadVtdRecord"]>, [string]>();
+const getVtdTopics =
+  jest.fn<ReturnType<AgentChatState["actions"]["getVtdTopics"]>, [string]>();
+const sliceVtdRecord =
+  jest.fn<
+    ReturnType<AgentChatState["actions"]["sliceVtdRecord"]>,
+    Parameters<AgentChatState["actions"]["sliceVtdRecord"]>
+  >();
 
 function createDeferred(): {
   promise: Promise<void>;
@@ -117,6 +136,9 @@ function setMockState(overrides: Partial<AgentChatState> = {}): void {
       switchConversation,
       deleteConversation,
       refreshConversations,
+      loadVtdRecord,
+      getVtdTopics,
+      sliceVtdRecord,
     },
     ...overrides,
   };
@@ -163,6 +185,9 @@ describe("AgentChatSidebar", () => {
     sendMessage.mockResolvedValue(undefined);
     confirmToolRun.mockResolvedValue(undefined);
     applyProposal.mockResolvedValue(undefined);
+    loadVtdRecord.mockResolvedValue(undefined);
+    getVtdTopics.mockResolvedValue({});
+    sliceVtdRecord.mockResolvedValue(undefined);
     (useTranslation as jest.Mock).mockReturnValue({
       t: (key: string, options?: { defaultValue?: string; name?: string }) =>
         key === "toolProgress"
@@ -342,6 +367,79 @@ describe("AgentChatSidebar", () => {
     expect(button).toBeEnabled();
     fireEvent.click(button);
     expect(newConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders local and organization profiles and switches the selected profile", () => {
+    setMockState({
+      profileOptions: [
+        {
+          id: "diagnostics",
+          name: "Diagnostics",
+          isActive: true,
+          isOrgDefault: false,
+        },
+        {
+          id: "__org__",
+          name: "Server profile name",
+          isActive: false,
+          isOrgDefault: true,
+        },
+      ],
+      selectedProfileId: "diagnostics",
+      selectProfile,
+    });
+
+    render(<AgentChatSidebar />);
+
+    const selector = screen.getByRole("combobox", { name: "Agent profile" });
+    expect(selector).toHaveTextContent("Diagnostics ★");
+    fireEvent.mouseDown(selector);
+    expect(screen.getByRole("option", { name: "Org default" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "Org default" }));
+    expect(selectProfile).toHaveBeenCalledWith("__org__");
+  });
+
+  it("omits the organization profile when it is unavailable", () => {
+    setMockState({
+      profileOptions: [
+        {
+          id: "default",
+          name: "Default",
+          isActive: true,
+          isOrgDefault: false,
+        },
+      ],
+      selectedProfileId: "default",
+      selectProfile,
+    });
+
+    render(<AgentChatSidebar />);
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Agent profile" }));
+
+    expect(screen.queryByRole("option", { name: "Org default" })).not.toBeInTheDocument();
+  });
+
+  it("disables profile switching while the agent is generating", () => {
+    setMockState({
+      profileOptions: [
+        {
+          id: "default",
+          name: "Default",
+          isActive: true,
+          isOrgDefault: false,
+        },
+      ],
+      selectedProfileId: "default",
+      selectProfile,
+      status: "streaming",
+    });
+
+    render(<AgentChatSidebar />);
+
+    expect(screen.getByRole("combobox", { name: "Agent profile" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("sends a trimmed message with Enter and clears the input", async () => {
@@ -543,6 +641,7 @@ describe("AgentChatSidebar", () => {
     render(<AgentChatSidebar />);
 
     expect(screen.getByText("Running")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand execution process" }));
     const progressbar = screen.getByRole("progressbar", {
       name: "Progress for vtd_slice_store",
     });

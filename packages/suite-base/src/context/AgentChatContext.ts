@@ -10,14 +10,29 @@ import { type StoreApi, useStore } from "zustand";
 
 import { useGuaranteedContext } from "@lichtblick/hooks";
 import type { ConversationSummary } from "@lichtblick/suite-base/services/agent/memory/RemoteAgentConversationStore";
-import type { ChatMessage, LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
+import type {
+  ChatMessage,
+  LayoutProposal,
+  ToolConfirmationOptions,
+} from "@lichtblick/suite-base/services/agent/types";
 
-export type AgentChatStatus =
-  | "idle"
-  | "connecting"
-  | "streaming"
-  | "waiting-for-catalog"
-  | "error";
+export type VtdSliceProgress = "slicing" | "loading";
+
+export type VtdSliceRequest = {
+  id: string;
+  topics: string[];
+  startNs: string;
+  endNs: string;
+};
+
+export type AgentChatStatus = "idle" | "connecting" | "streaming" | "waiting-for-catalog" | "error";
+
+export type AgentChatProfileOption = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  isOrgDefault: boolean;
+};
 
 export type AgentChatState = {
   sessionId?: string;
@@ -27,6 +42,9 @@ export type AgentChatState = {
   conversationsLoading: boolean;
   conversationsOffline: boolean;
   status: AgentChatStatus;
+  profileOptions?: readonly AgentChatProfileOption[];
+  selectedProfileId?: string;
+  selectProfile?: (profileId: string) => void;
   waitingRequest?: {
     requestId: string;
     urls: readonly string[];
@@ -39,11 +57,15 @@ export type AgentChatState = {
     sendMessage: (text: string) => Promise<void>;
     confirmToolRun: (
       toolRunId: string,
-      options: {
-        approve: boolean;
-      },
+      options: ToolConfirmationOptions,
     ) => Promise<void>;
     applyProposal: () => Promise<void>;
+    getVtdTopics: (id: string) => Promise<Record<string, number>>;
+    loadVtdRecord: (id: string) => Promise<void>;
+    sliceVtdRecord: (
+      params: VtdSliceRequest,
+      onProgress?: (progress: VtdSliceProgress) => void,
+    ) => Promise<void>;
     dismissProposal: () => void;
     notifyCatalogReady: (requestId: string) => void;
     cancelWaiting: () => void;

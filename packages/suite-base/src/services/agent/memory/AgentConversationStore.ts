@@ -9,7 +9,6 @@ import * as IDB from "idb/with-async-ittr";
 
 import Log from "@lichtblick/log";
 import { KEY_WORKSPACE_PREFIX } from "@lichtblick/suite-base/constants/browserStorageKeys";
-import type { LlmMessage } from "@lichtblick/suite-base/services/agent/local/types";
 
 const log = Log.getLogger(__filename);
 
@@ -27,7 +26,9 @@ export type StoredConversation = {
   conversationId: string;
   updatedAt: string;
   uiMessages: unknown[];
-  llmHistory: LlmMessage[];
+  llmHistory: unknown[];
+  llmHistoryFormat?: "pi/v1";
+  profileName?: string;
 };
 
 interface ConversationsDB extends IDB.DBSchema {

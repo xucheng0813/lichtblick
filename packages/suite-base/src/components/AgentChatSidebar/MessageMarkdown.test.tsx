@@ -22,7 +22,7 @@ function renderContent(content: string) {
     content,
     createdAt: "2026-07-28T00:00:00.000Z",
   };
-  return render(<MessageList messages={[message]} />);
+  return render(<MessageList messages={[message]} onLoadVtdRecord={jest.fn()} />);
 }
 
 /**

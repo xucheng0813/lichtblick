@@ -1,8 +1,18 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
-import { Button, Chip, ChipProps, LinearProgress, Paper, Typography } from "@mui/material";
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { KeyboardArrowDown, KeyboardArrowUp } from "@mui/icons-material";
+import {
+  Button,
+  Chip,
+  ChipProps,
+  Collapse,
+  IconButton,
+  LinearProgress,
+  Paper,
+  Typography,
+} from "@mui/material";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import Stack from "@lichtblick/suite-base/components/Stack";
@@ -10,7 +20,11 @@ import {
   AgentChatState,
   useAgentChat,
 } from "@lichtblick/suite-base/context/AgentChatContext";
-import { ToolRun, ToolRunStatus } from "@lichtblick/suite-base/services/agent/types";
+import {
+  ToolConfirmationOptions,
+  ToolRun,
+  ToolRunStatus,
+} from "@lichtblick/suite-base/services/agent/types";
 
 import { useStyles } from "./AgentChatSidebar.style";
 
@@ -32,6 +46,8 @@ const STATUS_COLORS: Record<ToolRunStatus, ChipProps["color"]> = {
   cancelled: "default",
 };
 
+const RESULT_MAX_CHARS = 4000;
+
 const selectActions = (state: AgentChatState) => state.actions;
 
 type ToolRunCardProps = {
@@ -42,6 +58,7 @@ export function ToolRunCard({ toolRun }: ToolRunCardProps): React.JSX.Element {
   const { classes } = useStyles();
   const { t } = useTranslation("agentChat");
   const actions = useAgentChat(selectActions);
+  const [expanded, setExpanded] = useState(false);
   const [decisionPending, setDecisionPending] = useState(false);
   const [decisionError, setDecisionError] = useState<string>();
   const decisionTokenRef = useRef<symbol>();
@@ -66,7 +83,7 @@ export function ToolRunCard({ toolRun }: ToolRunCardProps): React.JSX.Element {
   }, [toolRun.status]);
 
   const submitDecision = useCallback(
-    async (options: { approve: boolean }) => {
+    async (options: ToolConfirmationOptions) => {
       if (decisionTokenRef.current != undefined) {
         return;
       }
@@ -105,36 +122,57 @@ export function ToolRunCard({ toolRun }: ToolRunCardProps): React.JSX.Element {
 
   const showProgress = toolRun.status === "running" || progress != undefined;
   const needsConfirmation = toolRun.status === "awaiting-confirmation";
+  const hasError = toolRun.error != undefined || decisionError != undefined;
+  const isBatchConsent = toolRun.name === "request_batch_consent";
+
+  // Runs that need user attention (confirmation or failure) are always expanded
+  // so that the required actions and error details are never missed.
+  useEffect(() => {
+    if (needsConfirmation || hasError) {
+      setExpanded(true);
+    }
+  }, [needsConfirmation, hasError]);
+
+  const resultText = useMemo(() => {
+    if (toolRun.result == undefined) {
+      return undefined;
+    }
+    const serialized =
+      typeof toolRun.result === "string"
+        ? toolRun.result
+        : JSON.stringify(toolRun.result, null, 2) ?? "";
+    if (serialized.length > RESULT_MAX_CHARS) {
+      return `${serialized.slice(0, RESULT_MAX_CHARS)}\n… ${t("toolResultTruncated", {
+        defaultValue: "Result truncated; showing the first 4000 characters.",
+      })}`;
+    }
+    return serialized;
+  }, [toolRun.result, t]);
 
   return (
     <Paper className={classes.toolCard} variant="outlined">
-      <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+      <Stack direction="row" alignItems="center" gap={0.5}>
+        <IconButton
+          className={classes.toolToggleButton}
+          size="small"
+          aria-expanded={expanded}
+          aria-label={t(expanded ? "toolCollapse" : "toolExpand", { name: toolRun.name })}
+          onClick={() => {
+            setExpanded((current) => !current);
+          }}
+        >
+          {expanded ? <KeyboardArrowUp /> : <KeyboardArrowDown />}
+        </IconButton>
         <Typography className={classes.toolName} variant="body2">
           {toolRun.name}
         </Typography>
         <Chip
+          className={classes.toolStatusChip}
           size="small"
           color={STATUS_COLORS[toolRun.status]}
           label={t(STATUS_LABEL_KEYS[toolRun.status])}
         />
       </Stack>
-
-      {toolRun.summary != undefined && (
-        <Typography className={classes.toolSummary} color="text.secondary" variant="body2">
-          {toolRun.summary}
-        </Typography>
-      )}
-
-      {toolRun.error != undefined && (
-        <Typography className={classes.toolError} color="error" variant="body2">
-          {toolRun.error}
-        </Typography>
-      )}
-      {decisionError != undefined && (
-        <Typography className={classes.toolError} color="error" variant="body2">
-          {decisionError}
-        </Typography>
-      )}
 
       {showProgress && (
         <LinearProgress
@@ -145,8 +183,71 @@ export function ToolRunCard({ toolRun }: ToolRunCardProps): React.JSX.Element {
         />
       )}
 
+      {isBatchConsent && toolRun.summary != undefined && (
+        <div className={classes.toolCardBody}>
+          <Typography className={classes.toolSummary} color="text.secondary" variant="body2">
+            {toolRun.summary}
+          </Typography>
+        </div>
+      )}
+
+      <Collapse in={expanded} timeout="auto" unmountOnExit={false}>
+        <div className={classes.toolCardBody}>
+          {!isBatchConsent && toolRun.summary != undefined && (
+            <Typography className={classes.toolSummary} color="text.secondary" variant="body2">
+              {toolRun.summary}
+            </Typography>
+          )}
+
+          {toolRun.error != undefined && (
+            <Typography className={classes.toolError} color="error" variant="body2">
+              {toolRun.error}
+            </Typography>
+          )}
+          {decisionError != undefined && (
+            <Typography className={classes.toolError} color="error" variant="body2">
+              {decisionError}
+            </Typography>
+          )}
+
+          {resultText != undefined && (
+            <pre className={classes.toolResult} data-testid="tool-run-result">
+              {resultText}
+            </pre>
+          )}
+        </div>
+      </Collapse>
+
       {needsConfirmation && (
         <Stack className={classes.cardActions} direction="row" justifyContent="flex-end" gap={1}>
+          <Button
+            disabled={decisionPending}
+            size="small"
+            variant="contained"
+            onClick={() => {
+              void submitDecision(
+                isBatchConsent
+                  ? { approve: true, scope: "session" }
+                  : { approve: true },
+              );
+            }}
+          >
+            {t(isBatchConsent ? "batchConsentAgreeAndAllowAll" : "confirm")}
+          </Button>
+          <Button
+            disabled={decisionPending}
+            size="small"
+            variant="outlined"
+            onClick={() => {
+              void submitDecision(
+                isBatchConsent
+                  ? { approve: true }
+                  : { approve: true, scope: "session" },
+              );
+            }}
+          >
+            {t(isBatchConsent ? "batchConsentAgreeOnce" : "confirmAll")}
+          </Button>
           <Button
             disabled={decisionPending}
             size="small"
@@ -156,16 +257,6 @@ export function ToolRunCard({ toolRun }: ToolRunCardProps): React.JSX.Element {
             }}
           >
             {t("cancel")}
-          </Button>
-          <Button
-            disabled={decisionPending}
-            size="small"
-            variant="contained"
-            onClick={() => {
-              void submitDecision({ approve: true });
-            }}
-          >
-            {t("confirm")}
           </Button>
         </Stack>
       )}
