@@ -11,6 +11,8 @@ const decimalNanoseconds = {
   description:
     "Decimal nanoseconds encoded as a string to avoid precision loss.",
 } as const;
+const absoluteLocalTimeFormat =
+  "Format: YYYY-MM-DD[ HH:MM:SS]; resolve relative times to absolute values first.";
 
 /**
  * Tool definitions for a turn.
@@ -18,7 +20,9 @@ const decimalNanoseconds = {
  * The load_skill enum has to reflect the skills actually available, which depends on the user's
  * custom skills, so this is a function rather than a constant.
  */
-export function buildToolDefinitions(skillIds: readonly string[] = SKILL_IDS): LlmToolDef[] {
+export function buildToolDefinitions(
+  skillIds: readonly string[] = SKILL_IDS,
+): LlmToolDef[] {
   return LOCAL_AGENT_TOOL_DEFINITIONS.map((tool) =>
     tool.name === "load_skill"
       ? {
@@ -77,12 +81,17 @@ export const LOCAL_AGENT_TOOL_DEFINITIONS: LlmToolDef[] = [
     description:
       "List stored memories with their ids. Memories are already included in your context, so " +
       "this is only needed to confirm an id before forgetting one.",
-    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
   },
   {
     name: "vtd_search",
     description:
       "Search VTD records by robot, trigger type, or time. Use this before inspecting a record. " +
+      "Results are presented to the user in an interactive list card; keep textual summaries brief. " +
       "Load the vtd-query skill for the filter semantics and accepted time formats.",
     inputSchema: {
       type: "object",
@@ -91,11 +100,15 @@ export const LOCAL_AGENT_TOOL_DEFINITIONS: LlmToolDef[] = [
         id: { ...nonEmptyString, description: "Exact record id." },
         botSn: {
           ...nonEmptyString,
-          description: "Bot SN alias/suffix match. Use botSnExact for an exact SN.",
+          description:
+            "Bot SN alias/suffix match. Use botSnExact for an exact SN.",
         },
         botSnExact: { ...nonEmptyString, description: "Exact Bot SN." },
         botName: { ...nonEmptyString, description: "Fuzzy bot name match." },
-        triggerType: { ...nonEmptyString, description: 'Trigger type, e.g. "bms" or "nav".' },
+        triggerType: {
+          ...nonEmptyString,
+          description: 'Trigger type, e.g. "bms" or "nav".',
+        },
         dataType: {
           type: "string",
           enum: ["1", "2", "3", "4"],
@@ -111,15 +124,37 @@ export const LOCAL_AGENT_TOOL_DEFINITIONS: LlmToolDef[] = [
           enum: ["0", "1", "2"],
           description: "0=not repaired, 1=repaired, 2=repair failed.",
         },
-        start: { ...nonEmptyString, description: "Trigger-time lower bound." },
-        end: { ...nonEmptyString, description: "Trigger-time upper bound." },
-        at: { ...nonEmptyString, description: "Trigger time +/-5s. Overrides start and end." },
-        triggerTime: { ...nonEmptyString, description: "Exact trigger time." },
-        queryStart: { ...nonEmptyString, description: "Data-coverage start bound." },
-        queryEnd: { ...nonEmptyString, description: "Data-coverage end bound." },
+        start: {
+          ...nonEmptyString,
+          description: `Trigger-time lower bound. ${absoluteLocalTimeFormat}`,
+        },
+        end: {
+          ...nonEmptyString,
+          description: `Trigger-time upper bound. ${absoluteLocalTimeFormat}`,
+        },
+        at: {
+          ...nonEmptyString,
+          description: `Trigger time +/-5s. Overrides start and end. ${absoluteLocalTimeFormat}`,
+        },
+        triggerTime: {
+          ...nonEmptyString,
+          description: `Exact trigger time. ${absoluteLocalTimeFormat}`,
+        },
+        queryStart: {
+          ...nonEmptyString,
+          description:
+            `Data-coverage interval lower bound; use queryStart/queryEnd when looking for data ` +
+            `at a specific time or interval. ${absoluteLocalTimeFormat}`,
+        },
+        queryEnd: {
+          ...nonEmptyString,
+          description:
+            `Data-coverage interval upper bound; use queryStart/queryEnd when looking for data ` +
+            `at a specific time or interval. ${absoluteLocalTimeFormat}`,
+        },
         queryTime: {
           ...nonEmptyString,
-          description: "Find records whose data covers this instant.",
+          description: `Find records whose data covers this instant. ${absoluteLocalTimeFormat}`,
         },
         dataDay: {
           type: "string",
@@ -170,6 +205,32 @@ export const LOCAL_AGENT_TOOL_DEFINITIONS: LlmToolDef[] = [
     },
   },
   {
+    name: "request_batch_consent",
+    description:
+      "Present one side-effect-free confirmation card for a batch plan. Put the complete human-readable plan in summary, then stop if the returned approved value is false.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["action", "summary", "itemCount"],
+      properties: {
+        action: {
+          ...nonEmptyString,
+          description: 'Stable batch action identifier, e.g. "slice_and_load".',
+        },
+        summary: {
+          ...nonEmptyString,
+          description:
+            "Human-readable plan including item count, time window, and expected outputs.",
+        },
+        itemCount: {
+          type: "integer",
+          minimum: 1,
+          description: "Number of items covered by the batch plan.",
+        },
+      },
+    },
+  },
+  {
     name: "vtd_slice_store",
     description:
       "Create and store a filtered MCAP slice. This has a side effect and requires explicit user confirmation.",
@@ -207,7 +268,8 @@ export const LOCAL_AGENT_TOOL_DEFINITIONS: LlmToolDef[] = [
   {
     name: "open_data_source",
     description:
-      "Ask Lichtblick to open one or more MCAP URLs. Catalog loading completes asynchronously.",
+      "Ask Lichtblick to open one or more MCAP URLs. Pass multiple URLs in one call to load " +
+      "them together. Catalog loading completes asynchronously.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
