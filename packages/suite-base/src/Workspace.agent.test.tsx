@@ -7,11 +7,11 @@ import { act, renderHook } from "@testing-library/react";
 import { StrictMode } from "react";
 
 import { AgentConfiguration } from "@lichtblick/suite-base/services/agent/agentSettings";
-import { LocalAgentOrchestrator } from "@lichtblick/suite-base/services/agent/local/LocalAgentOrchestrator";
 import {
   useLatestAgentCatalog,
   useLocalAgentClient,
 } from "@lichtblick/suite-base/services/agent/localAgentClient";
+import { PiAgentOrchestrator } from "@lichtblick/suite-base/services/agent/pi/PiAgentOrchestrator";
 
 const validConfiguration: AgentConfiguration = {
   apiKey: "test-api-key",
@@ -51,6 +51,7 @@ describe("local Agent client lifecycle", () => {
       { initialProps: { catalogVersion: 1 } },
     );
     const initialClient = result.current.client;
+    expect(initialClient).toBeInstanceOf(PiAgentOrchestrator);
 
     rerender({ catalogVersion: 2 });
 
@@ -62,7 +63,7 @@ describe("local Agent client lifecycle", () => {
   });
 
   it("disposes replaced, disabled, and unmounted orchestrators", async () => {
-    const dispose = jest.spyOn(LocalAgentOrchestrator.prototype, "dispose");
+    const dispose = jest.spyOn(PiAgentOrchestrator.prototype, "dispose");
     const { result, rerender, unmount } = renderHook(
       ({
         enabled,
@@ -106,8 +107,31 @@ describe("local Agent client lifecycle", () => {
     expect(dispose.mock.instances[2]).toBe(thirdClient);
   });
 
+  it("replaces the orchestrator when the selected profile changes", async () => {
+    const dispose = jest.spyOn(PiAgentOrchestrator.prototype, "dispose");
+    const { result, rerender } = renderHook(
+      ({ profileId }: { profileId: string }) =>
+        useLocalAgentClient(validConfiguration, {
+          enabled: true,
+          getCatalog: () => ({ datatypes: new Map(), topics: [] }),
+          profileId,
+        }),
+      { initialProps: { profileId: "profile-1" } },
+    );
+    const firstClient = result.current;
+
+    rerender({ profileId: "profile-2" });
+
+    expect(result.current).not.toBe(firstClient);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose.mock.instances[0]).toBe(firstClient);
+  });
+
   it("disposes both committed StrictMode instances without leaking either one", async () => {
-    const dispose = jest.spyOn(LocalAgentOrchestrator.prototype, "dispose");
+    const dispose = jest.spyOn(PiAgentOrchestrator.prototype, "dispose");
     const wrapper = ({ children }: React.PropsWithChildren) => (
       <StrictMode>{children}</StrictMode>
     );

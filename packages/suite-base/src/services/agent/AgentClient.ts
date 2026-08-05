@@ -9,6 +9,7 @@ import type {
   LayoutProposal,
   SubscribeEventsOptions,
   SubscribeEventsResult,
+  ToolConfirmationOptions,
   ToolRun,
 } from "./types";
 
@@ -23,7 +24,8 @@ export const AGENT_SSE_MAX_CONNECTION_EVENTS = 10_000;
 /** Compatibility alias; the budget applies to one physical connection, not a session lifetime. */
 export const AGENT_SSE_MAX_SUBSCRIPTION_BYTES = AGENT_SSE_MAX_CONNECTION_BYTES;
 /** Compatibility alias; the budget applies to one physical connection, not a session lifetime. */
-export const AGENT_SSE_MAX_SUBSCRIPTION_EVENTS = AGENT_SSE_MAX_CONNECTION_EVENTS;
+export const AGENT_SSE_MAX_SUBSCRIPTION_EVENTS =
+  AGENT_SSE_MAX_CONNECTION_EVENTS;
 
 const TOOL_RUN_STATUSES = new Set<string>([
   "queued",
@@ -35,7 +37,9 @@ const TOOL_RUN_STATUSES = new Set<string>([
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value != undefined && !Array.isArray(value);
+  return (
+    typeof value === "object" && value != undefined && !Array.isArray(value)
+  );
 }
 
 function isOptionalString(value: unknown): value is string | undefined {
@@ -64,7 +68,8 @@ function isToolRun(value: unknown): value is ToolRun {
     typeof value.status === "string" &&
     TOOL_RUN_STATUSES.has(value.status) &&
     (typeof value.progress === "undefined" ||
-      (typeof value.progress === "number" && Number.isFinite(value.progress))) &&
+      (typeof value.progress === "number" &&
+        Number.isFinite(value.progress))) &&
     isOptionalString(value.summary) &&
     isOptionalString(value.error)
   );
@@ -80,14 +85,20 @@ function isLayoutProposal(value: unknown): value is LayoutProposal {
 }
 
 function isAgentEvent(value: unknown): value is AgentEvent {
-  if (!isRecord(value) || typeof value.type !== "string" || !isPositiveSequence(value.seq)) {
+  if (
+    !isRecord(value) ||
+    typeof value.type !== "string" ||
+    !isPositiveSequence(value.seq)
+  ) {
     return false;
   }
 
   switch (value.type) {
     case "message-start":
     case "message-end":
-      return typeof value.messageId === "string" && isNonEmptyString(value.requestId);
+      return (
+        typeof value.messageId === "string" && isNonEmptyString(value.requestId)
+      );
     case "token":
       return (
         typeof value.messageId === "string" &&
@@ -115,7 +126,10 @@ function isAgentEvent(value: unknown): value is AgentEvent {
         isNonEmptyString(value.requestId)
       );
     case "error":
-      return typeof value.error === "string" && isOptionalNonEmptyString(value.requestId);
+      return (
+        typeof value.error === "string" &&
+        isOptionalNonEmptyString(value.requestId)
+      );
     case "done":
       return isNonEmptyString(value.requestId);
     default:
@@ -128,7 +142,10 @@ type SseEventBoundary = {
   length: number;
 };
 
-function getLineEndingByteLength(bytes: Uint8Array, index: number): number | undefined {
+function getLineEndingByteLength(
+  bytes: Uint8Array,
+  index: number,
+): number | undefined {
   const byte = bytes[index];
   if (byte === 0x0a) {
     return 1;
@@ -210,7 +227,10 @@ function parseSseFrame(frame: string): ParsedSseFrame {
   return { type: "event", event: parsed };
 }
 
-async function readResponseTextWithLimit(response: Response, byteLimit: number): Promise<string> {
+async function readResponseTextWithLimit(
+  response: Response,
+  byteLimit: number,
+): Promise<string> {
   if (response.body == undefined) {
     const text = await response.text();
     return text.length > byteLimit ? `${text.slice(0, byteLimit)}…` : text;
@@ -230,7 +250,9 @@ async function readResponseTextWithLimit(response: Response, byteLimit: number):
       }
       const remaining = byteLimit - bytesRead;
       if (value.byteLength > remaining) {
-        detail += decoder.decode(value.subarray(0, Math.max(remaining, 0)), { stream: true });
+        detail += decoder.decode(value.subarray(0, Math.max(remaining, 0)), {
+          stream: true,
+        });
         detail += decoder.decode();
         truncated = true;
         break;
@@ -279,7 +301,9 @@ export class AgentClient implements IAgentClient {
     this.#baseUrl = baseUrl.replace(/\/+$/, "");
   }
 
-  public async createSession(signal?: AbortSignal): Promise<{ sessionId: string }> {
+  public async createSession(
+    signal?: AbortSignal,
+  ): Promise<{ sessionId: string }> {
     const response = await this.#requestJson("/agent/sessions", {
       method: "POST",
       signal,
@@ -287,7 +311,11 @@ export class AgentClient implements IAgentClient {
     const payload =
       isRecord(response) && isRecord(response.data) ? response.data : response;
 
-    if (!isRecord(payload) || typeof payload.sessionId !== "string" || payload.sessionId === "") {
+    if (
+      !isRecord(payload) ||
+      typeof payload.sessionId !== "string" ||
+      payload.sessionId === ""
+    ) {
       throw new Error("Agent session response did not include a sessionId");
     }
     return { sessionId: payload.sessionId };
@@ -320,8 +348,12 @@ export class AgentClient implements IAgentClient {
     options: SubscribeEventsOptions = {},
   ): Promise<SubscribeEventsResult> {
     signal?.throwIfAborted();
-    const requestedIdleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
-    if (!Number.isFinite(requestedIdleTimeoutMs) || requestedIdleTimeoutMs <= 0) {
+    const requestedIdleTimeoutMs =
+      options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+    if (
+      !Number.isFinite(requestedIdleTimeoutMs) ||
+      requestedIdleTimeoutMs <= 0
+    ) {
       throw new Error("idleTimeoutMs must be a positive finite number");
     }
     const idleTimeoutMs = Math.min(requestedIdleTimeoutMs, MAX_TIMER_DELAY_MS);
@@ -343,13 +375,16 @@ export class AgentClient implements IAgentClient {
         clearTimeout(idleTimer);
       }
       idleTimer = setTimeout(() => {
-        subscriptionController.abort(new AgentStreamIdleTimeoutError(idleTimeoutMs));
+        subscriptionController.abort(
+          new AgentStreamIdleTimeoutError(idleTimeoutMs),
+        );
       }, idleTimeoutMs);
     };
     resetIdleTimer();
 
     try {
-      const query = options.lastSeq == undefined ? "" : `?lastSeq=${initialLastSeq}`;
+      const query =
+        options.lastSeq == undefined ? "" : `?lastSeq=${initialLastSeq}`;
       const response = await this.#request(
         `/agent/sessions/${encodeURIComponent(sessionId)}/events${query}`,
         {
@@ -493,7 +528,7 @@ export class AgentClient implements IAgentClient {
   public async confirmToolRun(
     sessionId: string,
     toolRunId: string,
-    options: { approve: boolean },
+    options: ToolConfirmationOptions,
     signal?: AbortSignal,
   ): Promise<void> {
     const action = options.approve ? "confirm" : "cancel";
@@ -501,7 +536,10 @@ export class AgentClient implements IAgentClient {
       `/agent/tool-runs/${encodeURIComponent(toolRunId)}/${action}`,
       {
         method: "POST",
-        body: JSON.stringify({ sessionId }),
+        body: JSON.stringify({
+          sessionId,
+          ...(options.scope == undefined ? {} : { scope: options.scope }),
+        }),
         signal,
       },
       "application/json",
@@ -563,7 +601,10 @@ export class AgentClient implements IAgentClient {
 
     let detail = "";
     try {
-      detail = await readResponseTextWithLimit(response, MAX_HTTP_ERROR_DETAIL_BYTES);
+      detail = await readResponseTextWithLimit(
+        response,
+        MAX_HTTP_ERROR_DETAIL_BYTES,
+      );
     } catch {
       // Keep the status-only error when the body cannot be read.
     }
