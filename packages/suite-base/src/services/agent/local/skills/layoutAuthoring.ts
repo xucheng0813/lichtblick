@@ -22,6 +22,20 @@ export const LAYOUT_AUTHORING_SKILL: Skill = {
 \`propose_layout\` takes \`{ name, summary?, data }\` where \`data\` is AgentSafeLayoutData. A
 proposal is never applied automatically — the user reviews and applies it.
 
+## Submit one complete proposal
+
+Build the entire layout internally before showing anything to the user: choose every panel, finish
+each panel's config, and assemble the complete mosaic tree. Call \`propose_layout\` exactly once
+with that finished layout.
+
+Never submit a skeleton, placeholder, or partial layout first and follow it with a fuller proposal.
+If topic or panel availability is still unknown, inspect \`get_data_catalog\`.
+Use the **Available panels** section of the system context instead of a half-built proposal to probe
+what is available.
+
+Only propose again within the same request when the user explicitly asked to revise a layout that
+was already applied. Even then, submit one complete revised version at a time.
+
 ## Structure
 
 \`\`\`json

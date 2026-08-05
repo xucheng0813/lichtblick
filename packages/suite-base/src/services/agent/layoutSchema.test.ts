@@ -84,6 +84,86 @@ describe("layoutSchema", () => {
     expect(validateLayoutProposal(proposal)).toEqual(proposal);
   });
 
+  it("accepts an installed extension panel through the runtime allowlist", () => {
+    const panelType = "Acme Extension.Custom Panel";
+    const panelId = `${panelType}!main`;
+    const proposal = {
+      name: "Extension panel",
+      data: {
+        configById: { [panelId]: { customSetting: { enabled: true } } },
+        layout: panelId,
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+
+    expect(
+      validateLayoutProposal(proposal, {
+        installedPanelTypes: new Set([panelType]),
+      }),
+    ).toEqual(proposal);
+  });
+
+  it("rejects an extension panel absent from the runtime allowlist", () => {
+    const panelType = "Acme Extension.Custom Panel";
+    const panelId = `${panelType}!main`;
+    const proposal = {
+      name: "Uninstalled extension panel",
+      data: {
+        configById: { [panelId]: {} },
+        layout: panelId,
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+
+    expect(() =>
+      validateLayoutProposal(proposal, {
+        installedPanelTypes: new Set(["Other Extension.Other Panel"]),
+      }),
+    ).toThrow(`uses unsupported panel type "${panelType}"`);
+  });
+
+  it("preserves the static-only behavior when no runtime allowlist is provided", () => {
+    const panelType = "Acme Extension.Custom Panel";
+    const panelId = `${panelType}!main`;
+    const proposal = {
+      name: "No runtime inventory",
+      data: {
+        configById: { [panelId]: {} },
+        layout: panelId,
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+
+    expect(() => validateLayoutProposal(proposal)).toThrow(
+      `uses unsupported panel type "${panelType}"`,
+    );
+  });
+
+  it("keeps built-in per-panel validation when the runtime allowlist includes that type", () => {
+    const proposal = {
+      name: "Invalid Plot",
+      data: {
+        configById: { "Plot!speed": { paths: "not-an-array" } },
+        layout: "Plot!speed",
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+
+    expect(() =>
+      validateLayoutProposal(proposal, {
+        installedPanelTypes: new Set(["Plot"]),
+      }),
+    ).toThrow('configById["Plot!speed"].paths must be an array');
+  });
+
   it("accepts an empty layout with no Mosaic tree", () => {
     const data = {
       configById: {},

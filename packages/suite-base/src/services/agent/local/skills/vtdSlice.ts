@@ -41,12 +41,40 @@ and why before calling it. Because it is a confirmation gate, do not batch it sp
 The result carries \`mcapSliceId\`. Slicing is idempotent — the same source, window, and topic set
 always produce the same slice id, so re-requesting an identical slice is cheap and safe.
 
+## Batch time-window slicing and loading
+
+When the user asks to find every recording for a robot around a precise time, slice that window,
+and load the results together, follow this playbook exactly:
+
+1. Resolve the user's time and ±N-second offset into one absolute local-time window. Use the
+   current time and browser timezone injected by the system prompt for relative-time conversion,
+   then convert both bounds to decimal nanosecond strings.
+2. Call \`vtd_search\` with \`botSnExact\` plus \`queryStart\` and \`queryEnd\` to find every record
+   whose **data coverage** overlaps the window. Do not substitute trigger-time \`start\`/\`end\`.
+3. Call \`request_batch_consent\` exactly once with \`action: "slice_and_load"\`, the matched record
+   count in \`itemCount\`, and the complete human-readable plan in \`summary\`: include "M records
+   matched", their trigger types and durations, the requested time window, and that the expected
+   outputs are stored slices loaded together. If it returns \`approved: false\`, stop the plan and
+   briefly say it was cancelled. If it returns \`approved: true\`, continue immediately; never ask
+   for consent again in conversational text.
+4. After approval, call \`vtd_slice_store\` for every matched record. Set \`startNs\` to the maximum
+   of the requested start and that record's \`data_st\`; set \`endNs\` to the minimum of the
+   requested end and its \`data_et\`. This intersection prevents out-of-range slices. Skip an empty
+   intersection and record the reason. Omit \`topics\` to keep all topics by default; if the user
+   specified topics, pass that same list to every applicable slice. A session-scoped approval from
+   \`request_batch_consent\` authorizes these slice calls, so do not request another confirmation.
+5. Call \`vtd_presign\` for every successful \`mcapSliceId\` and collect all \`downloadUrl\` values.
+   After every URL is ready, call \`open_data_source\` exactly once with the complete URL array so
+   all sources load together. Never open each URL separately.
+6. Briefly report the final counts: X slices succeeded, Y records were skipped, and the reason for
+   every skip.
+
 ## Getting a playable URL
 
 - \`vtd_presign\` with \`sliceId\` returns a temporary URL for a stored slice.
 - \`vtd_presign\` with \`id\` returns a temporary URL for a complete record.
 
-Then call \`open_data_source\` with that URL.
+Then call \`open_data_source\` with that URL, or with all collected URLs for the batch playbook.
 
 ## Sequencing
 
