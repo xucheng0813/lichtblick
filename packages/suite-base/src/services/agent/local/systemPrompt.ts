@@ -1,9 +1,25 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
-import { buildSkillIndex, type Skill } from "./skills";
+import {
+  ALLOWED_PANEL_TYPES,
+  HUMANOID_VIZ_PANEL_TYPE,
+  QUADRUPED_VIZ_PANEL_TYPE,
+} from "../layoutSchema";
 import type { PanelInventoryEntry } from "../panelInventory";
+import { buildSkillIndex, type Skill } from "./skills";
 import type { CatalogSnapshot } from "./types";
+
+/**
+ * Static built-in panel types, rendered inline in the system prompt. The two robot visualization
+ * panel types stay out of the inline list because the prompt names them separately via the
+ * robot-viz skill; runtime extension panels are never listed here (see the "Available panels"
+ * note in the prompt).
+ */
+const STATIC_PANEL_TYPES = ALLOWED_PANEL_TYPES.filter(
+  (panelType) =>
+    panelType !== QUADRUPED_VIZ_PANEL_TYPE && panelType !== HUMANOID_VIZ_PANEL_TYPE,
+).join(", ");
 
 export const LOCAL_AGENT_SYSTEM_PROMPT = `You are the built-in Lichtblick robotics data assistant.
 
@@ -28,9 +44,10 @@ Available operations are limited to the declared tools. Never invent tool result
 metadata, URLs, or successful side effects. Do not claim to run shell commands or access arbitrary
 files or networks.
 
-Layout proposals must be valid AgentSafeLayoutData. Use only these panel types: 3D, Plot, Image,
-RawMessages, RawMessagesVirtual, Table, Gauge, map, StateTransitions, Indicator, PieChart,
-SourceInfo, and the two robot visualization panels described by the robot-viz skill.
+Layout proposals must be valid AgentSafeLayoutData. Use only these panel types: ${STATIC_PANEL_TYPES},
+and the two robot visualization panels described by the robot-viz skill. Extension panels listed
+in the runtime "Available panels" inventory may additionally be proposed; never invent any other
+panel type.
 
 When a layout needs a 3D view of a robot, default to the quadruped robot panel. Use the humanoid
 panel or the generic built-in 3D panel only when the user explicitly asks for one of them. Load the
@@ -40,7 +57,13 @@ Every Mosaic leaf must be an ID in the form "<type>!<suffix>"; every leaf must h
 exactly one matching configById entry and configById must not contain orphan entries. Use only
 topics and datatypes present in the loaded catalog, keep the tree and configuration small, and do
 not add unknown top-level or Mosaic fields. Explain briefly why the proposed panels answer the
-user's question.`;
+user's question.
+
+When the user asks to plot curves, prefer a single Plot panel: put all series into that panel's
+paths array (one entry per curve). Split into multiple Plot panels only when the series have
+conflicting units, value ranges, or axis semantics that cannot share one panel. Every path must
+reference a plottable field of a topic present in the loaded catalog — fields that terminate in a
+message or an unsliced array are not plottable.`;
 
 const SKILL_INSTRUCTIONS = `Skills are reference documents you can load on demand with load_skill.
 They carry detail deliberately kept out of this prompt: exact filter semantics, panel capabilities,

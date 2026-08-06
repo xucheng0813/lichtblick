@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import {
+  ALLOWED_PANEL_TYPES,
+  HUMANOID_VIZ_PANEL_TYPE,
+  QUADRUPED_VIZ_PANEL_TYPE,
+} from "@lichtblick/suite-base/services/agent/layoutSchema";
+
 import { SKILL_REGISTRY } from "./skills";
 import {
   LOCAL_AGENT_SYSTEM_PROMPT,
@@ -24,6 +30,30 @@ describe("LOCAL_AGENT_SYSTEM_PROMPT", () => {
   it("points at the trigger lookup as the alternative to searching", () => {
     expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain("vtd_trigger");
   });
+
+  it("derives the static panel list from ALLOWED_PANEL_TYPES", () => {
+    const robotVizTypes = new Set([
+      QUADRUPED_VIZ_PANEL_TYPE,
+      HUMANOID_VIZ_PANEL_TYPE,
+    ]);
+    const staticTypes = ALLOWED_PANEL_TYPES.filter(
+      (panelType) => !robotVizTypes.has(panelType),
+    );
+
+    // The whole allowlist line must equal exactly the derived list: an extra, missing, or renamed
+    // panel type — or a reordering — all fail this assertion. A plain toContain would let trailing
+    // content after the list slip through.
+    const allowlistLine = LOCAL_AGENT_SYSTEM_PROMPT.split("\n").find((line) =>
+      line.includes("Use only these panel types:"),
+    );
+    expect(allowlistLine).toBe(
+      `Layout proposals must be valid AgentSafeLayoutData. Use only these panel types: ${staticTypes.join(", ")},`,
+    );
+  });
+
+  it("lets the runtime Available panels inventory extend the static panel list", () => {
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toMatch(/Available panels.*may additionally be proposed/);
+  });
 });
 
 describe("buildSystemPrompt", () => {
@@ -31,10 +61,29 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain(LOCAL_AGENT_SYSTEM_PROMPT);
     expect(prompt).toContain("load_skill");
-    for (const skill of SKILL_REGISTRY.values()) {
+    for (const skill of [...SKILL_REGISTRY.values()].filter((s) => s.indexed !== false)) {
       expect(prompt).toContain(skill.id);
-      // The index carries the trigger line only; bodies stay behind load_skill.
+    }
+    for (const skill of [...SKILL_REGISTRY.values()].filter((s) => s.indexed === false)) {
+      // Non-indexed skills are not listed in the prompt; they are discovered through the
+      // panel-catalog index line, whose body names them.
+      expect(prompt).not.toContain(skill.id);
+    }
+    // The index carries the trigger line only; bodies stay behind load_skill.
+    for (const skill of SKILL_REGISTRY.values()) {
       expect(prompt).not.toContain(skill.body);
+    }
+  });
+
+  it("keeps non-indexed skills discoverable through the panel-catalog index line", () => {
+    const nonIndexed = [...SKILL_REGISTRY.values()].filter((skill) => skill.indexed === false);
+    expect(nonIndexed.length).toBeGreaterThan(0);
+    const prompt = buildSystemPrompt();
+    // The router skill is indexed, so the agent can learn that it must load panel-* skills
+    // before choosing panels.
+    expect(prompt).toContain("- panel-catalog: ");
+    for (const skill of nonIndexed) {
+      expect(prompt).not.toContain(`- ${skill.id}:`);
     }
   });
 

@@ -21,4 +21,12 @@ export type Skill = {
   whenToUse: string;
   /** Full document text. Only materialized into the conversation when explicitly loaded. */
   body: string;
+  /**
+   * Built-in metadata only: when explicitly set to `false` the skill stays registered and
+   * loadable via `load_skill`, but is omitted from the system prompt skill index. It is meant to
+   * be discovered through a routing skill that names it (see `panel-catalog` and the `panel-*`
+   * skills). Custom skills never honor this flag — `resolveSkills` strips it — so a user-defined
+   * skill is always indexed and can never become undiscoverable.
+   */
+  indexed?: false;
 };

@@ -33,6 +33,7 @@ export const ALLOWED_PANEL_TYPES = [
   "Indicator",
   "PieChart",
   "SourceInfo",
+  "RosOut",
 ] as const;
 
 export type AllowedPanelType = (typeof ALLOWED_PANEL_TYPES)[number];

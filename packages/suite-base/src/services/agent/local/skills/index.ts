@@ -8,6 +8,19 @@
 import { COLLECTD_METRICS_SKILL } from "./collectdMetrics";
 import { LAYOUT_AUTHORING_SKILL } from "./layoutAuthoring";
 import { PANEL_CATALOG_SKILL } from "./panelCatalog";
+import { PANEL_3D_SKILL } from "./panels/3d";
+import { PANEL_GAUGE_SKILL } from "./panels/gauge";
+import { PANEL_IMAGE_SKILL } from "./panels/image";
+import { PANEL_INDICATOR_SKILL } from "./panels/indicator";
+import { PANEL_MAP_SKILL } from "./panels/map";
+import { PANEL_PIE_CHART_SKILL } from "./panels/pieChart";
+import { PANEL_PLOT_SKILL } from "./panels/plot";
+import { PANEL_RAW_MESSAGES_SKILL } from "./panels/rawMessages";
+import { PANEL_RAW_MESSAGES_VIRTUAL_SKILL } from "./panels/rawMessagesVirtual";
+import { PANEL_ROSOUT_SKILL } from "./panels/rosOut";
+import { PANEL_SOURCE_INFO_SKILL } from "./panels/sourceInfo";
+import { PANEL_STATE_TRANSITIONS_SKILL } from "./panels/stateTransitions";
+import { PANEL_TABLE_SKILL } from "./panels/table";
 import { ROBOT_VIZ_SKILL } from "./robotViz";
 import type { Skill } from "./types";
 import { VTD_QUERY_SKILL } from "./vtdQuery";
@@ -24,6 +37,21 @@ const SKILLS: readonly Skill[] = [
   PANEL_CATALOG_SKILL,
   ROBOT_VIZ_SKILL,
   LAYOUT_AUTHORING_SKILL,
+  // Per-panel reference detail. Marked indexed: false so the prompt index stays small; the
+  // panel-catalog skill routes to them by id before any panel is proposed.
+  PANEL_3D_SKILL,
+  PANEL_PLOT_SKILL,
+  PANEL_IMAGE_SKILL,
+  PANEL_RAW_MESSAGES_SKILL,
+  PANEL_RAW_MESSAGES_VIRTUAL_SKILL,
+  PANEL_TABLE_SKILL,
+  PANEL_GAUGE_SKILL,
+  PANEL_MAP_SKILL,
+  PANEL_STATE_TRANSITIONS_SKILL,
+  PANEL_INDICATOR_SKILL,
+  PANEL_PIE_CHART_SKILL,
+  PANEL_SOURCE_INFO_SKILL,
+  PANEL_ROSOUT_SKILL,
 ];
 
 export const SKILL_REGISTRY: ReadonlyMap<string, Skill> = new Map(
@@ -42,9 +70,16 @@ export const SKILL_IDS: readonly [string, ...string[]] = [
 /**
  * The one-line-per-skill index carried in the system prompt. Defaults to the built-ins; callers
  * with user customization pass the resolved set instead.
+ *
+ * Skills marked `indexed: false` are registered and loadable but deliberately left out of the
+ * index: they are reference detail reached through a routing skill (see `panel-catalog`), so the
+ * base prompt does not pay for lines the agent should not load directly.
  */
 export function buildSkillIndex(skills: readonly Skill[] = SKILLS): string {
-  return skills.map((skill) => `- ${skill.id}: ${skill.whenToUse}`).join("\n");
+  return skills
+    .filter((skill) => skill.indexed !== false)
+    .map((skill) => `- ${skill.id}: ${skill.whenToUse}`)
+    .join("\n");
 }
 
 /**

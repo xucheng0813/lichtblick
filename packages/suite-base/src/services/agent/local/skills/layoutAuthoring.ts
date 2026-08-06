@@ -6,12 +6,181 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import {
+  AGENT_SAFE_LAYOUT_MAX_COLLECTION_ENTRIES,
   AGENT_SAFE_LAYOUT_MAX_CONFIG_BY_ID_ENTRIES,
+  AGENT_SAFE_LAYOUT_MAX_GRAPH_DEPTH,
+  AGENT_SAFE_LAYOUT_MAX_GRAPH_NODES,
   AGENT_SAFE_LAYOUT_MAX_MOSAIC_DEPTH,
+  AGENT_SAFE_LAYOUT_MAX_STRING_BYTES,
   ALLOWED_PANEL_TYPES,
 } from "@lichtblick/suite-base/services/agent/layoutSchema";
 
 import type { Skill } from "./types";
+
+/**
+ * Pattern-library layouts for the layout-authoring skill. Each example is exercised through
+ * validateLayoutProposalData in skills.test.ts, so keep them executable: every id in `layout`
+ * needs a configById entry and vice versa, ids must be unique, and split percentages must be
+ * 0–100. Topic names and message paths are placeholders — the agent replaces them from the
+ * loaded catalog before proposing.
+ */
+export const ROBOT_DEBUG_LAYOUT = {
+  configById: {
+    "Quadruped Visualization.Quadruped Visualization!main": {},
+    "Plot!state": {
+      paths: [
+        {
+          value: "/odom.twist.twist.linear.x",
+          enabled: true,
+          timestampMethod: "receiveTime",
+          label: "vx",
+        },
+      ],
+    },
+    "StateTransitions!mode": {
+      paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
+    },
+  },
+  globalVariables: {},
+  userNodes: {},
+  playbackConfig: { speed: 1 },
+  layout: {
+    direction: "row",
+    first: "Quadruped Visualization.Quadruped Visualization!main",
+    second: {
+      direction: "column",
+      first: "Plot!state",
+      second: "StateTransitions!mode",
+      splitPercentage: 65,
+    },
+    splitPercentage: 65,
+  },
+};
+
+export const SENSOR_MONITORING_LAYOUT = {
+  configById: {
+    "Image!front": {
+      imageMode: {
+        imageTopic: "/camera/front/image_raw",
+        calibrationTopic: "/camera/front/camera_info",
+      },
+    },
+    "Image!rear": {
+      imageMode: {
+        imageTopic: "/camera/rear/image_raw",
+        calibrationTopic: "/camera/rear/camera_info",
+      },
+    },
+    "Plot!imu": {
+      paths: [
+        {
+          value: "/imu/data.linear_acceleration.x",
+          enabled: true,
+          timestampMethod: "receiveTime",
+          label: "ax",
+        },
+      ],
+    },
+    "Gauge!battery": {
+      path: "/bms_state.voltage",
+      minValue: 0,
+      maxValue: 60,
+      colorMode: "colormap",
+      colorMap: "red-yellow-green",
+      gradient: ["#ff0000", "#00ff00"],
+      reverse: false,
+    },
+  },
+  globalVariables: {},
+  userNodes: {},
+  playbackConfig: { speed: 1 },
+  layout: {
+    direction: "row",
+    first: {
+      direction: "column",
+      first: "Image!front",
+      second: "Image!rear",
+      splitPercentage: 50,
+    },
+    second: {
+      direction: "column",
+      first: "Plot!imu",
+      second: "Gauge!battery",
+      splitPercentage: 60,
+    },
+    splitPercentage: 65,
+  },
+};
+
+export const LOG_TROUBLESHOOTING_LAYOUT = {
+  configById: {
+    "RosOut!log": {
+      searchTerms: [],
+      minLogLevel: 1,
+      topicToRender: "/rosout",
+    },
+    "Plot!health": {
+      paths: [
+        {
+          value: "/bms_state.voltage",
+          enabled: true,
+          timestampMethod: "receiveTime",
+          label: "voltage",
+        },
+      ],
+    },
+    "StateTransitions!mode": {
+      paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
+    },
+  },
+  globalVariables: {},
+  userNodes: {},
+  playbackConfig: { speed: 1 },
+  layout: {
+    direction: "column",
+    first: "RosOut!log",
+    second: {
+      direction: "row",
+      first: "Plot!health",
+      second: "StateTransitions!mode",
+      splitPercentage: 50,
+    },
+    splitPercentage: 60,
+  },
+};
+
+export const REPLAY_ANALYSIS_LAYOUT = {
+  configById: {
+    "Plot!cmd": {
+      paths: [
+        {
+          value: "/cmd_vel.linear.x",
+          enabled: true,
+          timestampMethod: "receiveTime",
+          label: "cmd vx",
+        },
+      ],
+    },
+    "StateTransitions!mode": {
+      paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
+    },
+    "RawMessages!detail": { topicPath: "/cmd_vel" },
+  },
+  globalVariables: {},
+  userNodes: {},
+  playbackConfig: { speed: 1 },
+  layout: {
+    direction: "column",
+    first: "Plot!cmd",
+    second: {
+      direction: "row",
+      first: "StateTransitions!mode",
+      second: "RawMessages!detail",
+      splitPercentage: 50,
+    },
+    splitPercentage: 50,
+  },
+};
 
 export const LAYOUT_AUTHORING_SKILL: Skill = {
   id: "layout-authoring",
@@ -129,7 +298,7 @@ defaults handle the rest.
       "paths": [{ "value": "/nav/state.mode", "timestampMethod": "receiveTime" }]
     },
     "Indicator!health": {
-      "path": "/system/healthy",
+      "path": "/system/healthy.data",
       "style": "bulb",
       "fallbackColor": "#a0a0a0",
       "fallbackLabel": "Unknown",
@@ -154,6 +323,106 @@ defaults handle the rest.
   }
 }
 \`\`\`
+
+## Layout pattern library
+
+A proven starting point for common requests. Each pattern lists when it fits, a complete layout,
+and suggested proportions. Panel counts and split percentages are **suggestions, not hard
+limits** — the layouts below pass the same validation that \`propose_layout\` applies, and every
+topic or path in them is a placeholder to replace from the loaded catalog.
+
+All patterns use 2–4 panels and at most 3 levels of nesting, far inside the budgets listed under
+"Budget boundaries" below. If no pattern fits, use one of the single- or two-panel examples above
+and ask the user rather than stacking more panels.
+
+### Robot debugging
+
+**When to use**: the user is debugging motion, perception, or planning on a robot, and the
+catalog has transform topics plus at least one renderable topic (point cloud, markers, path,
+occupancy grid). Default to the quadruped panel unless the user names the humanoid or the
+built-in 3D panel — see the robot-viz skill.
+
+**What**: one dominant scene view with a signal column beside it. 3 panels: robot view, one
+Plot, one StateTransitions. Suggested split: scene 60–70%, signal column 30–40% (Plot above,
+StateTransitions below, 65/35 inside the column).
+
+\`\`\`json
+${JSON.stringify(ROBOT_DEBUG_LAYOUT, null, 2)}
+\`\`\`
+
+**Not a fit**: no transforms or renderable topics → propose a Plot-only layout or ask; user
+wants the generic 3D panel → swap the robot panel for \`3D!scene\` and mark every topic
+\`visible: true\`.
+
+### Sensor monitoring
+
+**When to use**: several camera topics (or one camera with multiple channels) plus numeric
+signals (IMU, temperature, battery). Prefer adding \`calibrationTopic\` whenever camera
+calibration exists — without it the Image panel draws no 3D overlays.
+
+**What**: a camera wall with a numeric column. 4 panels: two Images, one Plot, one Gauge.
+Suggested split: camera column 60–70% (two Images at 50/50), numeric column 30–40% (Plot above,
+Gauge below). For compressed-video topics, reduce to a single video panel — decoding several
+video streams at once degrades playback.
+
+\`\`\`json
+${JSON.stringify(SENSOR_MONITORING_LAYOUT, null, 2)}
+\`\`\`
+
+**Not a fit**: no image topics → drop to a numeric-only layout (Plot + Gauge); more than two
+Gauges → use one Plot instead; more than three cameras → ask the user which camera matters most.
+
+### Log troubleshooting
+
+**When to use**: the user is investigating errors, warnings, or node behavior, and the catalog
+has a topic with one of the exact Log schemas the RosOut panel accepts (see the panel-catalog
+skill — \`convertibleTo\` does not qualify). Log filtering works for live and recorded data
+alike.
+
+**What**: the log list with correlated signals. 3 panels: RosOut, one Plot, one
+StateTransitions. Suggested split: log 55–60% on top, signal row 40–45% below (Plot and
+StateTransitions at 50/50).
+
+\`\`\`json
+${JSON.stringify(LOG_TROUBLESHOOTING_LAYOUT, null, 2)}
+\`\`\`
+
+**Not a fit**: no Log-schema topic → ask for the log topic or fall back to Plot +
+StateTransitions; live data → Plot/StateTransitions click-to-seek is unavailable (recorded data
+only) — say so instead of promising timeline navigation.
+
+### Replay analysis
+
+**When to use**: recorded data (bag, MCAP, ULog) and the user wants to walk through behavior,
+find event times, or compare signals. Plot and StateTransitions support click-to-seek on
+recorded data; the RawMessages panel shows the latest message for a topic (with optional diff
+mode) — it has no per-message stepping.
+
+**What**: a time-series comparison with a detail panel. 3 panels: Plot, StateTransitions,
+RawMessages. Suggested split: Plot 45–50% on top, StateTransitions and RawMessages at 50/50
+below.
+
+\`\`\`json
+${JSON.stringify(REPLAY_ANALYSIS_LAYOUT, null, 2)}
+\`\`\`
+
+**Not a fit**: live data → click-to-seek is unavailable; when the user wants to see the scene,
+add a 3D or robot panel instead of a fourth analysis panel; object-list inspection → swap the
+Plot for a Table (topicPath pointing at an object array).
+
+### Budget boundaries
+
+\`propose_layout\` data is validated against hard budgets, all exported from layoutSchema:
+
+- At most ${String(AGENT_SAFE_LAYOUT_MAX_CONFIG_BY_ID_ENTRIES)} panels in \`configById\`.
+- Mosaic tree depth under ${String(AGENT_SAFE_LAYOUT_MAX_MOSAIC_DEPTH)}.
+- At most ${String(AGENT_SAFE_LAYOUT_MAX_COLLECTION_ENTRIES)} entries in any JSON collection.
+- At most ${String(AGENT_SAFE_LAYOUT_MAX_GRAPH_DEPTH)} levels of nesting anywhere in the data.
+- At most ${String(AGENT_SAFE_LAYOUT_MAX_GRAPH_NODES)} total values.
+- Any single string at most ${String(AGENT_SAFE_LAYOUT_MAX_STRING_BYTES)} bytes.
+
+The patterns above stay far below every budget (≤ 4 panels, ≤ 3 nesting levels), so following a
+pattern cannot hit a budget by itself — only the paths and configs added on top of one can.
 
 ## Before proposing
 

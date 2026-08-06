@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
-import { SKILL_REGISTRY } from "@lichtblick/suite-base/services/agent/local/skills";
+import { SKILL_REGISTRY, buildSkillIndex } from "@lichtblick/suite-base/services/agent/local/skills";
 import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAppConfiguration";
 
 import {
@@ -122,6 +122,43 @@ describe("agent prompt customization", () => {
     expect(resolved.map((skill) => skill.id)).toEqual([...builtInIds, customSkill.id]);
   });
 
+  it("ignores the built-in-only indexed marker on custom skills so they stay indexed", () => {
+    // `indexed` is built-in metadata. A user-authored skill that carries it must not be able to
+    // hide itself from the prompt index.
+    const hiddenMarker = { ...customSkill, indexed: false as const };
+    expect(() =>
+      { validateAgentPromptCustomization(customization({ customSkills: [hiddenMarker] })); },
+    ).not.toThrow();
+
+    const resolved = resolveSkills(customization({ customSkills: [hiddenMarker] }));
+    const resolvedSkill = resolved.find((skill) => skill.id === customSkill.id);
+    expect(resolvedSkill).toBeDefined();
+    expect(resolvedSkill).not.toHaveProperty("indexed");
+    // Stripped marker ⇒ the skill always appears in the prompt index.
+    expect(buildSkillIndex(resolved)).toContain(`- ${customSkill.id}: ${customSkill.whenToUse}`);
+  });
+
+  it("preserves the indexed marker on built-in skills through resolveSkills", () => {
+    const resolved = resolveSkills(EMPTY_CUSTOMIZATION);
+    // panel-catalog is the router and stays indexed; the per-panel skills stay non-indexed.
+    for (const skill of resolved.filter(
+      (s) => s.id.startsWith("panel-") && s.id !== "panel-catalog",
+    )) {
+      expect(skill.indexed).toBe(false);
+    }
+    for (const skill of resolved.filter(
+      (s) => !s.id.startsWith("panel-") || s.id === "panel-catalog",
+    )) {
+      expect(skill.indexed).toBeUndefined();
+    }
+    // Overriding a non-indexed built-in keeps it non-indexed: the marker is part of the skill
+    // metadata, not of the user-editable body.
+    const overridden = resolveSkills(
+      customization({ skillOverrides: { "panel-3d": "my own instructions" } }),
+    );
+    expect(overridden.find((skill) => skill.id === "panel-3d")?.indexed).toBe(false);
+  });
+
   it("drops a stored custom skill whose id has since become a built-in", () => {
     // Stored data can predate a newly shipped skill; shadowing it would hide the built-in silently.
     const resolved = resolveSkills(
@@ -131,5 +168,20 @@ describe("agent prompt customization", () => {
     expect(resolved.find((skill) => skill.id === "robot-viz")?.body).toBe(
       SKILL_REGISTRY.get("robot-viz")!.body,
     );
+  });
+
+  it("lets a newly shipped panel-* built-in win over a stored custom skill with the same id", () => {
+    // The per-panel skills are new ids; a user could have stored a custom skill with the same id
+    // before they shipped. The built-in wins (existing shadowing behavior) and the custom body is
+    // dropped rather than silently replacing the reference document.
+    for (const panelId of ["panel-3d", "panel-rosout"]) {
+      const resolved = resolveSkills(
+        customization({ customSkills: [{ ...customSkill, id: panelId }] }),
+      );
+      expect(resolved.filter((skill) => skill.id === panelId)).toHaveLength(1);
+      expect(resolved.find((skill) => skill.id === panelId)?.body).toBe(
+        SKILL_REGISTRY.get(panelId)!.body,
+      );
+    }
   });
 });

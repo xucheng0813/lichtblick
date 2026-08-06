@@ -212,6 +212,32 @@ describe("layoutSchema", () => {
     },
   );
 
+  it("accepts a RosOut panel from the static allowlist without a runtime inventory", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "RosOut!logs": {
+        topicToRender: "/rosout",
+        minLogLevel: 2,
+        searchTerms: ["wheel"],
+      },
+    };
+    data.layout = "RosOut!logs";
+    const proposal = { name: "RosOut", summary: "Logs", data };
+
+    expect(() => validateLayoutProposalData(data)).not.toThrow();
+    expect(isValidLayoutProposalData(data)).toBe(true);
+    // No installedPanelTypes option: the static allowlist alone must admit RosOut.
+    expect(validateLayoutProposal(proposal)).toEqual(proposal);
+  });
+
+  it("accepts a bare RosOut config with default filtering", () => {
+    const data = validLayoutData();
+    data.configById = { "RosOut!logs": {} };
+    data.layout = "RosOut!logs";
+
+    expect(isValidLayoutProposalData(data)).toBe(true);
+  });
+
   it("still rejects an unlisted panel type that contains spaces", () => {
     // Relaxing the id shape to allow extension panel names must not turn the allowlist into a
     // shape check.

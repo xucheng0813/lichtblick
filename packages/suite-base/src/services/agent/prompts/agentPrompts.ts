@@ -165,7 +165,9 @@ export async function writeAgentPromptCustomization(
 /**
  * The effective skill set: built-ins with any override applied, followed by custom skills.
  *
- * Built-in order is preserved so the prompt index stays stable as a user edits bodies.
+ * Built-in order is preserved so the prompt index stays stable as a user edits bodies. Custom
+ * skills are always indexed: the built-in-only `indexed` marker is stripped from them so a
+ * user-defined skill can never hide itself from the prompt index via that flag.
  */
 export function resolveSkills(customization: AgentPromptCustomization): Skill[] {
   const builtIns = [...SKILL_REGISTRY.values()].map((skill) => {
@@ -175,5 +177,11 @@ export function resolveSkills(customization: AgentPromptCustomization): Skill[] 
   const builtInIds = new Set(builtIns.map((skill) => skill.id));
   // A custom skill colliding with a built-in is rejected on write, but stored data can predate a
   // newly added built-in; drop rather than shadow it.
-  return [...builtIns, ...customization.customSkills.filter((skill) => !builtInIds.has(skill.id))];
+  return [
+    ...builtIns,
+    ...customization.customSkills
+      .filter((skill) => !builtInIds.has(skill.id))
+      // Strip the built-in-only `indexed` marker so custom skills always enter the index.
+      .map(({ id, name, whenToUse, body }) => ({ id, name, whenToUse, body })),
+  ];
 }
