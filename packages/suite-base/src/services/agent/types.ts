@@ -34,7 +34,26 @@ export type ChatMessage = {
   toolRuns?: ToolRun[];
   createdAt: string;
 };
-export type LayoutProposal = { name: string; data: unknown; summary?: string };
+export type LayoutProposal = {
+  name: string;
+  data: unknown;
+  summary?: string;
+  /**
+   * Baseline captured when the proposal was generated: the id of the layout the agent based its
+   * proposal on and a stable fingerprint of its data. Present only when a current layout existed
+   * at proposal time; lets the apply path detect layout changes and apply strictly incremental
+   * proposals in place.
+   */
+  baseLayoutId?: string;
+  baseFingerprint?: string;
+};
+/**
+ * Display mode for a layout proposal card: adding panels to the current layout vs creating a new
+ * layout. The count is a display hint only; the apply-time diff is authoritative.
+ */
+export type LayoutProposalMode =
+  | { kind: "incremental"; newPanelCount: number }
+  | { kind: "new" };
 export type AgentEventEnvelope = {
   /** Monotonically increasing positive safe integer within a session event stream. */
   seq: number;

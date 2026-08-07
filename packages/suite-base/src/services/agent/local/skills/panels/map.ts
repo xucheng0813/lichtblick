@@ -25,7 +25,7 @@ their name variants): \`sensor_msgs/NavSatFix\`, \`foxglove.LocationFix\`, \`fox
 All eligible topics are drawn unless listed in \`disabledTopics\`.
 
 \`\`\`json
-{ "layer": "map", "followTopic": "/gps/fix", "disabledTopics": [], "topicColors": {} }
+{ "lichtblickPanelTitle": "GPS position", "layer": "map", "followTopic": "/gps/fix", "disabledTopics": [], "topicColors": {} }
 \`\`\`
 
 - \`layer\` is \`"map"\`, \`"satellite"\`, or \`"custom"\`. With \`"custom"\`, \`customTileUrl\` may

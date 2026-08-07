@@ -80,7 +80,11 @@ function isLayoutProposal(value: unknown): value is LayoutProposal {
     isRecord(value) &&
     typeof value.name === "string" &&
     "data" in value &&
-    isOptionalString(value.summary)
+    isOptionalString(value.summary) &&
+    // Baseline fields are attached by the system at proposal time; wire-boundary validation
+    // must reject null (isOptionalString accepts only undefined or string).
+    isOptionalString(value.baseLayoutId) &&
+    isOptionalString(value.baseFingerprint)
   );
 }
 

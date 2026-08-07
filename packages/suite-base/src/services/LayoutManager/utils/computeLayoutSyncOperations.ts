@@ -67,7 +67,10 @@ function syncRemoteLayout(
         log.warn(`Shared layout ${localLayout.id} shouldn't be untracked`);
         break;
       }
-      operations.push({ local: false, type: "upload-new", localLayout });
+      // Personal layouts never carry syncInfo. A personal layout that already exists remotely
+      // (personal-remote) is uploaded through the explicit save path (LayoutManager.overwriteLayout)
+      // — never by an upload-new here: the upload could not record a sync state without breaking
+      // the personal no-syncInfo invariant, so every sync would repeat the upload.
       break;
     case "updated":
       operations.push({ local: false, type: "upload-updated", localLayout });

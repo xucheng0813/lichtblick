@@ -23,6 +23,10 @@ export const layoutBrowser = {
   permission: "Permission",
   readOnlyLayout: "Read-only layout",
   save: "Save",
+  setAsOrgDefault: "Set as organization default",
+  setAsOrgDefaultFailed: "Failed to set as organization default",
+  setAsOrgDefaultSuccess:
+    "Set as organization default view (used as the fallback default when there is no local selection)",
   upload: "Upload",
   uploadFailed: "Failed to upload to organization",
   uploadSuccess: "Uploaded to organization",

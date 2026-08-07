@@ -84,6 +84,34 @@ describe("layoutSchema", () => {
     expect(validateLayoutProposal(proposal)).toEqual(proposal);
   });
 
+  it("accepts string baseLayoutId and baseFingerprint fields", () => {
+    const proposal = {
+      name: "Vehicle",
+      baseLayoutId: "layout-1",
+      baseFingerprint: "0a1b2c3d",
+      data: validLayoutData(),
+    };
+
+    expect(validateLayoutProposal(proposal)).toEqual(proposal);
+  });
+
+  it.each<Record<string, unknown>>([
+    { baseLayoutId: 42 },
+    { baseLayoutId: {} },
+    { baseLayoutId: null },
+    { baseFingerprint: 42 },
+    { baseFingerprint: ["abc"] },
+    { baseFingerprint: null },
+  ])("rejects a non-string baseline field %j", (badFields) => {
+    expect(() =>
+      validateLayoutProposal({
+        name: "Vehicle",
+        data: validLayoutData(),
+        ...badFields,
+      }),
+    ).toThrow(/baseLayoutId|baseFingerprint must be a string/);
+  });
+
   it("accepts an installed extension panel through the runtime allowlist", () => {
     const panelType = "Acme Extension.Custom Panel";
     const panelId = `${panelType}!main`;
@@ -397,6 +425,64 @@ describe("layoutSchema", () => {
     data.layout = "Indicator!status";
 
     expect(validateLayoutProposalData(data)).toBe(data);
+  });
+
+  it("accepts user script nodes shaped exactly as { name, sourceCode }", () => {
+    const data = validLayoutData();
+    data.userNodes = {
+      "script-1": { name: "Speed km/h", sourceCode: "export const inputs = ['/speed'];" },
+    };
+
+    expect(validateLayoutProposalData(data)).toBe(data);
+  });
+
+  it.each([
+    [
+      "non-object node",
+      { "script-1": "export const inputs = [];" },
+      /userNodes\["script-1"\] must be an object/,
+    ],
+    [
+      "missing sourceCode",
+      { "script-1": { name: "Speed" } },
+      /must contain exactly name and sourceCode/,
+    ],
+    [
+      "extra field",
+      { "script-1": { name: "Speed", sourceCode: "export const inputs = [];", enabled: true } },
+      /must contain exactly name and sourceCode/,
+    ],
+    [
+      "empty name",
+      { "script-1": { name: "", sourceCode: "export const inputs = [];" } },
+      /name and \.sourceCode must be non-empty strings/,
+    ],
+    [
+      "empty sourceCode",
+      { "script-1": { name: "Speed", sourceCode: "" } },
+      /name and \.sourceCode must be non-empty strings/,
+    ],
+    [
+      "non-string sourceCode",
+      { "script-1": { name: "Speed", sourceCode: 42 } },
+      /name and \.sourceCode must be non-empty strings/,
+    ],
+  ])("rejects a malformed user script node: %s", (_label, userNodes, expected) => {
+    const data = validLayoutData();
+    data.userNodes = userNodes;
+
+    expect(() => validateLayoutProposalData(data)).toThrow(expected);
+  });
+
+  it("still runs the generic JSON budgets over user script nodes", () => {
+    const data = validLayoutData();
+    data.userNodes = {
+      "script-1": { name: "x", sourceCode: "export const inputs = [];".repeat(20_000) },
+    };
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      "exceeds the string size limit",
+    );
   });
 
   it("rejects cyclic values inside panel configurations", () => {

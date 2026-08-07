@@ -13,6 +13,7 @@ import type { ConversationSummary } from "@lichtblick/suite-base/services/agent/
 import type {
   ChatMessage,
   LayoutProposal,
+  LayoutProposalMode,
   ToolConfirmationOptions,
 } from "@lichtblick/suite-base/services/agent/types";
 
@@ -53,6 +54,8 @@ export type AgentChatState = {
   pendingProposal?: LayoutProposal;
   pendingProposalMessageId?: string;
   pendingProposalRequestId?: string;
+  /** Display mode for the pending proposal card, computed when the proposal is enqueued. */
+  pendingProposalMode?: LayoutProposalMode;
   error?: string;
   actions: {
     sendMessage: (text: string) => Promise<void>;

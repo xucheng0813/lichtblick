@@ -18,11 +18,12 @@ export const PANEL_SOURCE_INFO_SKILL: Skill = {
   indexed: false,
   body: `# The \`SourceInfo\` panel
 
-**No configuration:** the config must be \`{}\`. Any config key is ignored or rejected, so pass an
-empty object.
+**No configuration:** the config must be \`{}\` except for the optional \`lichtblickPanelTitle\`
+(a title is still shown in the toolbar and helps identify the panel). Any other config key is
+ignored or rejected, so pass nothing else.
 
 \`\`\`json
-{ "configById": { "SourceInfo!info": {} } }
+{ "configById": { "SourceInfo!info": { "lichtblickPanelTitle": "Data source" } } }
 \`\`\`
 
 Lists the data source, time range, and topic table. Useful as a small orientation panel when the

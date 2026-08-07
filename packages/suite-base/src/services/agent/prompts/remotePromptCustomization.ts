@@ -40,6 +40,75 @@ export type AgentBootstrapResponse = AgentBootstrap & {
 
 const BOOTSTRAP_CACHE_KEY = "lichtblick.vizserver.agent-bootstrap.v1";
 const inMemoryBootstraps = new Map<string, AgentBootstrap>();
+/**
+ * Monotonic per-workspace fetch sequence. A response may only write the cache if no *later*
+ * fetch has already applied its result, so an out-of-order stale response cannot roll the cache
+ * back after a fresher full fetch (for example a post-invalidation re-fetch) landed.
+ */
+const bootstrapFetchSequences = new Map<string, number>();
+const appliedBootstrapSequences = new Map<string, number>();
+
+/**
+ * Listener invoked with the workspace id whenever `invalidateAgentBootstrapCache` clears a
+ * workspace's bootstrap cache. Consumers use this to trigger an immediate re-fetch.
+ */
+export type AgentBootstrapInvalidationListener = (workspace: string) => void;
+const invalidationListeners = new Set<AgentBootstrapInvalidationListener>();
+
+/**
+ * Subscribes to bootstrap cache invalidations. Returns an unsubscribe function.
+ *
+ * Consumers that render the server-provided prompt/skills (e.g. the Workspace bootstrap polling
+ * effect) should subscribe and re-fetch on the matching workspace: after an invalidation the
+ * cached version is gone, so the next fetch is forced to omit `known_version` and returns the
+ * full payload.
+ */
+export function subscribeAgentBootstrapInvalidation(
+  listener: AgentBootstrapInvalidationListener,
+): () => void {
+  invalidationListeners.add(listener);
+  return () => {
+    invalidationListeners.delete(listener);
+  };
+}
+
+/**
+ * Drops the cached bootstrap (memory and persisted copy) for the given workspace, so the next
+ * `fetchAgentBootstrap` call sends no `known_version` and the server returns the full payload
+ * instead of `unchanged`. Notifies subscribers immediately so they can re-fetch right away.
+ *
+ * This is the single entry point for invalidating the bootstrap cache after a server-side change
+ * (for example a deleted remote skill); consumers must not manipulate the cache directly.
+ */
+export function invalidateAgentBootstrapCache(workspace: string): void {
+  inMemoryBootstraps.delete(workspace);
+  const storage = getStorage();
+  if (storage != undefined) {
+    try {
+      const record = readCacheRecord();
+      if (hasOwn(record, workspace)) {
+        delete record[workspace];
+        const serialized = JSON.stringify(record);
+        if (serialized != undefined) {
+          storage.setItem(BOOTSTRAP_CACHE_KEY, serialized);
+        }
+      }
+    } catch {
+      // Storage failures must not break invalidation; the in-memory copy is already gone.
+    }
+  }
+  for (const listener of [...invalidationListeners]) {
+    try {
+      listener(workspace);
+    } catch {
+      // A failing subscriber must not prevent other subscribers from being notified.
+    }
+  }
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value != undefined && !Array.isArray(value);
@@ -239,6 +308,8 @@ export async function fetchAgentBootstrap(
   workspace: string,
   knownVersion?: string,
 ): Promise<AgentBootstrapResponse> {
+  const sequence = (bootstrapFetchSequences.get(workspace) ?? 0) + 1;
+  bootstrapFetchSequences.set(workspace, sequence);
   const { data } = await HttpService.get<unknown>(
     `workspaces/${encodeURIComponent(workspace)}/agent/bootstrap`,
     knownVersion == undefined ? {} : { known_version: knownVersion },
@@ -251,6 +322,12 @@ export async function fetchAgentBootstrap(
     ...response,
     syncedAt: new Date().toISOString(),
   };
+  // A later fetch (higher sequence) already applied its result; this response is stale and must
+  // not overwrite the fresher cache entry, even though the caller may still use it.
+  if ((appliedBootstrapSequences.get(workspace) ?? 0) > sequence) {
+    return bootstrap;
+  }
+  appliedBootstrapSequences.set(workspace, sequence);
   return applyBootstrap(workspace, bootstrap);
 }
 

@@ -10,7 +10,7 @@ import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import { useAppConfigurationValue } from "@lichtblick/suite-base/hooks/useAppConfigurationValue";
 import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 
-import { AutoUpdate, StepSize, VizServerSettings } from "./settings";
+import { AutoUpdate, ExtensionAutoUpdateOrgSetting, LayoutAutoSaveToCloudSetting, StepSize, VizServerSettings } from "./settings";
 
 jest.mock("@lichtblick/suite-base/hooks/useAppConfigurationValue", () => ({
   useAppConfigurationValue: jest.fn(),
@@ -59,6 +59,56 @@ describe("AutoUpdate component", () => {
     render(<AutoUpdate />);
     const input: HTMLInputElement = screen.getByRole("checkbox");
     expect(input.checked).toBe(true);
+  });
+});
+
+describe("ExtensionAutoUpdateOrgSetting component", () => {
+  const mockSetEnabled = jest.fn();
+  beforeEach(() => {
+    jest.mocked(useAppConfigurationValue).mockClear();
+    mockSetEnabled.mockClear();
+  });
+
+  it("reads the EXTENSION_AUTO_UPDATE_ORG key and defaults to enabled", () => {
+    (useAppConfigurationValue as jest.Mock).mockReturnValue([undefined, mockSetEnabled]);
+    render(<ExtensionAutoUpdateOrgSetting />);
+    expect(jest.mocked(useAppConfigurationValue)).toHaveBeenCalledWith(
+      AppSetting.EXTENSION_AUTO_UPDATE_ORG,
+    );
+    const input: HTMLInputElement = screen.getByRole("checkbox");
+    expect(input.checked).toBe(true);
+  });
+
+  it("persists the toggle", () => {
+    (useAppConfigurationValue as jest.Mock).mockReturnValue([true, mockSetEnabled]);
+    render(<ExtensionAutoUpdateOrgSetting />);
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(mockSetEnabled).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("LayoutAutoSaveToCloudSetting component", () => {
+  const mockSetEnabled = jest.fn();
+  beforeEach(() => {
+    jest.mocked(useAppConfigurationValue).mockClear();
+    mockSetEnabled.mockClear();
+  });
+
+  it("reads the LAYOUT_AUTO_SAVE_TO_CLOUD key and defaults to disabled", () => {
+    (useAppConfigurationValue as jest.Mock).mockReturnValue([undefined, mockSetEnabled]);
+    render(<LayoutAutoSaveToCloudSetting />);
+    expect(jest.mocked(useAppConfigurationValue)).toHaveBeenCalledWith(
+      AppSetting.LAYOUT_AUTO_SAVE_TO_CLOUD,
+    );
+    const input: HTMLInputElement = screen.getByRole("checkbox");
+    expect(input.checked).toBe(false);
+  });
+
+  it("persists the toggle", () => {
+    (useAppConfigurationValue as jest.Mock).mockReturnValue([false, mockSetEnabled]);
+    render(<LayoutAutoSaveToCloudSetting />);
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(mockSetEnabled).toHaveBeenCalledWith(true);
   });
 });
 

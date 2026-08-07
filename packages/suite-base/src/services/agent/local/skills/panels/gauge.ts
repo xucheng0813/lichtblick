@@ -22,7 +22,7 @@ export const PANEL_GAUGE_SKILL: Skill = {
 MessagePath-based panel: one numeric value on a dial. Single path.
 
 \`\`\`json
-{ "path": "/battery.percentage", "minValue": 0, "maxValue": 100, "colorMode": "colormap", "colorMap": "red-yellow-green" }
+{ "lichtblickPanelTitle": "Battery level", "path": "/battery.percentage", "minValue": 0, "maxValue": 100, "colorMode": "colormap", "colorMap": "red-yellow-green" }
 \`\`\`
 
 **Always set \`minValue\` and \`maxValue\` to the signal's real range.** They default to 0 and 1, so

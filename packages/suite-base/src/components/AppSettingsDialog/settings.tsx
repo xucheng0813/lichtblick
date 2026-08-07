@@ -54,6 +54,7 @@ import { makeStyles } from "tss-react/mui";
 import { filterMap } from "@lichtblick/den/collection";
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import OsContextSingleton from "@lichtblick/suite-base/OsContextSingleton";
+import { AgentSkillsAPI } from "@lichtblick/suite-base/api/agent/AgentSkillsAPI";
 import { AgentMarkdown } from "@lichtblick/suite-base/components/AgentMarkdown";
 import Stack from "@lichtblick/suite-base/components/Stack";
 import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
@@ -97,9 +98,12 @@ import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/a
 import {
   type AgentBootstrap,
   fetchAgentBootstrap,
+  invalidateAgentBootstrapCache,
   publishCustomization,
   readCachedAgentBootstrap,
+  subscribeAgentBootstrapInvalidation,
 } from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
+import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
 import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { LaunchPreferenceValue } from "@lichtblick/suite-base/types/LaunchPreferenceValue";
 import { TimeDisplayMethod } from "@lichtblick/suite-base/types/panels";
@@ -492,6 +496,64 @@ export function AutoUpdate(): React.ReactElement {
         label="Automatically install updates"
       />
     </>
+  );
+}
+
+/**
+ * Switch for EXTENSION_AUTO_UPDATE_ORG (default on): controls the periodic in-session check for
+ * organization extension updates. The startup update pass is existing behavior and unaffected.
+ */
+export function ExtensionAutoUpdateOrgSetting(): React.ReactElement {
+  const { t } = useTranslation("appSettings");
+  const { classes } = useStyles();
+  const [enabled = true, setEnabled] = useAppConfigurationValue<boolean>(
+    AppSetting.EXTENSION_AUTO_UPDATE_ORG,
+  );
+
+  return (
+    <FormControl>
+      <FormControlLabel
+        className={classes.formControlLabel}
+        control={
+          <Checkbox
+            className={classes.checkbox}
+            checked={enabled}
+            onChange={(_event, checked) => void setEnabled(checked)}
+          />
+        }
+        label={t("extensionAutoUpdateOrg")}
+      />
+      <FormHelperText>{t("extensionAutoUpdateOrgDescription")}</FormHelperText>
+    </FormControl>
+  );
+}
+
+/**
+ * Switch for LAYOUT_AUTO_SAVE_TO_CLOUD (default off): when enabled, edits to a remote layout are
+ * automatically saved to the cloud; concurrent edits are last-write-wins.
+ */
+export function LayoutAutoSaveToCloudSetting(): React.ReactElement {
+  const { t } = useTranslation("appSettings");
+  const { classes } = useStyles();
+  const [enabled = false, setEnabled] = useAppConfigurationValue<boolean>(
+    AppSetting.LAYOUT_AUTO_SAVE_TO_CLOUD,
+  );
+
+  return (
+    <FormControl>
+      <FormControlLabel
+        className={classes.formControlLabel}
+        control={
+          <Checkbox
+            className={classes.checkbox}
+            checked={enabled}
+            onChange={(_event, checked) => void setEnabled(checked)}
+          />
+        }
+        label={t("layoutAutoSaveToCloud")}
+      />
+      <FormHelperText>{t("layoutAutoSaveToCloudDescription")}</FormHelperText>
+    </FormControl>
   );
 }
 
@@ -1505,6 +1567,11 @@ function AgentPromptSettings(): React.ReactElement {
   const [remoteSkillsFetching, setRemoteSkillsFetching] = useState(false);
   const [remoteSkillsFetchError, setRemoteSkillsFetchError] = useState<string>();
   const [remoteSkillsFetchSucceeded, setRemoteSkillsFetchSucceeded] = useState(false);
+  // Latest-request guard: a manual fetch may still be in flight when a deletion-triggered
+  // refresh starts. The cache layer sequences its own writes (remotePromptCustomization), but the
+  // component state needs its own generation check so a stale response cannot resurrect a skill
+  // the server no longer serves.
+  const remoteSkillsFetchGenerationRef = useRef(0);
   const [expandedRemoteSkillId, setExpandedRemoteSkillId] = useState<string>();
   const [installingRemoteSkillId, setInstallingRemoteSkillId] =
     useState<string>();
@@ -1512,6 +1579,20 @@ function AgentPromptSettings(): React.ReactElement {
     useState<string>();
   const [pendingRemoteSkillOverwrite, setPendingRemoteSkillOverwrite] =
     useState<CustomSkill>();
+  const [pendingRemoteSkillDelete, setPendingRemoteSkillDelete] =
+    useState<CustomSkill>();
+  const [deletingRemoteSkillId, setDeletingRemoteSkillId] =
+    useState<string>();
+  const [remoteSkillDeleteError, setRemoteSkillDeleteError] =
+    useState<string>();
+  const [remoteSkillDeleteSucceeded, setRemoteSkillDeleteSucceeded] =
+    useState(false);
+  const [remoteSkillDeleteUnsupported, setRemoteSkillDeleteUnsupported] =
+    useState(false);
+  const agentSkillsAPI = useMemo(
+    () => (workspace == undefined ? undefined : new AgentSkillsAPI(workspace)),
+    [workspace],
+  );
 
   const skills = useMemo(() => resolveSkills(draft), [draft]);
   const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
@@ -1572,15 +1653,19 @@ function AgentPromptSettings(): React.ReactElement {
     }
   };
 
-  const refreshRemoteSkills = async () => {
+  const refreshRemoteSkills = useCallback(async () => {
     if (workspace == undefined) {
       return;
     }
+    const generation = ++remoteSkillsFetchGenerationRef.current;
     setRemoteSkillsFetching(true);
     setRemoteSkillsFetchError(undefined);
     setRemoteSkillsFetchSucceeded(false);
     try {
       const response = await fetchAgentBootstrap(workspace);
+      if (remoteSkillsFetchGenerationRef.current !== generation) {
+        return;
+      }
       setRemoteBootstrap(
         response.unchanged === true
           ? readCachedAgentBootstrap(workspace)
@@ -1588,13 +1673,31 @@ function AgentPromptSettings(): React.ReactElement {
       );
       setRemoteSkillsFetchSucceeded(true);
     } catch (caught) {
+      if (remoteSkillsFetchGenerationRef.current !== generation) {
+        return;
+      }
       setRemoteSkillsFetchError(
         caught instanceof Error ? caught.message : String(caught),
       );
     } finally {
-      setRemoteSkillsFetching(false);
+      if (remoteSkillsFetchGenerationRef.current === generation) {
+        setRemoteSkillsFetching(false);
+      }
     }
-  };
+  }, [workspace]);
+
+  useEffect(() => {
+    if (workspace == undefined) {
+      return;
+    }
+    // After any cache invalidation for this workspace (for example a deleted cloud skill), the
+    // list must be re-fetched from the server rather than showing a local projection.
+    return subscribeAgentBootstrapInvalidation((invalidatedWorkspace) => {
+      if (invalidatedWorkspace === workspace) {
+        void refreshRemoteSkills();
+      }
+    });
+  }, [refreshRemoteSkills, workspace]);
 
   const validateRemoteSkillInstall = (skill: CustomSkill): boolean => {
     if (skill.body.length > AGENT_PROMPT_MAX_SKILL_BODY_LENGTH) {
@@ -1669,6 +1772,44 @@ function AgentPromptSettings(): React.ReactElement {
       return;
     }
     void persistRemoteSkill(skill);
+  };
+
+  const deleteRemoteSkill = async (skill: CustomSkill): Promise<void> => {
+    if (workspace == undefined || agentSkillsAPI == undefined) {
+      return;
+    }
+    setDeletingRemoteSkillId(skill.id);
+    setRemoteSkillDeleteError(undefined);
+    setRemoteSkillDeleteSucceeded(false);
+    try {
+      await agentSkillsAPI.deleteSkill(skill.id);
+      // pi-3 owns the bootstrap cache (remotePromptCustomization.ts): invalidateAgentBootstrapCache
+      // forces the next fetch to skip known_version and re-pull, and notifies subscribers so they
+      // re-fetch immediately. Interface frozen in plan2 v3 — pi-2 only calls it and never touches
+      // the cache or projects a local view of the list; the subscription below re-fetches the
+      // latest bootstrap so the list reflects the server.
+      invalidateAgentBootstrapCache(workspace);
+      setRemoteSkillDeleteSucceeded(true);
+    } catch (caught) {
+      if (
+        caught instanceof HttpError &&
+        (caught.status === 404 || caught.status === 405)
+      ) {
+        // The delete endpoint is an unconfirmed contract assumption (see AgentSkillsAPI): treat
+        // 404/405 as "the server does not implement deletion" and disable the entry for this
+        // session without attempting any write.
+        setRemoteSkillDeleteUnsupported(true);
+        setRemoteSkillDeleteError(t("agentRemoteSkillDeleteUnsupported"));
+      } else {
+        setRemoteSkillDeleteError(
+          t("agentRemoteSkillDeleteFailed", {
+            error: caught instanceof Error ? caught.message : String(caught),
+          }),
+        );
+      }
+    } finally {
+      setDeletingRemoteSkillId(undefined);
+    }
   };
 
   return (
@@ -1793,6 +1934,31 @@ function AgentPromptSettings(): React.ReactElement {
                             </IconButton>
                           </span>
                         </Tooltip>
+                        {!automatic && (
+                          <Tooltip title={t("agentRemoteSkillDelete")}>
+                            <span>
+                              <IconButton
+                                aria-label={t("agentRemoteSkillDelete")}
+                                data-testid={`delete-remote-skill-${skill.id}`}
+                                disabled={
+                                  remoteSkillDeleteUnsupported ||
+                                  deletingRemoteSkillId != undefined
+                                }
+                                onClick={() => {
+                                  setRemoteSkillDeleteError(undefined);
+                                  setPendingRemoteSkillDelete(skill);
+                                }}
+                                size="small"
+                              >
+                                {deletingRemoteSkillId === skill.id ? (
+                                  <CircularProgress size={18} />
+                                ) : (
+                                  <DeleteOutlineIcon fontSize="small" />
+                                )}
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
                       </Stack>
                       {expanded && (
                         <div
@@ -1836,8 +2002,59 @@ function AgentPromptSettings(): React.ReactElement {
           {remoteSkillInstallError != undefined && (
             <Alert severity="error">{remoteSkillInstallError}</Alert>
           )}
+          {remoteSkillDeleteError != undefined && (
+            <Alert severity="error">{remoteSkillDeleteError}</Alert>
+          )}
+          {remoteSkillDeleteSucceeded && (
+            <Alert severity="success">
+              {t("agentRemoteSkillDeleteSucceeded")}
+            </Alert>
+          )}
         </Stack>
       )}
+
+      <Dialog
+        open={pendingRemoteSkillDelete != undefined}
+        onClose={() => {
+          setPendingRemoteSkillDelete(undefined);
+        }}
+      >
+        <DialogTitle>
+          {t("agentRemoteSkillDeleteConfirmTitle", {
+            name: pendingRemoteSkillDelete?.name ?? "",
+          })}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {t("agentRemoteSkillDeleteConfirmMessage", {
+              name: pendingRemoteSkillDelete?.name ?? "",
+            })}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setPendingRemoteSkillDelete(undefined);
+            }}
+          >
+            {t("agentRemoteSkillDeleteCancel")}
+          </Button>
+          <Button
+            color="error"
+            data-testid="confirm-remote-skill-delete"
+            onClick={() => {
+              const skill = pendingRemoteSkillDelete;
+              setPendingRemoteSkillDelete(undefined);
+              if (skill != undefined) {
+                void deleteRemoteSkill(skill);
+              }
+            }}
+            variant="contained"
+          >
+            {t("agentRemoteSkillDeleteConfirm")}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={pendingRemoteSkillOverwrite != undefined}

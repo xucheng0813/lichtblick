@@ -24,7 +24,7 @@ shows the full message tree. This makes it the fallback whenever a path cannot b
 "never guess fields" rule in the panel-catalog skill.
 
 \`\`\`json
-{ "topicPath": "/nav/odom" }
+{ "lichtblickPanelTitle": "Odometry message", "topicPath": "/nav/odom" }
 \`\`\`
 
 Optional diffing: \`diffEnabled\`, \`diffMethod\` (\`"custom"\` or \`"previous message"\`),

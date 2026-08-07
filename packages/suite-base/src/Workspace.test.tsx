@@ -37,6 +37,9 @@ import {
   type AgentProfile,
   selectAgentConfiguration,
 } from "@lichtblick/suite-base/services/agent/agentSettings";
+import * as localAgentClientModule from "@lichtblick/suite-base/services/agent/localAgentClient";
+import { invalidateAgentBootstrapCache } from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
+import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { parseAppURLState } from "@lichtblick/suite-base/util/appURLState";
 
 import Workspace from "./Workspace";
@@ -282,6 +285,10 @@ jest.mock("@lichtblick/suite-base/context/LayoutManagerContext", () => ({
     getLayouts: jest.fn().mockResolvedValue([]),
     deleteLayout: jest.fn().mockResolvedValue(undefined),
     saveNewLayout: jest.fn().mockResolvedValue({ id: "test-layout-id" }),
+    on: jest.fn(),
+    off: jest.fn(),
+    overwriteLayout: jest.fn(),
+    syncWithRemote: jest.fn(),
   }),
 }));
 jest.mock("@lichtblick/suite-base/context/PlayerSelectionContext", () => ({
@@ -433,6 +440,7 @@ function jsonResponse(data: unknown): Response {
       }),
     },
     headers: { get: () => undefined },
+    json: jest.fn(async () => JSON.parse(new TextDecoder().decode(bytes))),
     ok: true,
     status: 200,
     statusText: "OK",
@@ -963,6 +971,10 @@ describe("Workspace - fetchLayoutFromUrl", () => {
       getLayouts: mockGetLayouts,
       deleteLayout: mockDeleteLayout,
       saveNewLayout: jest.fn().mockResolvedValue({ id: "test-layout-id" }),
+      on: jest.fn(),
+      off: jest.fn(),
+      overwriteLayout: jest.fn(),
+      syncWithRemote: jest.fn(),
     });
     (useLayoutTransfer as jest.Mock).mockReturnValue({
       parseAndInstallLayout: mockParseAndInstallLayout,
@@ -1147,5 +1159,157 @@ describe("Workspace - fetchLayoutFromUrl", () => {
         variant: "error",
       });
     });
+  });
+});
+
+describe("Workspace - bootstrap invalidation wiring", () => {
+  const workspace = "ws-invalidate";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    localStorage.clear();
+    setHttpBaseUrl("http://localhost/lichtblick");
+    // An earlier describe restores global.fetch to its pre-mock value (undefined); re-establish
+    // the fetch mock for the bootstrap HTTP calls.
+    (global as { fetch?: unknown }).fetch = jest.fn();
+    mockAppConfiguration.get.mockImplementation((key: string) =>
+      key === AppSetting.VIZ_SERVER_WORKSPACE ? workspace : undefined,
+    );
+    (useMessagePipeline as jest.Mock).mockImplementation(
+      (selector: (ctx: typeof mockPipelineContext) => unknown) => selector(mockPipelineContext),
+    );
+    (useMessagePipelineGetter as jest.Mock).mockReturnValue(() => mockPipelineContext);
+    (useWorkspaceStore as jest.Mock).mockImplementation(
+      (selector: (store: typeof mockWorkspaceStore) => unknown) => selector(mockWorkspaceStore),
+    );
+    (useWorkspaceActions as jest.Mock).mockReturnValue(mockWorkspaceActions);
+    (usePlayerSelection as jest.Mock).mockReturnValue({
+      availableSources: [],
+      selectSource: jest.fn(),
+    });
+    (useAlertCount as jest.Mock).mockReturnValue({
+      playerAlerts: [],
+      sessionAlerts: [],
+      alertCount: 0,
+    });
+    (useHandleFiles as jest.Mock).mockReturnValue({ handleFiles: jest.fn() });
+    (useAppConfigurationValue as jest.Mock).mockImplementation((key: string) =>
+      agentAppConfigurationValue(key),
+    );
+    (useCurrentUser as jest.Mock).mockReturnValue({
+      currentUser: undefined,
+      signIn: undefined,
+    });
+    (useCurrentUserType as jest.Mock).mockReturnValue("unauthenticated");
+    (useEvents as jest.Mock).mockImplementation(
+      (selector: (store: { eventsSupported: boolean; selectEvent: jest.Mock }) => unknown) =>
+        selector({ eventsSupported: false, selectEvent: jest.fn() }),
+    );
+    (useAppContext as jest.Mock).mockReturnValue({
+      PerformanceSidebarComponent: undefined,
+      sidebarItems: [],
+      layoutBrowser: undefined,
+      workspaceStoreCreator: undefined,
+    });
+  });
+
+  afterEach(() => {
+    setHttpBaseUrl(undefined);
+    mockAppConfiguration.get.mockReset();
+  });
+
+  it("re-fetches immediately on bootstrap invalidation and serves the fresh server prompt", async () => {
+    // Seed the persisted cache so the initial poll sends known_version=v1; only the
+    // post-invalidation re-fetch must be a full fetch.
+    const cacheKey = "lichtblick.vizserver.agent-bootstrap.v1";
+    const seeded = JSON.stringify({
+      [workspace]: {
+        prompt: { customSkills: [], instructions: "server v1", skillOverrides: {} },
+        version: "v1",
+      },
+    });
+    if (seeded == undefined) {
+      throw new Error("Unable to serialize bootstrap fixture");
+    }
+    localStorage.setItem(cacheKey, seeded);
+
+    const bootstrapFetch = jest.fn(async (url: string | URL) => {
+      const urlString = String(url);
+      if (urlString.includes("/agent/bootstrap")) {
+        // The first poll carries the cached known_version; the post-invalidation re-fetch must
+        // omit it and receive the full new payload.
+        const hasKnownVersion = urlString.includes("known_version=");
+        const version = hasKnownVersion ? "v1" : "v2";
+        const instructions = hasKnownVersion ? "server v1" : "server v2";
+        return await Promise.resolve(
+          jsonResponse({
+            data: {
+              prompt: { customSkills: [], instructions, skillOverrides: {} },
+              version,
+            },
+            path: urlString,
+            timestamp: "2026-07-29T00:00:00.000Z",
+          }),
+        );
+      }
+      return await Promise.resolve(jsonResponse({ data: null }));
+    });
+    (global.fetch as jest.Mock).mockImplementation(bootstrapFetch);
+
+    const useLocalAgentClientSpy = jest.spyOn(localAgentClientModule, "useLocalAgentClient");
+    try {
+      render(<Workspace />);
+
+      // The initial bootstrap poll reaches the server.
+      await waitFor(() => {
+        expect(bootstrapFetch).toHaveBeenCalledTimes(1);
+      });
+      expect(String(bootstrapFetch.mock.calls[0]?.[0])).toContain("known_version=");
+
+      // The live prompt customization reflects the cached server payload.
+      const options = useLocalAgentClientSpy.mock.lastCall![1] as {
+        getPromptCustomization?: () => { instructions: string };
+      };
+      await waitFor(() => {
+        expect(options.getPromptCustomization?.().instructions).toBe("server v1");
+      });
+
+      // A server-side change (e.g. a deleted remote skill) invalidates the bootstrap cache…
+      invalidateAgentBootstrapCache(workspace);
+
+      // …and the Workspace subscription immediately re-fetches without known_version…
+      await waitFor(() => {
+        expect(bootstrapFetch).toHaveBeenCalledTimes(2);
+      });
+      expect(String(bootstrapFetch.mock.calls[1]?.[0])).not.toContain("known_version=");
+
+      // …updating the active serverCustomizationRef so the next turn serves the fresh prompt.
+      await waitFor(() => {
+        expect(options.getPromptCustomization?.().instructions).toBe("server v2");
+      });
+    } finally {
+      useLocalAgentClientSpy.mockRestore();
+    }
+  });
+
+  it("wires the message pipeline into the local agent client data-query deps", async () => {
+    const useLocalAgentClientSpy = jest.spyOn(localAgentClientModule, "useLocalAgentClient");
+    try {
+      render(<Workspace />);
+
+      await waitFor(() => {
+        expect(useLocalAgentClientSpy).toHaveBeenCalled();
+      });
+      const options = useLocalAgentClientSpy.mock.lastCall![1] as {
+        dataQuery?: { getContext: () => typeof mockPipelineContext };
+      };
+      // The adapter re-reads the pipeline on every call, so capability gating and the active
+      // time range stay current.
+      expect(options.dataQuery).toBeDefined();
+      expect(options.dataQuery!.getContext()).toBe(mockPipelineContext);
+      expect(options.dataQuery!.getContext().playerState).toBe(mockPipelineContext.playerState);
+    } finally {
+      useLocalAgentClientSpy.mockRestore();
+    }
   });
 });

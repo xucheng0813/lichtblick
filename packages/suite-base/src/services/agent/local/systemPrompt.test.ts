@@ -31,6 +31,13 @@ describe("LOCAL_AGENT_SYSTEM_PROMPT", () => {
     expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain("vtd_trigger");
   });
 
+  it("advertises the data-query capabilities in one sentence", () => {
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toMatch(
+      /read_messages[\s\S]*search_messages[\s\S]*playback_control/,
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain("data-query");
+  });
+
   it("derives the static panel list from ALLOWED_PANEL_TYPES", () => {
     const robotVizTypes = new Set([
       QUADRUPED_VIZ_PANEL_TYPE,

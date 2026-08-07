@@ -32,7 +32,7 @@ Configure under \`imageMode\`:
   \`visualization_msgs/ImageMarkerArray\`.
 
 \`\`\`json
-{ "imageMode": { "imageTopic": "/camera/image_raw", "calibrationTopic": "/camera/camera_info" } }
+{ "lichtblickPanelTitle": "Camera feed", "imageMode": { "imageTopic": "/camera/image_raw", "calibrationTopic": "/camera/camera_info" } }
 \`\`\`
 
 **Constraint:** without \`calibrationTopic\` the panel runs image-only and 3D overlays are not

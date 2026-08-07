@@ -24,7 +24,7 @@ but rows are rendered on demand. Prefer it for large messages or topics with man
 the plain \`RawMessages\` panel would render the whole tree eagerly.
 
 \`\`\`json
-{ "topicPath": "/nav/odom" }
+{ "lichtblickPanelTitle": "Odometry message", "topicPath": "/nav/odom" }
 \`\`\`
 
 Identical optional diffing fields as \`RawMessages\`: \`diffEnabled\`, \`diffMethod\`

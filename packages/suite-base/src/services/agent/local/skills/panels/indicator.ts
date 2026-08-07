@@ -30,6 +30,7 @@ this panel treats as no value and renders as the fallback color/label only — u
 
 \`\`\`json
 {
+  "lichtblickPanelTitle": "System health",
   "path": "/system/healthy.data",
   "style": "bulb",
   "fallbackColor": "#a0a0a0",

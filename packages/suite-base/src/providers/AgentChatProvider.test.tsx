@@ -22,6 +22,7 @@ import {
   AgentStreamProtocolError,
   AgentStreamSizeLimitError,
 } from "@lichtblick/suite-base/services/agent/AgentClient";
+import { computeLayoutFingerprint } from "@lichtblick/suite-base/services/agent/layoutDiff";
 import type { AgentConversationPersistence } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
 import type {
   AgentEvent,
@@ -146,6 +147,10 @@ function makeWrapper(
     onLoadVtdRecord?: (id: string) => Promise<void>;
     onSliceVtdRecord?: AgentChatState["actions"]["sliceVtdRecord"];
     onOpenDataSource?: (urls: string[], sessionId?: string) => void;
+    getCurrentLayoutState?: () => { id?: string; data?: unknown } | undefined;
+    getCatalog?: () => { topics: readonly unknown[]; datatypes: ReadonlyMap<string, unknown> };
+    subscribeToLayoutChanges?: (listener: () => void) => () => void;
+    subscribeToCatalogChanges?: (listener: () => void) => () => void;
     enabled?: boolean;
     persistence?: AgentConversationPersistence;
     profileName?: string;
@@ -157,6 +162,8 @@ function makeWrapper(
       <AgentChatProvider
         client={client}
         enabled={options.enabled}
+        getCatalog={options.getCatalog}
+        getCurrentLayoutState={options.getCurrentLayoutState}
         onApplyProposal={options.onApplyProposal}
         onGetVtdTopics={options.onGetVtdTopics}
         onLoadVtdRecord={options.onLoadVtdRecord}
@@ -164,6 +171,8 @@ function makeWrapper(
         onSliceVtdRecord={options.onSliceVtdRecord}
         persistence={options.persistence}
         selectedProfileName={options.profileName}
+        subscribeToCatalogChanges={options.subscribeToCatalogChanges}
+        subscribeToLayoutChanges={options.subscribeToLayoutChanges}
       >
         {children}
       </AgentChatProvider>
@@ -1542,6 +1551,251 @@ describe("AgentChatProvider", () => {
     expect(signal?.aborted).toBe(true);
     confirmation.resolve();
     await confirm;
+  });
+
+  it("computes the pending proposal display mode with the strict apply decision at enqueue time", async () => {
+    const harness = createClientHarness();
+    const currentLayoutData = {
+      configById: { "Image!camera": {} },
+      globalVariables: {},
+      layout: "Image!camera",
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    const catalog = { topics: [], datatypes: new Map() };
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, {
+        getCurrentLayoutState: () => ({ id: "layout-1", data: currentLayoutData }),
+        getCatalog: () => catalog,
+      }),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("propose panels");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+
+    // A proposal without a baseline is a new-layout proposal.
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-new",
+        proposal: validProposal("Fresh"),
+        requestId,
+        seq: 1,
+      });
+    });
+    expect(result.current.pendingProposalMode).toEqual({ kind: "new" });
+
+    // A proposal carrying a baseline that adds panels is an incremental proposal.
+    const incrementalProposal: LayoutProposal = {
+      ...validProposal("Panels"),
+      baseLayoutId: "layout-1",
+      baseFingerprint: computeLayoutFingerprint(currentLayoutData),
+      data: {
+        configById: {
+          "Image!camera": {},
+          "Plot!speed": { paths: [] },
+          "Gauge!battery": { path: "/battery" },
+        },
+        globalVariables: {},
+        layout: {
+          direction: "column",
+          first: "Image!camera",
+          second: {
+            direction: "row",
+            first: "Plot!speed",
+            second: "Gauge!battery",
+          },
+        },
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-incremental",
+        proposal: incrementalProposal,
+        requestId,
+        seq: 2,
+      });
+    });
+    expect(result.current.pendingProposalMode).toEqual({
+      kind: "incremental",
+      newPanelCount: 2,
+    });
+
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 3 });
+    });
+    await act(async () => {
+      await send;
+    });
+  });
+
+  it("recomputes the pending proposal mode when the layout changes", async () => {
+    const harness = createClientHarness();
+    const currentLayoutData = {
+      configById: { "Image!camera": {} },
+      globalVariables: {},
+      layout: "Image!camera",
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    const catalog = { topics: [], datatypes: new Map() };
+    let layoutChangeListener: (() => void) | undefined;
+    let currentLayout = currentLayoutData;
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, {
+        getCurrentLayoutState: () => ({ id: "layout-1", data: currentLayout }),
+        getCatalog: () => catalog,
+        subscribeToLayoutChanges: (listener) => {
+          layoutChangeListener = listener;
+          return () => {
+            layoutChangeListener = undefined;
+          };
+        },
+      }),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("propose panels");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    const incrementalProposal: LayoutProposal = {
+      ...validProposal("Panels"),
+      baseLayoutId: "layout-1",
+      baseFingerprint: computeLayoutFingerprint(currentLayoutData),
+      data: {
+        configById: {
+          "Image!camera": {},
+          "Plot!speed": { paths: [] },
+        },
+        globalVariables: {},
+        layout: { direction: "row", first: "Image!camera", second: "Plot!speed" },
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-incremental",
+        proposal: incrementalProposal,
+        requestId,
+        seq: 1,
+      });
+    });
+    expect(result.current.pendingProposalMode).toEqual({
+      kind: "incremental",
+      newPanelCount: 1,
+    });
+
+    // The user edits the layout while the proposal is pending: the label must flip to new-layout
+    // because the apply would now fall back (fingerprint mismatch).
+    act(() => {
+      currentLayout = { ...currentLayoutData, playbackConfig: { speed: 8 } };
+      layoutChangeListener?.();
+    });
+    expect(result.current.pendingProposalMode).toEqual({ kind: "new" });
+
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 2 });
+    });
+    await act(async () => {
+      await send;
+    });
+  });
+
+  it("recomputes the pending proposal mode when the catalog changes", async () => {
+    const harness = createClientHarness();
+    const currentLayoutData = {
+      configById: {
+        "Plot!speed": { paths: [{ value: "/missing.topic.x", enabled: true }] },
+      },
+      globalVariables: {},
+      layout: "Plot!speed",
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    const emptyCatalog: { topics: readonly unknown[]; datatypes: ReadonlyMap<string, unknown> } = {
+      topics: [],
+      datatypes: new Map(),
+    };
+    let catalog = emptyCatalog;
+    let catalogChangeListener: (() => void) | undefined;
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, {
+        getCurrentLayoutState: () => ({ id: "layout-1", data: currentLayoutData }),
+        getCatalog: () => catalog,
+        subscribeToCatalogChanges: (listener) => {
+          catalogChangeListener = listener;
+          return () => {
+            catalogChangeListener = undefined;
+          };
+        },
+      }),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("propose panels");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    const incrementalProposal: LayoutProposal = {
+      ...validProposal("Panels"),
+      baseLayoutId: "layout-1",
+      // Fingerprint over the sanitized layout with the EMPTY catalog (sanitize is identity).
+      baseFingerprint: computeLayoutFingerprint(currentLayoutData),
+      data: {
+        configById: {
+          "Plot!speed": { paths: [{ value: "/missing.topic.x", enabled: true }] },
+          "Gauge!battery": { path: "/battery" },
+        },
+        globalVariables: {},
+        layout: { direction: "column", first: "Plot!speed", second: "Gauge!battery" },
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-incremental",
+        proposal: incrementalProposal,
+        requestId,
+        seq: 1,
+      });
+    });
+    expect(result.current.pendingProposalMode).toEqual({
+      kind: "incremental",
+      newPanelCount: 1,
+    });
+
+    // The catalog changes while the proposal is pending: sanitization now drops the stale Plot
+    // path, the fingerprint no longer matches, and applying would fall back — the label must
+    // flip to new-layout.
+    act(() => {
+      catalog = { topics: [{ name: "/camera", schemaName: "sensor_msgs/Image" }], datatypes: new Map([["sensor_msgs/Image", { definitions: [] }]]) };
+      catalogChangeListener?.();
+    });
+    expect(result.current.pendingProposalMode).toEqual({ kind: "new" });
+
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 2 });
+    });
+    await act(async () => {
+      await send;
+    });
   });
 
   it("supersedes an unhandled proposal from the same request without leaving a queued copy", async () => {

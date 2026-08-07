@@ -20,6 +20,7 @@ import {
   PiAgentOrchestrator,
   type PiAgentOrchestratorOptions,
 } from "@lichtblick/suite-base/services/agent/pi/PiAgentOrchestrator";
+import type { ToolRuntimeDeps } from "@lichtblick/suite-base/services/agent/tools/toolRuntime";
 import DesktopVtdClient from "@lichtblick/suite-base/services/vtd/DesktopVtdClient";
 import HttpVtdClient from "@lichtblick/suite-base/services/vtd/HttpVtdClient";
 
@@ -31,19 +32,24 @@ const noPanels = (): readonly PanelInventoryEntry[] => [];
 export type AgentClientConfiguration = AgentConfiguration & {
   getCatalog: () => CatalogSnapshot;
   getCurrentLayout?: () => unknown;
+  getCurrentLayoutId?: () => string | undefined;
   getPanelInventory?: () => readonly PanelInventoryEntry[];
   memoryStore?: AgentMemoryStore;
   onHistoryChanged?: PiAgentOrchestratorOptions["onHistoryChanged"];
   restoreHistory?: PiAgentOrchestratorOptions["restoreHistory"];
   getPromptCustomization?: PiAgentOrchestratorOptions["getPromptCustomization"];
+  /** Loaded-data reading and playback control for read_messages / search_messages / playback_control. */
+  dataQuery?: ToolRuntimeDeps["dataQuery"];
 };
 
 export function createLocalAgentClient({
   apiKey,
   baseUrl,
+  dataQuery,
   desktop,
   getCatalog,
   getCurrentLayout,
+  getCurrentLayoutId,
   getPanelInventory,
   getPromptCustomization,
   memoryStore,
@@ -92,6 +98,8 @@ export function createLocalAgentClient({
     getPromptCustomization,
     getPanelInventory,
     getWorkspaceContext: () => summarizeWorkspace(getCatalog(), getCurrentLayout?.()),
+    getCurrentLayout,
+    getCurrentLayoutId,
     memoryStore,
     onHistoryChanged,
     restoreHistory,
@@ -100,6 +108,7 @@ export function createLocalAgentClient({
         getCatalog,
         memoryStore,
         vtdClient,
+        dataQuery,
       },
     },
   });
@@ -108,9 +117,11 @@ export function createLocalAgentClient({
 export function useLocalAgentClient(
   configuration: AgentConfiguration,
   {
+    dataQuery,
     enabled,
     getCatalog,
     getCurrentLayout,
+    getCurrentLayoutId,
     getPanelInventory,
     getPromptCustomization,
     memoryStore,
@@ -121,18 +132,21 @@ export function useLocalAgentClient(
     enabled: boolean;
     getCatalog: AgentClientConfiguration["getCatalog"];
     getCurrentLayout?: () => unknown;
+    getCurrentLayoutId?: () => string | undefined;
     getPanelInventory?: () => readonly PanelInventoryEntry[];
     memoryStore?: AgentMemoryStore;
     onHistoryChanged?: PiAgentOrchestratorOptions["onHistoryChanged"];
     profileId?: string;
     restoreHistory?: PiAgentOrchestratorOptions["restoreHistory"];
     getPromptCustomization?: PiAgentOrchestratorOptions["getPromptCustomization"];
+    dataQuery?: AgentClientConfiguration["dataQuery"];
   },
 ): PiAgentOrchestrator | undefined {
   const { apiKey, baseUrl, desktop, model, provider, vtdAuthToken, vtdEndpoint } =
     configuration;
   const stableGetCatalog = useLatestAgentCatalog(getCatalog);
   const stableGetCurrentLayout = useLatestGetter(getCurrentLayout ?? noLayout);
+  const stableGetCurrentLayoutId = useLatestGetter(getCurrentLayoutId ?? noLayout);
   const stableGetPanelInventory = useLatestGetter(getPanelInventory ?? noPanels);
   // The identity is a pure render value. Resource creation is deferred until a committed layout
   // effect, so an abandoned concurrent render cannot leak an orchestrator.
@@ -165,9 +179,11 @@ export function useLocalAgentClient(
     const client = createLocalAgentClient({
       apiKey: current.apiKey,
       baseUrl: current.baseUrl,
+      dataQuery,
       desktop: current.desktop,
       getCatalog: stableGetCatalog,
       getCurrentLayout: stableGetCurrentLayout,
+      getCurrentLayoutId: stableGetCurrentLayoutId,
       getPanelInventory: stableGetPanelInventory,
       getPromptCustomization,
       memoryStore,
@@ -193,7 +209,9 @@ export function useLocalAgentClient(
     onHistoryChanged,
     restoreHistory,
     stableGetCatalog,
+    dataQuery,
     stableGetCurrentLayout,
+    stableGetCurrentLayoutId,
     stableGetPanelInventory,
     valid,
   ]);

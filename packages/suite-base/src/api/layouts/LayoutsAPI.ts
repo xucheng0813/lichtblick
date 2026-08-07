@@ -18,6 +18,12 @@ import {
 } from "@lichtblick/suite-base/services/IRemoteLayoutStorage";
 import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
 import HttpService from "@lichtblick/suite-base/services/http/HttpService";
+import { getHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
+
+import {
+  resolveManagementBaseUrl,
+  resolveManagementEndpoint,
+} from "./managementBaseUrl";
 
 function toRemoteLayout(layout: LayoutApiResponse): RemoteLayout {
   return {
@@ -115,5 +121,28 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
       `${this.workspacePath}/${this.workspace}/layout/${id}`,
     );
     return deletedLayout.data != undefined;
+  }
+
+  /**
+   * Marks a remote layout as the organization default via the management API:
+   * `PUT {managementBase}/api/v1/layouts/{externalId}/default` with `{"is_default": true}`.
+   * The management base is derived from the configured viz-server URL (see
+   * resolveManagementBaseUrl); a cloud default is only the selection fallback and can be
+   * overridden by profile, URL, or injected defaults.
+   */
+  public async setDefaultLayout(externalId: string): Promise<void> {
+    const baseUrl = getHttpBaseUrl();
+    if (baseUrl == undefined || baseUrl === "") {
+      throw new Error("Viz server base URL is not configured");
+    }
+    const managementBase = resolveManagementBaseUrl(baseUrl);
+    if (managementBase == undefined) {
+      throw new Error(`Cannot resolve management base URL from "${baseUrl}"`);
+    }
+    const apiPath = `/api/v1/layouts/${encodeURIComponent(externalId)}/default`;
+    await HttpService.put(
+      resolveManagementEndpoint(baseUrl, managementBase, apiPath),
+      { is_default: true },
+    );
   }
 }

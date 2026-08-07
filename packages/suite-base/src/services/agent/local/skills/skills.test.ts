@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import generateRosLib from "@lichtblick/suite-base/players/UserScriptPlayer/transformerWorker/generateRosLib";
+import { generateTypesLib } from "@lichtblick/suite-base/players/UserScriptPlayer/transformerWorker/generateTypesLib";
+import transform from "@lichtblick/suite-base/players/UserScriptPlayer/transformerWorker/transform";
 import {
   AGENT_SAFE_LAYOUT_MAX_COLLECTION_ENTRIES,
   AGENT_SAFE_LAYOUT_MAX_CONFIG_BY_ID_ENTRIES,
@@ -398,6 +401,24 @@ describe("skill registry", () => {
     }
   });
 
+  it("documents the data-query tools: usage, first-error flow, live-source limits, and scan caps", () => {
+    const dataQuery = SKILL_REGISTRY.get("data-query")!;
+    expect(dataQuery.id).toBe("data-query");
+    // Indexed: the capability is advertised in the prompt index, not hidden behind a router.
+    expect(buildSkillIndex()).toContain("- data-query:");
+
+    for (const tool of ["read_messages", "search_messages", "playback_control"]) {
+      expect(dataQuery.body).toContain(tool);
+    }
+    // The first-error playbook: search level=error limit=1 then seek its receiveTimeNs.
+    expect(dataQuery.body).toMatch(/level: "error", limit: 1/);
+    expect(dataQuery.body).toMatch(/receiveTimeNs/);
+    // Live sources cannot be read; playback may be per-action unavailable.
+    expect(dataQuery.body).toMatch(/live source/);
+    expect(dataQuery.body).toMatch(/50,000/);
+    expect(dataQuery.body).toMatch(/decimal nanoseconds/);
+  });
+
   it("registers the complete collectd metric and conversion reference", () => {
     const collectd = SKILL_REGISTRY.get("collectd-metrics")!;
     expect(collectd.id).toBe("collectd-metrics");
@@ -483,5 +504,207 @@ describe("skill registry", () => {
     ]) {
       expect(collectd.body).toContain(metric);
     }
+  });
+
+  describe("user-scripts skill", () => {
+    it("is indexed in the prompt index", () => {
+      const index = buildSkillIndex();
+      expect(index).toContain("- user-scripts:");
+    });
+
+    it("documents the script format, constraints, and the NodePlayground exclusion", () => {
+      const userScripts = SKILL_REGISTRY.get("user-scripts")!;
+      expect(userScripts.whenToUse).toMatch(/derived|transformed|aggregated/i);
+      const body = userScripts.body;
+      // Format elements: inputs/output/default export with the collision-avoiding prefix.
+      expect(body).toContain("export const inputs");
+      expect(body).toContain("export const output");
+      expect(body).toContain("export default function");
+      expect(body).toContain("/studio_script/");
+      expect(body).toContain("must start with `/studio_script/`");
+      // Inputs come from the catalog, never from memory.
+      expect(body).toMatch(/inputs` must name real topics from the loaded catalog/);
+      // Scripts travel in userNodes with exactly { name, sourceCode }.
+      expect(body).toContain("userNodes");
+      expect(body).toContain("name` and `sourceCode`");
+      expect(body).toContain("Layout validation enforces exactly");
+      // Self-containment is a behavior convention, not a security control.
+      expect(body).toContain("no `fetch`");
+      expect(body).toMatch(/behavior convention, not a security control/);
+      // The return value must be an object: the pipeline derives the datatype from it, and a
+      // bare number/string return is rejected (BAD_TYPE_RETURN).
+      expect(body).toMatch(/must return an object with at least one field/);
+      expect(body).toContain("BAD_TYPE_RETURN");
+      // NodePlayground is never proposed.
+      expect(body).toContain("NodePlayground");
+      expect(body).toMatch(/must never be proposed/);
+      // The recorded risk decision is present.
+      expect(body).toMatch(/without CPU or loop limits/);
+    });
+
+    it("compiles a representative agent-generated script through the transformer worker", () => {
+      const sourceCode = `import { Input, Message } from "./types";
+
+type Twist = Message<"geometry_msgs/TwistStamped">;
+
+type Output = {
+  speedKmh: number;
+};
+
+export const inputs = ["/odom"];
+
+export const output = "/studio_script/speed_kmh";
+
+export default function script(event: Input<"/odom">): Output {
+  const twist: Twist = event.message;
+  return { speedKmh: twist.twist.linear.x * 3.6 };
+}`;
+      const topics = [{ name: "/odom", schemaName: "geometry_msgs/TwistStamped" }];
+      const datatypes = new Map([
+        [
+          "geometry_msgs/TwistStamped",
+          {
+            name: "geometry_msgs/TwistStamped",
+            definitions: [
+              {
+                arrayLength: undefined,
+                isArray: false,
+                isComplex: true,
+                name: "twist",
+                type: "geometry_msgs/Twist",
+              },
+            ],
+          },
+        ],
+        [
+          "geometry_msgs/Twist",
+          {
+            name: "geometry_msgs/Twist",
+            definitions: [
+              {
+                arrayLength: undefined,
+                isArray: false,
+                isComplex: true,
+                name: "linear",
+                type: "geometry_msgs/Vector3",
+              },
+            ],
+          },
+        ],
+        [
+          "geometry_msgs/Vector3",
+          {
+            name: "geometry_msgs/Vector3",
+            definitions: [
+              {
+                arrayLength: undefined,
+                isArray: false,
+                isComplex: false,
+                name: "x",
+                type: "float64",
+              },
+            ],
+          },
+        ],
+      ]);
+      // Run the full production pipeline (getOutputTopic → compile → getInputTopics →
+      // validateInputTopics → extractDatatypes → extractGlobalVariables), not just compile(): the
+      // return type must yield an object datatype or extractDatatypes reports BAD_TYPE_RETURN and
+      // the output topic is untyped.
+      const result = transform({
+        datatypes,
+        name: "speed-converter",
+        rosLib: generateRosLib({ topics, datatypes }),
+        sourceCode,
+        topics,
+        typesLib: generateTypesLib({ topics, datatypes }),
+      });
+
+      expect(result.diagnostics).toHaveLength(0);
+      expect(result.transpiledCode.length).toBeGreaterThan(0);
+      expect(result.inputTopics).toEqual(["/odom"]);
+      expect(result.outputTopic).toEqual("/studio_script/speed_kmh");
+      // The object return type derives a datatype named after the script, and it is registered.
+      expect(result.outputDatatype).toBe("speed-converter");
+      expect(result.datatypes.has("speed-converter")).toBe(true);
+    });
+  });
+
+  describe("layout panel titles", () => {
+    // Panels whose custom toolbar never renders the title (see the layout-authoring skill).
+    const TITLELESS_EXCEPTIONS = new Set(["Table", "RawMessages", "RawMessagesVirtual"]);
+
+    it("documents the lichtblickPanelTitle rule and its exceptions", () => {
+      const layoutAuthoring = SKILL_REGISTRY.get("layout-authoring")!.body;
+      expect(layoutAuthoring).toContain("lichtblickPanelTitle");
+      expect(layoutAuthoring).toMatch(/must include `lichtblickPanelTitle`/);
+      for (const exception of ["Table", "RawMessages", "RawMessagesVirtual"]) {
+        expect(layoutAuthoring).toContain(`\`${exception}\``);
+      }
+      // Extension panels write a title anyway.
+      expect(layoutAuthoring).toMatch(/Extension panels/);
+    });
+
+    it("gives every non-exception panel in the four pattern layouts a non-empty title", () => {
+      const examples = [
+        ROBOT_DEBUG_LAYOUT,
+        SENSOR_MONITORING_LAYOUT,
+        LOG_TROUBLESHOOTING_LAYOUT,
+        REPLAY_ANALYSIS_LAYOUT,
+      ];
+      for (const example of examples) {
+        for (const [panelId, config] of Object.entries(example.configById)) {
+          const panelType = panelId.slice(0, panelId.indexOf("!"));
+          if (TITLELESS_EXCEPTIONS.has(panelType)) {
+            continue;
+          }
+          const title = (config as { lichtblickPanelTitle?: unknown })
+            .lichtblickPanelTitle;
+          expect(typeof title).toBe("string");
+          expect((title as string).length).toBeGreaterThan(0);
+        }
+      }
+    });
+
+    it("leaves no title-less example config in the layout-authoring body", () => {
+      const body = SKILL_REGISTRY.get("layout-authoring")!.body;
+      const blocks = [...body.matchAll(/```json\n([\s\S]*?)\n```/g)]
+        .map((match) => match[1])
+        .filter((block): block is string => block != undefined);
+      expect(blocks.length).toBeGreaterThan(0);
+      let checkedConfigs = 0;
+      for (const block of blocks) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(block);
+        } catch {
+          // Placeholder examples (e.g. the Structure sketch with `/* panel config */`) are not
+          // parseable JSON; they carry no concrete panel config to check.
+          continue;
+        }
+        if (
+          typeof parsed !== "object" ||
+          parsed == undefined ||
+          Array.isArray(parsed) ||
+          typeof (parsed as { configById?: unknown }).configById !== "object" ||
+          (parsed as { configById?: unknown }).configById == undefined
+        ) {
+          // Split-only snippets without configById have nothing to check.
+          continue;
+        }
+        for (const [panelId, config] of Object.entries(
+          (parsed as { configById: Record<string, Record<string, unknown>> })
+            .configById,
+        )) {
+          const panelType = panelId.slice(0, panelId.indexOf("!"));
+          if (TITLELESS_EXCEPTIONS.has(panelType)) {
+            continue;
+          }
+          expect(typeof config.lichtblickPanelTitle).toBe("string");
+          checkedConfigs++;
+        }
+      }
+      expect(checkedConfigs).toBeGreaterThan(0);
+    });
   });
 });

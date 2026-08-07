@@ -22,7 +22,7 @@ export const PANEL_TABLE_SKILL: Skill = {
 MessagePath-based panel with exactly one config field: \`topicPath\`.
 
 \`\`\`json
-{ "topicPath": "/diagnostics.status" }
+{ "lichtblickPanelTitle": "Diagnostics status", "topicPath": "/diagnostics.status" }
 \`\`\`
 
 Latest message rendered as a table. The path must resolve to an **object or an array of objects**;

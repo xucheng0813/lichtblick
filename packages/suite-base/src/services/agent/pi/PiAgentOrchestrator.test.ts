@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-ai";
 
 import type { AgentConfiguration } from "@lichtblick/suite-base/services/agent/agentSettings";
+import { computeLayoutFingerprint } from "@lichtblick/suite-base/services/agent/layoutDiff";
 import type { AgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
 import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import type { AgentEvent } from "@lichtblick/suite-base/services/agent/types";
@@ -765,6 +766,114 @@ describe("PiAgentOrchestrator", () => {
     );
     await harness.client.notifyCatalogReady(harness.sessionId, "request-open");
     expect(call).toBe(3);
+
+    await stopSubscription(harness.abortSubscription, harness.subscription);
+    harness.client.dispose();
+  });
+
+  it("attaches the layout baseline to emitted layout proposals when a layout is selected", async () => {
+    const proposal = {
+      name: "Speed layout",
+      data: {
+        configById: { "Plot!speed": { paths: [{ value: "/speed" }] } },
+        layout: "Plot!speed",
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    const currentLayoutData = {
+      configById: { "Image!camera": { imageMode: { imageTopic: "/camera" } } },
+      layout: "Image!camera",
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    let call = 0;
+    const streamFn: StreamFn = async (model, context, options) => {
+      const next = [
+        toolCallStream("layout-1", "propose_layout", proposal),
+        successfulStream(["The layout is ready."]),
+      ][call++];
+      if (next == undefined) {
+        throw new Error("Unexpected extra pi provider round");
+      }
+      return await next(model, context, options);
+    };
+    const harness = await setup(streamFn, {
+      getCurrentLayout: () => currentLayoutData,
+      getCurrentLayoutId: () => "layout-1",
+      toolRuntime: makeToolRuntime({
+        deps: {
+          getCatalog: jest.fn().mockReturnValue({
+            topics: [],
+            datatypes: new Map(),
+          }),
+          vtdClient: makeVtdClient(),
+        },
+      }),
+    });
+
+    await harness.client.sendMessage(harness.sessionId, "add panels", "request-baseline");
+
+    const layoutEvent = harness.events.find((event) => event.type === "layout-proposal");
+    expect(layoutEvent).toBeDefined();
+    expect(layoutEvent).toEqual(
+      expect.objectContaining({
+        type: "layout-proposal",
+        proposal: expect.objectContaining({
+          baseLayoutId: "layout-1",
+          baseFingerprint: computeLayoutFingerprint(currentLayoutData),
+        }),
+      }),
+    );
+
+    await stopSubscription(harness.abortSubscription, harness.subscription);
+    harness.client.dispose();
+  });
+
+  it("omits the baseline when no layout is selected at proposal time", async () => {
+    let call = 0;
+    const streamFn: StreamFn = async (model, context, options) => {
+      const next = [
+        toolCallStream("layout-1", "propose_layout", {
+          name: "Fresh layout",
+          data: {
+            configById: {},
+            globalVariables: {},
+            playbackConfig: { speed: 1 },
+            userNodes: {},
+          },
+        }),
+        successfulStream(["Done."]),
+      ][call++];
+      if (next == undefined) {
+        throw new Error("Unexpected extra pi provider round");
+      }
+      return await next(model, context, options);
+    };
+    const harness = await setup(streamFn, {
+      getCurrentLayout: () => undefined,
+      getCurrentLayoutId: () => undefined,
+      toolRuntime: makeToolRuntime({
+        deps: {
+          getCatalog: jest.fn().mockReturnValue({
+            topics: [],
+            datatypes: new Map(),
+          }),
+          vtdClient: makeVtdClient(),
+        },
+      }),
+    });
+
+    await harness.client.sendMessage(harness.sessionId, "create layout", "request-no-baseline");
+
+    const layoutEvent = harness.events.find((event) => event.type === "layout-proposal");
+    expect(layoutEvent).toEqual(
+      expect.objectContaining({
+        proposal: expect.not.objectContaining({ baseLayoutId: expect.anything() }),
+      }),
+    );
 
     await stopSubscription(harness.abortSubscription, harness.subscription);
     harness.client.dispose();

@@ -8,6 +8,7 @@
 import {
   type MutableRefObject,
   type PropsWithChildren,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -27,6 +28,7 @@ import {
   AgentStreamProtocolError,
   AgentStreamSizeLimitError,
 } from "@lichtblick/suite-base/services/agent/AgentClient";
+import { computeProposalMode } from "@lichtblick/suite-base/services/agent/layoutDiff";
 import { validateLayoutProposal } from "@lichtblick/suite-base/services/agent/layoutSchema";
 import type { AgentConversationPersistence } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
 import type {
@@ -65,6 +67,24 @@ type AgentChatProviderProps = PropsWithChildren<{
     onProgress?: (progress: VtdSliceProgress) => void,
   ) => Promise<void>;
   onOpenDataSource?: (urls: string[], sessionId?: string) => void;
+  /**
+   * Current layout snapshot (id + data) used to compute the proposal card display mode with the
+   * same strict incremental decision as the apply path.
+   */
+  getCurrentLayoutState?: () => { id?: string; data?: unknown } | undefined;
+  /** Catalog snapshot used to validate+sanitize layout data for the mode computation. */
+  getCatalog?: () => { topics: readonly unknown[]; datatypes: ReadonlyMap<string, unknown> };
+  /**
+   * Subscribes to current-layout changes; the pending proposal mode is recomputed on every
+   * change so the card never shows a stale add-panels label after the layout was edited or
+   * switched. Returns an unsubscribe function.
+   */
+  subscribeToLayoutChanges?: (listener: () => void) => () => void;
+  /**
+   * Subscribes to catalog changes; the pending proposal mode depends on the catalog (sanitized
+   * fingerprints) and must be recomputed when it changes, matching what applying would decide.
+   */
+  subscribeToCatalogChanges?: (listener: () => void) => () => void;
 }>;
 
 type CallbackRefs = {
@@ -77,6 +97,10 @@ type CallbackRefs = {
     onProgress?: (progress: VtdSliceProgress) => void,
   ) => Promise<void>;
   onOpenDataSource?: (urls: string[], sessionId?: string) => void;
+  getCurrentLayoutState?: () => { id?: string; data?: unknown } | undefined;
+  getCatalog?: () => { topics: readonly unknown[]; datatypes: ReadonlyMap<string, unknown> };
+  subscribeToLayoutChanges?: (listener: () => void) => () => void;
+  subscribeToCatalogChanges?: (listener: () => void) => () => void;
 };
 
 type ProposalRecord = {
@@ -650,6 +674,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       pendingProposal: undefined,
       pendingProposalMessageId: undefined,
       pendingProposalRequestId: undefined,
+      pendingProposalMode: undefined,
       sessionId: undefined,
       status: "idle",
       waitingRequest: undefined,
@@ -1127,11 +1152,17 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
 
   function enqueueProposal(record: ProposalRecord): void {
     const state = store.getState();
+    const proposalMode = computeProposalMode(
+      record.proposal,
+      callbackRefs.current.getCurrentLayoutState?.(),
+      callbackRefs.current.getCatalog?.(),
+    );
     if (state.pendingProposal == undefined) {
       store.setState({
         pendingProposal: record.proposal,
         pendingProposalMessageId: record.messageId,
         pendingProposalRequestId: record.requestId,
+        pendingProposalMode: proposalMode,
       });
       return;
     }
@@ -1146,6 +1177,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         pendingProposal: record.proposal,
         pendingProposalMessageId: record.messageId,
         pendingProposalRequestId: record.requestId,
+        pendingProposalMode: proposalMode,
       });
       return;
     }
@@ -1159,6 +1191,14 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       pendingProposal: next?.proposal,
       pendingProposalMessageId: next?.messageId,
       pendingProposalRequestId: next?.requestId,
+      pendingProposalMode:
+        next == undefined
+          ? undefined
+          : computeProposalMode(
+              next.proposal,
+              callbackRefs.current.getCurrentLayoutState?.(),
+              callbackRefs.current.getCatalog?.(),
+            ),
     });
   }
 
@@ -1395,6 +1435,10 @@ export default function AgentChatProvider({
   onLoadVtdRecord,
   onSliceVtdRecord,
   onOpenDataSource,
+  getCurrentLayoutState,
+  getCatalog,
+  subscribeToLayoutChanges,
+  subscribeToCatalogChanges,
   persistence,
 }: AgentChatProviderProps): React.JSX.Element {
   const callbackRefs = useRef<CallbackRefs>({});
@@ -1408,6 +1452,8 @@ export default function AgentChatProvider({
       onLoadVtdRecord,
       onSliceVtdRecord,
       onOpenDataSource,
+      getCurrentLayoutState,
+      getCatalog,
     };
     return () => {
       callbackRefs.current = {};
@@ -1419,7 +1465,40 @@ export default function AgentChatProvider({
     onOpenDataSource,
     onSliceVtdRecord,
     selectedProfileName,
+    getCurrentLayoutState,
+    getCatalog,
   ]);
+
+  // The pending proposal mode must never go stale: when the user edits or switches the layout, or
+  // the catalog changes (sanitized fingerprints depend on it), while a proposal card is visible,
+  // recompute the label with the same strict decision the apply path will use.
+  useEffect(() => {
+    const recomputePendingProposalMode = (): void => {
+      const state = runtime.store.getState();
+      if (state.pendingProposal == undefined) {
+        return;
+      }
+      runtime.store.setState({
+        pendingProposalMode: computeProposalMode(
+          state.pendingProposal,
+          callbackRefs.current.getCurrentLayoutState?.(),
+          callbackRefs.current.getCatalog?.(),
+        ),
+      });
+    };
+    const unsubscribes: Array<() => void> = [];
+    if (subscribeToLayoutChanges != undefined) {
+      unsubscribes.push(subscribeToLayoutChanges(recomputePendingProposalMode));
+    }
+    if (subscribeToCatalogChanges != undefined) {
+      unsubscribes.push(subscribeToCatalogChanges(recomputePendingProposalMode));
+    }
+    return () => {
+      for (const unsubscribe of unsubscribes) {
+        unsubscribe();
+      }
+    };
+  }, [runtime, subscribeToCatalogChanges, subscribeToLayoutChanges]);
 
   useLayoutEffect(() => {
     runtime.store.setState({

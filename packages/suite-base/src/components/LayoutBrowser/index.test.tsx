@@ -254,6 +254,70 @@ describe("LayoutBrowser", () => {
     }
   });
 
+  it("wires onSetDefaultLayout only when viz-server is configured and loading finished", async () => {
+    globalThis.history.replaceState({}, "", "/?workspace=test-workspace");
+    const enqueueSnackbar = jest.fn();
+    (jest.requireMock("notistack").useSnackbar as jest.Mock).mockReturnValue({
+      enqueueSnackbar,
+    });
+    const put = jest.spyOn(HttpService, "put").mockResolvedValue({
+      data: undefined,
+      timestamp: new Date().toISOString(),
+      path: "",
+    });
+    const originalLayoutSectionMock = jest.requireMock("./LayoutSection").default;
+    const capturedProps: Record<string, unknown>[] = [];
+    jest.requireMock("./LayoutSection").default = jest
+      .fn()
+      .mockImplementation((props: Record<string, unknown>) => {
+        capturedProps.push(props);
+        return <div data-testid="layout-section" />;
+      });
+
+    try {
+      // viz-server not configured: the callback must be undefined so the menu entry never
+      // renders, regardless of loading state.
+      render(<LayoutBrowser />);
+      await waitFor(() => {
+        expect(capturedProps.length).toBeGreaterThan(0);
+      });
+      for (const props of capturedProps) {
+        expect(props.onSetDefaultLayout).toBeUndefined();
+      }
+      capturedProps.length = 0;
+
+      // viz-server configured: the callback is wired once layouts finish loading, and invoking it
+      // performs the real management API call with the fallback-semantics success message.
+      setHttpBaseUrl("http://viz.example.com:9903/lichtblick");
+      render(<LayoutBrowser />);
+      await waitFor(() => {
+        const last = capturedProps[capturedProps.length - 1];
+        expect(last?.onSetDefaultLayout).toBeDefined();
+      });
+      const onSetDefaultLayout = capturedProps[capturedProps.length - 1]!
+        .onSetDefaultLayout as (layout: Layout) => Promise<void>;
+      await act(async () => {
+        await onSetDefaultLayout(
+          LayoutBuilder.layout({
+            externalId: "remote-1",
+            permission: "CREATOR_WRITE",
+          }),
+        );
+      });
+      expect(put).toHaveBeenCalledWith(
+        "../api/v1/layouts/remote-1/default",
+        { is_default: true },
+      );
+      expect(enqueueSnackbar).toHaveBeenCalledWith(
+        "已设为组织默认视图（作为无本地选择时的默认 fallback）",
+        { variant: "success" },
+      );
+    } finally {
+      put.mockRestore();
+      jest.requireMock("./LayoutSection").default = originalLayoutSectionMock;
+    }
+  });
+
   describe("processAction useEffect", () => {
     let enqueueSnackbarMock: jest.Mock;
 

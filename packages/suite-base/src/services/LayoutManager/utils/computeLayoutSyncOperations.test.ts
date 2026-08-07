@@ -17,8 +17,11 @@ describe("computeLayoutSyncOperations", () => {
   const savedAt = "2023-01-01T00:00:00.000Z" as ISO8601Timestamp;
 
   describe("when local and remote layouts match", () => {
-    it("should upload new local layout when sync status is undefined for personal layouts", () => {
-      // Given
+    it("does NOT re-upload an existing personal-remote layout on every sync", () => {
+      // Given: a personal layout that already exists remotely (personal-remote). It has no
+      // syncInfo (the personal invariant), and uploading it via upload-new here could not record
+      // a sync state without breaking that invariant — so every sync would repeat the upload.
+      // Personal-remote edits are uploaded by the explicit save path (overwriteLayout) instead.
       const localLayout = LayoutBuilder.layout({
         id: layoutId,
         permission: "CREATOR_WRITE" as LayoutPermission,
@@ -30,12 +33,7 @@ describe("computeLayoutSyncOperations", () => {
       const operations = computeLayoutSyncOperations([localLayout], [remoteLayout]);
 
       // Then
-      expect(operations).toHaveLength(1);
-      expect(operations[0]).toMatchObject({
-        local: false,
-        type: "upload-new",
-        localLayout: expect.objectContaining({ id: layoutId }),
-      });
+      expect(operations).toEqual([]);
     });
 
     it("should skip shared layouts when sync status is undefined", () => {
@@ -54,8 +52,9 @@ describe("computeLayoutSyncOperations", () => {
       expect(operations).toEqual([]);
     });
 
-    it("should upload new local layout when sync status is new for personal layouts", () => {
-      // Given
+    it("does NOT upload a personal layout with sync status new when the remote already has it", () => {
+      // Given: personal layouts (including copies, which carry status "new") are uploaded
+      // exclusively through the explicit save path; the sync machinery never re-uploads them.
       const localLayout = LayoutBuilder.layout({
         id: layoutId,
         permission: "CREATOR_WRITE" as LayoutPermission,
@@ -67,12 +66,7 @@ describe("computeLayoutSyncOperations", () => {
       const operations = computeLayoutSyncOperations([localLayout], [remoteLayout]);
 
       // Then
-      expect(operations).toHaveLength(1);
-      expect(operations[0]).toMatchObject({
-        local: false,
-        type: "upload-new",
-        localLayout: expect.objectContaining({ id: layoutId }),
-      });
+      expect(operations).toEqual([]);
     });
 
     it("should upload updated local layout when sync status is updated", () => {

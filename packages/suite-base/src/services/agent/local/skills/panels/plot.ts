@@ -32,6 +32,7 @@ merged per-field. A path missing \`enabled\` is falsy and draws nothing.
 
 \`\`\`json
 {
+  "lichtblickPanelTitle": "IMU acceleration",
   "paths": [
     { "value": "/imu/data.linear_acceleration.x", "enabled": true, "timestampMethod": "receiveTime" }
   ]

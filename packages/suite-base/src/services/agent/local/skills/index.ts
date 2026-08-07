@@ -6,6 +6,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import { COLLECTD_METRICS_SKILL } from "./collectdMetrics";
+import { DATA_QUERY_SKILL } from "./dataQuery";
 import { LAYOUT_AUTHORING_SKILL } from "./layoutAuthoring";
 import { PANEL_CATALOG_SKILL } from "./panelCatalog";
 import { PANEL_3D_SKILL } from "./panels/3d";
@@ -23,6 +24,7 @@ import { PANEL_STATE_TRANSITIONS_SKILL } from "./panels/stateTransitions";
 import { PANEL_TABLE_SKILL } from "./panels/table";
 import { ROBOT_VIZ_SKILL } from "./robotViz";
 import type { Skill } from "./types";
+import { USER_SCRIPTS_SKILL } from "./userScripts";
 import { VTD_QUERY_SKILL } from "./vtdQuery";
 import { VTD_SLICE_SKILL } from "./vtdSlice";
 import { VTD_TRIGGER_SKILL } from "./vtdTrigger";
@@ -31,12 +33,14 @@ export type { Skill } from "./types";
 
 const SKILLS: readonly Skill[] = [
   COLLECTD_METRICS_SKILL,
+  DATA_QUERY_SKILL,
   VTD_QUERY_SKILL,
   VTD_SLICE_SKILL,
   VTD_TRIGGER_SKILL,
   PANEL_CATALOG_SKILL,
   ROBOT_VIZ_SKILL,
   LAYOUT_AUTHORING_SKILL,
+  USER_SCRIPTS_SKILL,
   // Per-panel reference detail. Marked indexed: false so the prompt index stays small; the
   // panel-catalog skill routes to them by id before any panel is proposed.
   PANEL_3D_SKILL,

@@ -10,6 +10,10 @@ import { LayoutID } from "@lichtblick/suite-base/context/CurrentLayoutContext";
 import { ISO8601Timestamp } from "@lichtblick/suite-base/services/ILayoutStorage";
 import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
 import HttpService from "@lichtblick/suite-base/services/http/HttpService";
+import {
+  getHttpBaseUrl,
+  setHttpBaseUrl,
+} from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { BasicBuilder } from "@lichtblick/test-builders";
 
 import { LayoutsAPI } from "./LayoutsAPI";
@@ -384,6 +388,83 @@ describe("LayoutsAPI", () => {
       mockHttpService.delete = mockDelete;
 
       await expect(layoutsAPI.deleteLayout("external-123")).rejects.toThrow("Delete failed");
+    });
+  });
+
+  describe("setDefaultLayout", () => {
+    const originalBaseUrl = getHttpBaseUrl();
+    afterEach(() => {
+      setHttpBaseUrl(originalBaseUrl);
+    });
+
+    it("PUTs the is_default flag to the management endpoint for a /lichtblick base", async () => {
+      setHttpBaseUrl("https://viz.example.com/lichtblick");
+      const mockPut = jest.fn().mockResolvedValue({
+        data: undefined,
+        timestamp: new Date().toISOString(),
+        path: "",
+      });
+      jest.mocked(HttpService).put = mockPut;
+
+      await layoutsAPI.setDefaultLayout("external-1");
+
+      expect(mockPut).toHaveBeenCalledWith(
+        "../api/v1/layouts/external-1/default",
+        { is_default: true },
+      );
+    });
+
+    it("uses the plain API path when the base has no /lichtblick segment", async () => {
+      setHttpBaseUrl("https://viz.example.com");
+      const mockPut = jest.fn().mockResolvedValue({
+        data: undefined,
+        timestamp: new Date().toISOString(),
+        path: "",
+      });
+      jest.mocked(HttpService).put = mockPut;
+
+      await layoutsAPI.setDefaultLayout("external-1");
+
+      expect(mockPut).toHaveBeenCalledWith(
+        "api/v1/layouts/external-1/default",
+        { is_default: true },
+      );
+    });
+
+    it("URL-encodes the external id", async () => {
+      setHttpBaseUrl("https://viz.example.com/lichtblick");
+      const mockPut = jest.fn().mockResolvedValue({
+        data: undefined,
+        timestamp: new Date().toISOString(),
+        path: "",
+      });
+      jest.mocked(HttpService).put = mockPut;
+
+      await layoutsAPI.setDefaultLayout("ext id/1");
+
+      expect(mockPut).toHaveBeenCalledWith(
+        "../api/v1/layouts/ext%20id%2F1/default",
+        { is_default: true },
+      );
+    });
+
+    it("rejects when no base URL is configured", async () => {
+      setHttpBaseUrl(undefined);
+
+      await expect(layoutsAPI.setDefaultLayout("external-1")).rejects.toThrow(
+        "Viz server base URL is not configured",
+      );
+    });
+
+    it("rejects an unparseable base URL without attempting a request", async () => {
+      setHttpBaseUrl("not a url");
+      const mockPut = jest.fn();
+      jest.mocked(HttpService).put = mockPut;
+
+      await expect(layoutsAPI.setDefaultLayout("external-1")).rejects.toThrow(
+        "Cannot resolve management base URL",
+      );
+      expect(mockPut).not.toHaveBeenCalled();
     });
   });
 });

@@ -101,6 +101,36 @@ function getPanelType(panelId: string): string | undefined {
   return panelId.slice(0, separator);
 }
 
+/**
+ * Agent-authored user scripts must be exactly `{ name, sourceCode }` per node — nothing else.
+ * Scripts execute through `new Function` in a SharedWorker (see UserScriptPlayer), so shape
+ * strictness here is part of the trust boundary: an unknown field would be silently carried
+ * into the player.
+ */
+function validateUserNodes(userNodes: Record<string, unknown>): void {
+  for (const [nodeId, node] of Object.entries(userNodes)) {
+    if (!isPlainObject(node)) {
+      throw new Error(`LayoutProposal.data.userNodes["${nodeId}"] must be an object`);
+    }
+    const keys = Object.keys(node);
+    if (keys.length !== 2 || !hasOwn(node, "name") || !hasOwn(node, "sourceCode")) {
+      throw new Error(
+        `LayoutProposal.data.userNodes["${nodeId}"] must contain exactly name and sourceCode`,
+      );
+    }
+    if (
+      typeof node.name !== "string" ||
+      node.name.length === 0 ||
+      typeof node.sourceCode !== "string" ||
+      node.sourceCode.length === 0
+    ) {
+      throw new Error(
+        `LayoutProposal.data.userNodes["${nodeId}"].name and .sourceCode must be non-empty strings`,
+      );
+    }
+  }
+}
+
 function validatePanelId(
   panelId: string,
   location: string,
@@ -366,6 +396,7 @@ function validateLayoutProposalDataWithOptions(
       throw new Error(`LayoutProposal.data.${field} must be an object`);
     }
   }
+  validateUserNodes(data.userNodes as Record<string, unknown>);
   if (
     !isPlainObject(data.playbackConfig) ||
     typeof data.playbackConfig.speed !== "number" ||
@@ -432,6 +463,20 @@ export function validateLayoutProposal(
   proposal: LayoutProposal,
   options?: ValidateLayoutProposalOptions,
 ): ValidatedLayoutProposal {
+  // typeof-based: `!= undefined` under loose equality treats null as absent and would accept it,
+  // which the wire-boundary validation must not (typeof null is "object" and is rejected).
+  if (
+    typeof proposal.baseLayoutId !== "undefined" &&
+    typeof proposal.baseLayoutId !== "string"
+  ) {
+    throw new Error("LayoutProposal.baseLayoutId must be a string");
+  }
+  if (
+    typeof proposal.baseFingerprint !== "undefined" &&
+    typeof proposal.baseFingerprint !== "string"
+  ) {
+    throw new Error("LayoutProposal.baseFingerprint must be a string");
+  }
   return {
     ...proposal,
     data: validateLayoutProposalDataWithOptions(proposal.data, options),

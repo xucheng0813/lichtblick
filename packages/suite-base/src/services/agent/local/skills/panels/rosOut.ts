@@ -40,7 +40,7 @@ schema merely converts to one of these does not qualify; the schema name must be
 exactly.
 
 \`\`\`json
-{ "topicToRender": "/rosout", "minLogLevel": 2, "searchTerms": ["wheel"], "nameFilter": {} }
+{ "lichtblickPanelTitle": "Logs", "topicToRender": "/rosout", "minLogLevel": 2, "searchTerms": ["wheel"], "nameFilter": {} }
 \`\`\`
 
 - \`topicToRender\` (optional): the topic to display. When omitted, the first available topic with a

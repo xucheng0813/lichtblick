@@ -27,7 +27,7 @@ empty chart. Do not propose this panel unless the catalog shows a \`float32\` ar
 Values are normalized to percentages of their sum. Slice labels come from \`legend1\`…\`legendN\`.
 
 \`\`\`json
-{ "path": "/diagnostics.distribution", "title": "Fault distribution", "legend1": "Nav", "legend2": "Perception" }
+{ "lichtblickPanelTitle": "Fault distribution", "path": "/diagnostics.distribution", "title": "Fault distribution", "legend1": "Nav", "legend2": "Perception" }
 \`\`\`
 
 For non-\`float32\` distributions, offer \`Plot\` or \`Table\` instead — see the panel-catalog

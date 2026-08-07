@@ -185,6 +185,119 @@ describe("LayoutRow rendering", () => {
     expect(screen.getByTestId("edit-layout-description")).toBeInTheDocument();
   });
 
+  it("shows set-as-organization-default for a writable remote layout without modifications", () => {
+    const onSetDefaultLayout = jest.fn();
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-layout",
+        syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+        working: undefined,
+      },
+      onSetDefaultLayout,
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.getByTestId("set-default-layout")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("set-default-layout"));
+    expect(onSetDefaultLayout).toHaveBeenCalledWith(
+      expect.objectContaining({ externalId: "remote-layout" }),
+    );
+  });
+
+  it("hides set-as-organization-default when viz-server is not configured", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-layout",
+        syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.queryByTestId("set-default-layout")).not.toBeInTheDocument();
+  });
+
+  it("hides set-as-organization-default for an ORG_READ layout", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-layout",
+        permission: "ORG_READ",
+        syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+        working: undefined,
+      },
+      onSetDefaultLayout: jest.fn(),
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.queryByTestId("set-default-layout")).not.toBeInTheDocument();
+  });
+
+  it("hides set-as-organization-default for a local layout without externalId", () => {
+    renderComponent({ onSetDefaultLayout: jest.fn() });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.queryByTestId("set-default-layout")).not.toBeInTheDocument();
+  });
+
+  it("hides set-as-organization-default for a layout with unsaved changes", () => {
+    // LayoutBuilder.layout already carries a working copy, so the default layout counts as
+    // modified without touching the field here.
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-layout",
+        syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+      },
+      anySelectedModifiedLayouts: false,
+      onSetDefaultLayout: jest.fn(),
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.queryByTestId("set-default-layout")).not.toBeInTheDocument();
+  });
+
+  it("hides set-as-organization-default for a remotely-deleted layout", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-layout",
+        syncInfo: {
+          status: "remotely-deleted" as const,
+          lastRemoteSavedAt: undefined,
+        },
+        working: undefined,
+      },
+      onSetDefaultLayout: jest.fn(),
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.queryByTestId("set-default-layout")).not.toBeInTheDocument();
+  });
+
+  it("hides set-as-organization-default during multi-selection", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-layout",
+        syncInfo: { status: "tracked" as const, lastRemoteSavedAt: undefined },
+      },
+      multiSelectedIds: [layoutId, "another-id"],
+      onSetDefaultLayout: jest.fn(),
+    });
+
+    fireEvent.click(screen.getByTestId("layout-actions"));
+
+    expect(screen.queryByTestId("set-default-layout")).not.toBeInTheDocument();
+  });
+
   it("submits the description from the dialog with the layout id", async () => {
     const onSetDescription = jest.fn().mockResolvedValue(true);
     const remoteLayout = {

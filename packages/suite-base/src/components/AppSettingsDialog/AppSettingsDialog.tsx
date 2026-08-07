@@ -49,8 +49,10 @@ import {
   AgentSettingsCommitHandler,
   AutoUpdate,
   ColorSchemeSettings,
+  ExtensionAutoUpdateOrgSetting,
   LanguageSettings,
   LaunchDefault,
+  LayoutAutoSaveToCloudSetting,
   MessageFramerate,
   StepSize,
   RosPackagePath,
@@ -166,6 +168,8 @@ export function AppSettingsDialog(
               <StepSize />
               <LanguageSettings />
               <VizServerSettings />
+              <ExtensionAutoUpdateOrgSetting />
+              <LayoutAutoSaveToCloudSetting />
               {supportsAppUpdates && <AutoUpdate />}
               {!isDesktopApp() && <LaunchDefault />}
               {isDesktopApp() && <RosPackagePath />}

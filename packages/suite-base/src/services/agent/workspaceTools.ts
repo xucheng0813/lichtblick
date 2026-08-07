@@ -5,13 +5,30 @@
 // License, v2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
+import { useSnackbar } from "notistack";
 import { useCallback, useMemo } from "react";
 
 import { useDataSourceInfo } from "@lichtblick/suite-base/PanelAPI";
 import { useCurrentLayoutActions } from "@lichtblick/suite-base/context/CurrentLayoutContext";
 import { useLayoutManager } from "@lichtblick/suite-base/context/LayoutManagerContext";
 import { usePlayerSelection } from "@lichtblick/suite-base/context/PlayerSelectionContext";
+import {
+  planIncrementalApply,
+  sanitizeLayoutData,
+} from "@lichtblick/suite-base/services/agent/layoutDiff";
 import { validateLayoutProposalData } from "@lichtblick/suite-base/services/agent/layoutSchema";
+import { sanitizePlotPaths } from "@lichtblick/suite-base/services/agent/sanitizePlotPaths";
+
+export type ApplyLayoutOptions = {
+  /**
+   * Baseline captured at proposal time: the layout id the agent based its proposal on and the
+   * stable fingerprint of its data. When both are present, still match, and the proposal is a
+   * strict superset of the current layout, the panels are added in place (atomic reducer action,
+   * selection unchanged); otherwise the full path (save a new layout and switch) is taken.
+   */
+  baseLayoutId?: string;
+  baseFingerprint?: string;
+};
 
 export type AgentWorkspaceTools = {
   openDataSource(urls: string[]): void;
@@ -19,16 +36,18 @@ export type AgentWorkspaceTools = {
     topics: readonly unknown[];
     datatypes: ReadonlyMap<string, unknown>;
   };
-  applyLayout(name: string, data: unknown): Promise<void>;
+  applyLayout(name: string, data: unknown, options?: ApplyLayoutOptions): Promise<void>;
   getCurrentLayout(): unknown;
+  getCurrentLayoutId(): string | undefined;
 };
 
 export function useAgentWorkspaceTools(): AgentWorkspaceTools {
   const { selectSource } = usePlayerSelection();
   const layoutManager = useLayoutManager();
-  const { getCurrentLayoutState, setSelectedLayoutId } =
+  const { addPanelsAtomically, getCurrentLayoutState, setSelectedLayoutId } =
     useCurrentLayoutActions();
   const { datatypes, topics } = useDataSourceInfo();
+  const { enqueueSnackbar } = useSnackbar();
 
   const openDataSource = useCallback(
     (urls: string[]) => {
@@ -59,11 +78,45 @@ export function useAgentWorkspaceTools(): AgentWorkspaceTools {
   }, [datatypes, topics]);
 
   const applyLayout = useCallback(
-    async (name: string, data: unknown) => {
+    async (name: string, data: unknown, options?: ApplyLayoutOptions) => {
       const validatedData = validateLayoutProposalData(data);
+      // 结构校验后、保存前，按已加载数据过滤 Plot paths（topic/字段链/终止类型存在性）。
+      // 数据源未加载或结构构建异常时不过滤；丢弃时向用户给出摘要提示。
+      const { data: sanitizedData, droppedCount } = sanitizePlotPaths(
+        validatedData,
+        topics,
+        datatypes,
+      );
+      if (droppedCount > 0) {
+        enqueueSnackbar(`已忽略 ${droppedCount} 条无效曲线`, { variant: "info" });
+      }
+
+      // Fast path: the proposal is a strict superset of the layout it was based on and that
+      // layout is still selected unchanged. Add the panels atomically in place; the selection
+      // id stays, the edit flows through the normal debounced save (N2 auto cloud-save included).
+      // Any mismatch falls back to the full path below. Fallback semantics for a mis-apply is
+      // the whole-layout Revert; there is no fine-grained undo.
+      const current = getCurrentLayoutState().selectedLayout;
+      const plan = planIncrementalApply({
+        baseLayoutId: options?.baseLayoutId,
+        baseFingerprint: options?.baseFingerprint,
+        currentLayoutId: current?.id,
+        // The current layout goes through the same validate+sanitize pipeline as the proposal,
+        // so a base layout with stale Plot paths compares equal to the sanitized proposal.
+        currentLayoutData:
+          current?.data == undefined
+            ? undefined
+            : sanitizeLayoutData(current.data, { topics, datatypes }),
+        proposalData: sanitizedData,
+      });
+      if (plan != undefined) {
+        addPanelsAtomically({ layout: plan.layout, configs: plan.newPanelConfigs });
+        return;
+      }
+
       const layout = await layoutManager.saveNewLayout({
         name,
-        data: validatedData,
+        data: sanitizedData,
         permission: "CREATOR_WRITE",
       });
 
@@ -72,12 +125,24 @@ export function useAgentWorkspaceTools(): AgentWorkspaceTools {
       // truthfully reported to Agent Chat as completed here.
       setSelectedLayoutId(layout.id);
     },
-    [layoutManager, setSelectedLayoutId],
+    [
+      addPanelsAtomically,
+      datatypes,
+      enqueueSnackbar,
+      getCurrentLayoutState,
+      layoutManager,
+      setSelectedLayoutId,
+      topics,
+    ],
   );
 
   const getCurrentLayout = useCallback(() => {
     // Reserved for protocol-v1 context/catalog reporting before requesting a replacement layout.
     return getCurrentLayoutState().selectedLayout?.data;
+  }, [getCurrentLayoutState]);
+
+  const getCurrentLayoutId = useCallback(() => {
+    return getCurrentLayoutState().selectedLayout?.id;
   }, [getCurrentLayoutState]);
 
   return useMemo(
@@ -86,7 +151,8 @@ export function useAgentWorkspaceTools(): AgentWorkspaceTools {
       getCatalog,
       applyLayout,
       getCurrentLayout,
+      getCurrentLayoutId,
     }),
-    [applyLayout, getCatalog, getCurrentLayout, openDataSource],
+    [applyLayout, getCatalog, getCurrentLayout, getCurrentLayoutId, openDataSource],
   );
 }

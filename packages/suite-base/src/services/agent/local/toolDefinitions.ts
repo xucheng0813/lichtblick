@@ -313,4 +313,61 @@ export const LOCAL_AGENT_TOOL_DEFINITIONS: LlmToolDef[] = [
       },
     },
   },
+  {
+    name: "read_messages",
+    description:
+      "Read the latest loaded messages of one topic (optionally bounded by time), in receive order. " +
+      "Only iterable recordings support this; live sources error out. Times are decimal nanoseconds.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic"],
+      properties: {
+        topic: nonEmptyString,
+        start: decimalNanoseconds,
+        end: decimalNanoseconds,
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+    },
+  },
+  {
+    name: "search_messages",
+    description:
+      "Search the loaded messages of one topic for a text substring and/or a log level (at least one " +
+      "required; both are AND). Log hits are matched on the normalized message and level; other " +
+      "schemas on the serialized payload. Hits report receiveTimeNs for seeking.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic"],
+      // At least one of text or level is required; both act as AND when given.
+      anyOf: [{ required: ["text"] }, { required: ["level"] }],
+      properties: {
+        topic: nonEmptyString,
+        text: nonEmptyString,
+        level: {
+          type: "string",
+          enum: ["debug", "info", "warn", "error", "fatal", "unknown"],
+        },
+        start: decimalNanoseconds,
+        end: decimalNanoseconds,
+        limit: { type: "integer", minimum: 1, maximum: 20 },
+      },
+    },
+  },
+  {
+    name: "playback_control",
+    description:
+      "Control playback of the loaded data source: seek to a time (decimal nanoseconds; clamped to " +
+      "the loaded range and the accepted target is returned), play, or pause.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["seek", "play", "pause"] },
+        time: decimalNanoseconds,
+      },
+    },
+  },
 ];

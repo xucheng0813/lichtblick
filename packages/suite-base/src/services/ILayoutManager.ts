@@ -101,4 +101,11 @@ export interface ILayoutManager {
 
   /** Transfer a shared layout's working changes into a new personal layout. */
   makePersonalCopy(params: { id: LayoutID; name: string }): Promise<Layout>;
+
+  /**
+   * Synchronize the local cache with remote storage, abortable via the given signal. At minimum
+   * this fetches both layout lists; it may also upload, download, or delete layouts. Used by the
+   * periodic sync loop and by on-demand kicks such as the cloud auto-save adapter.
+   */
+  syncWithRemote(abortSignal: AbortSignal): Promise<void>;
 }

@@ -46,6 +46,16 @@ export const appSettings = {
   agentPromptSaved: "Saved.",
   agentRemoteSkillAutomatic: "Automatic",
   agentRemoteSkillCollapse: "Collapse {{name}}",
+  agentRemoteSkillDelete: "Delete from organization",
+  agentRemoteSkillDeleteCancel: "Cancel",
+  agentRemoteSkillDeleteConfirm: "Delete from organization",
+  agentRemoteSkillDeleteConfirmMessage:
+    "Deleting {{name}} removes it for everyone in the organization. The server currently has no authentication, so anyone with access can delete it. This cannot be undone.",
+  agentRemoteSkillDeleteConfirmTitle: "Delete cloud skill {{name}}?",
+  agentRemoteSkillDeleteFailed: "Could not delete cloud skill: {{error}}",
+  agentRemoteSkillDeleteSucceeded: "Cloud skill deleted.",
+  agentRemoteSkillDeleteUnsupported:
+    "The server does not support deleting cloud skills yet. Upgrade viz-server to enable this.",
   agentRemoteSkillExpand: "Expand {{name}}",
   agentRemoteSkillInstall: "Install locally",
   agentRemoteSkillInstallBodyTooLong:
@@ -135,12 +145,18 @@ export const appSettings = {
   debugModeDescription: "Enable panels and features for debugging Lichtblick",
   desktopApp: "Desktop app",
   displayTimestampsIn: "Display timestamps in",
+  extensionAutoUpdateOrg: "Auto-update organization extensions",
+  extensionAutoUpdateOrgDescription:
+    "Periodically check for organization extension updates while running (startup updates are unaffected).",
   experimentalFeatures: "Experimental features",
   experimentalFeaturesDescription: "These features are unstable and not recommended for daily use.",
   extensions: "Extensions",
   followSystem: "Follow system",
   general: "General",
   language: "Language",
+  layoutAutoSaveToCloud: "Auto-save current remote layout to cloud",
+  layoutAutoSaveToCloudDescription:
+    "Automatically save changes to the current remote layout to the cloud (concurrent edits from multiple clients are last-write-wins).",
   layoutDebugging: "Layout debugging",
   layoutDebuggingDescription: "Show extra controls for developing and debugging layout storage.",
   light: "Light",

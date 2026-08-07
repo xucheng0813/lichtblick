@@ -8,14 +8,20 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import { renderHook } from "@testing-library/react";
+import { useSnackbar } from "notistack";
 
 import { useDataSourceInfo } from "@lichtblick/suite-base/PanelAPI";
 import { useCurrentLayoutActions } from "@lichtblick/suite-base/context/CurrentLayoutContext";
 import { useLayoutManager } from "@lichtblick/suite-base/context/LayoutManagerContext";
 import { usePlayerSelection } from "@lichtblick/suite-base/context/PlayerSelectionContext";
 
+import { computeLayoutFingerprint, sanitizeLayoutData } from "./layoutDiff";
 import { useAgentWorkspaceTools } from "./workspaceTools";
 
+jest.mock("notistack", () => ({
+  ...jest.requireActual("notistack"),
+  useSnackbar: jest.fn(),
+}));
 jest.mock("@lichtblick/suite-base/PanelAPI", () => ({
   useDataSourceInfo: jest.fn(),
 }));
@@ -33,19 +39,24 @@ describe("useAgentWorkspaceTools", () => {
   const selectSource = jest.fn();
   const saveNewLayout = jest.fn();
   const setSelectedLayoutId = jest.fn();
+  const addPanelsAtomically = jest.fn();
   const getCurrentLayoutState = jest.fn();
+  const enqueueSnackbar = jest.fn();
   const topics = [{ name: "/camera", schemaName: "sensor_msgs/Image" }];
   const datatypes = new Map([["sensor_msgs/Image", { definitions: [] }]]);
 
   beforeEach(() => {
     jest.resetAllMocks();
 
+    (useSnackbar as jest.Mock).mockReturnValue({ enqueueSnackbar });
     (usePlayerSelection as jest.Mock).mockReturnValue({ selectSource });
     (useLayoutManager as jest.Mock).mockReturnValue({ saveNewLayout });
     (useCurrentLayoutActions as jest.Mock).mockReturnValue({
+      addPanelsAtomically,
       getCurrentLayoutState,
       setSelectedLayoutId,
     });
+    getCurrentLayoutState.mockReturnValue({ selectedLayout: undefined });
     (useDataSourceInfo as jest.Mock).mockReturnValue({ topics, datatypes });
   });
 
@@ -157,7 +168,71 @@ describe("useAgentWorkspaceTools", () => {
     });
 
     expect(setSelectedLayoutId).toHaveBeenCalledWith(layout.id);
-    expect(getCurrentLayoutState).not.toHaveBeenCalled();
+    // The incremental attempt consults the current layout; the public selection API is still
+    // not awaited (returns void), so nothing after it can be truthfully reported.
+    expect(getCurrentLayoutState).toHaveBeenCalled();
+  });
+
+  it("drops invalid Plot paths against the loaded catalog and reports a snackbar summary", async () => {
+    const layoutData = {
+      configById: {
+        "Plot!agent": {
+          paths: [
+            { value: "/nonexistent.x", enabled: true, timestampMethod: "receiveTime" },
+            { value: "/camera.data", enabled: true, timestampMethod: "receiveTime" },
+          ],
+        },
+      },
+      globalVariables: {},
+      layout: "Plot!agent",
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    const layout = { id: "layout-id" };
+    saveNewLayout.mockResolvedValue(layout);
+    const { result } = renderHook(() => useAgentWorkspaceTools());
+
+    await result.current.applyLayout("Agent layout", layoutData);
+
+    // /nonexistent.x：topic 不存在 → 丢弃；/camera.data：schema 存在于 datatypes 但
+    // 无 data 字段且终止类型不可绘制 → 丢弃。两条均无效，paths 置空并阻止 auto-seed。
+    expect(enqueueSnackbar).toHaveBeenCalledWith("已忽略 2 条无效曲线", { variant: "info" });
+    expect(saveNewLayout).toHaveBeenCalledWith({
+      name: "Agent layout",
+      data: expect.objectContaining({
+        configById: expect.objectContaining({
+          "Plot!agent": { paths: [], autoSeeded: true },
+        }),
+      }),
+      permission: "CREATOR_WRITE",
+    });
+  });
+
+  it("does not filter Plot paths when no data source is loaded", async () => {
+    (useDataSourceInfo as jest.Mock).mockReturnValue({ topics: [], datatypes: new Map() });
+    const layoutData = {
+      configById: {
+        "Plot!agent": {
+          paths: [{ value: "/anything.x", enabled: true, timestampMethod: "receiveTime" }],
+        },
+      },
+      globalVariables: {},
+      layout: "Plot!agent",
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    const layout = { id: "layout-id" };
+    saveNewLayout.mockResolvedValue(layout);
+    const { result } = renderHook(() => useAgentWorkspaceTools());
+
+    await result.current.applyLayout("Agent layout", layoutData);
+
+    expect(enqueueSnackbar).not.toHaveBeenCalled();
+    expect(saveNewLayout).toHaveBeenCalledWith({
+      name: "Agent layout",
+      data: layoutData,
+      permission: "CREATOR_WRITE",
+    });
   });
 
   it("returns the selected layout data", () => {
@@ -168,5 +243,176 @@ describe("useAgentWorkspaceTools", () => {
     const { result } = renderHook(() => useAgentWorkspaceTools());
 
     expect(result.current.getCurrentLayout()).toBe(layoutData);
+  });
+
+  it("returns the selected layout id", () => {
+    getCurrentLayoutState.mockReturnValue({
+      selectedLayout: { id: "layout-id", data: {} },
+    });
+    const { result } = renderHook(() => useAgentWorkspaceTools());
+
+    expect(result.current.getCurrentLayoutId()).toBe("layout-id");
+  });
+
+  describe("incremental apply", () => {
+    const currentLayout = {
+      configById: {
+        "Image!camera": { imageMode: { imageTopic: "/camera" } },
+      },
+      layout: "Image!camera",
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    const proposalWithExtraPanel = {
+      configById: {
+        "Image!camera": { imageMode: { imageTopic: "/camera" } },
+        "Gauge!battery": { path: "/battery.percentage", minValue: 0, maxValue: 100 },
+        "Table!status": { topicPath: "/diagnostics" },
+      },
+      layout: {
+        direction: "column",
+        first: {
+          direction: "row",
+          first: "Image!camera",
+          second: "Gauge!battery",
+          splitPercentage: 60,
+        },
+        second: "Table!status",
+        splitPercentage: 70,
+      },
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    const baseFingerprint = computeLayoutFingerprint(currentLayout);
+
+    beforeEach(() => {
+      getCurrentLayoutState.mockReturnValue({
+        selectedLayout: { id: "layout-1", data: currentLayout },
+      });
+      saveNewLayout.mockResolvedValue({ id: "new-layout-id" });
+    });
+
+    it("applies a strict superset in place without saving a new layout", async () => {
+      const { result } = renderHook(() => useAgentWorkspaceTools());
+
+      await result.current.applyLayout("Agent layout", proposalWithExtraPanel, {
+        baseLayoutId: "layout-1",
+        baseFingerprint,
+      });
+
+      expect(addPanelsAtomically).toHaveBeenCalledWith({
+        layout: proposalWithExtraPanel.layout,
+        configs: {
+          "Gauge!battery": { path: "/battery.percentage", minValue: 0, maxValue: 100 },
+          "Table!status": { topicPath: "/diagnostics" },
+        },
+      });
+      expect(saveNewLayout).not.toHaveBeenCalled();
+      expect(setSelectedLayoutId).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the full path when the fingerprint does not match", async () => {
+      const { result } = renderHook(() => useAgentWorkspaceTools());
+
+      await result.current.applyLayout("Agent layout", proposalWithExtraPanel, {
+        baseLayoutId: "layout-1",
+        baseFingerprint: "deadbeef",
+      });
+
+      expect(addPanelsAtomically).not.toHaveBeenCalled();
+      expect(saveNewLayout).toHaveBeenCalledWith({
+        name: "Agent layout",
+        data: proposalWithExtraPanel,
+        permission: "CREATOR_WRITE",
+      });
+      expect(setSelectedLayoutId).toHaveBeenCalledWith("new-layout-id");
+    });
+
+    it("falls back to the full path when the selected layout id differs from the baseline", async () => {
+      const { result } = renderHook(() => useAgentWorkspaceTools());
+
+      await result.current.applyLayout("Agent layout", proposalWithExtraPanel, {
+        baseLayoutId: "layout-other",
+        baseFingerprint,
+      });
+
+      expect(addPanelsAtomically).not.toHaveBeenCalled();
+      expect(saveNewLayout).toHaveBeenCalled();
+    });
+
+    it("falls back to the full path when the proposal carries no baseline", async () => {
+      const { result } = renderHook(() => useAgentWorkspaceTools());
+
+      await result.current.applyLayout("Agent layout", proposalWithExtraPanel);
+
+      expect(addPanelsAtomically).not.toHaveBeenCalled();
+      expect(saveNewLayout).toHaveBeenCalled();
+    });
+
+    it("falls back to the full path when the proposal changed userNodes", async () => {
+      const proposal = {
+        ...proposalWithExtraPanel,
+        userNodes: {
+          "script-1": { name: "Speed", sourceCode: "export default () => {}" },
+        },
+      };
+      const { result } = renderHook(() => useAgentWorkspaceTools());
+
+      await result.current.applyLayout("Agent layout", proposal, {
+        baseLayoutId: "layout-1",
+        baseFingerprint,
+      });
+
+      expect(addPanelsAtomically).not.toHaveBeenCalled();
+      expect(saveNewLayout).toHaveBeenCalled();
+    });
+
+    it("applies incrementally even when the base layout carries stale Plot paths", async () => {
+      // The loaded catalog only has /camera; the Plot path is invalid and sanitize drops it from
+      // both the current layout and the proposal, so the strict diff still succeeds — the base
+      // layout is not unnecessarily sent through the full path.
+      const stalePlotLayout = {
+        configById: {
+          "Plot!speed": { paths: [{ value: "/odom.twist.twist.linear.x", enabled: true }] },
+        },
+        layout: "Plot!speed",
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      };
+      const stalePlotProposal = {
+        configById: {
+          "Plot!speed": { paths: [{ value: "/odom.twist.twist.linear.x", enabled: true }] },
+          "Gauge!battery": { path: "/battery", minValue: 0, maxValue: 100 },
+        },
+        layout: {
+          direction: "column",
+          first: "Plot!speed",
+          second: "Gauge!battery",
+          splitPercentage: 70,
+        },
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      };
+      getCurrentLayoutState.mockReturnValue({
+        selectedLayout: { id: "layout-1", data: stalePlotLayout },
+      });
+      const { result } = renderHook(() => useAgentWorkspaceTools());
+
+      await result.current.applyLayout("Agent layout", stalePlotProposal, {
+        baseLayoutId: "layout-1",
+        // Same pipeline as the apply path: fingerprint over the sanitized base layout.
+        baseFingerprint: computeLayoutFingerprint(
+          sanitizeLayoutData(stalePlotLayout, { topics, datatypes })!,
+        ),
+      });
+
+      expect(addPanelsAtomically).toHaveBeenCalledTimes(1);
+      expect(saveNewLayout).not.toHaveBeenCalled();
+      expect(setSelectedLayoutId).not.toHaveBeenCalled();
+    });
   });
 });

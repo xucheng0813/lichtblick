@@ -7,10 +7,17 @@ import {
   ISO8601Timestamp,
   LayoutPermission,
 } from "@lichtblick/suite-base/services/ILayoutStorage";
-import { IRemoteLayoutStorage } from "@lichtblick/suite-base/services/IRemoteLayoutStorage";
+import {
+  IRemoteLayoutStorage,
+  RemoteLayout,
+} from "@lichtblick/suite-base/services/IRemoteLayoutStorage";
 import LayoutManager from "@lichtblick/suite-base/services/LayoutManager/LayoutManager";
 import LayoutBuilder from "@lichtblick/suite-base/testing/builders/LayoutBuilder";
 import { BasicBuilder } from "@lichtblick/test-builders";
+
+jest.mock("@lichtblick/log", () => ({
+  getLogger: jest.fn(() => ({ debug: jest.fn(), error: jest.fn(), info: jest.fn(), warn: jest.fn() })),
+}));
 
 describe("LayoutManager", () => {
   let mockLocalStorage: jest.Mocked<ILayoutStorage>;
@@ -850,21 +857,22 @@ describe("LayoutManager", () => {
       expect(mockRemoteStorage.updateLayout).not.toHaveBeenCalled();
     });
 
-    it("should overwrite non-shared layout and mark as updated when remote storage exists", async () => {
-      // Given
+    it("should overwrite a purely-local personal layout without remote calls", async () => {
+      // Given: a personal layout with no externalId — it does not exist on the remote, so the
+      // explicit save stays local (no upload, no syncInfo).
       const layoutId = LayoutBuilder.layoutId();
       const localLayout = LayoutBuilder.layout({
         id: layoutId,
         permission: "CREATOR_WRITE",
-        syncInfo: {
-          status: "tracked",
-          lastRemoteSavedAt: "2023-01-01T00:00:00Z" as ISO8601Timestamp,
-        },
+        syncInfo: undefined,
         working: {
           data: LayoutBuilder.data(),
           savedAt: "2023-01-01T00:00:00Z" as ISO8601Timestamp,
         },
       });
+      // LayoutBuilder fills defaults for missing fields; a purely-local personal layout has no
+      // externalId (it has never been uploaded).
+      delete (localLayout as Partial<typeof localLayout>).externalId;
 
       // Include the layout in the list results for the cache
       mockLocalStorage.list.mockResolvedValue([localLayout]);
@@ -1075,6 +1083,259 @@ describe("LayoutManager", () => {
 
       // Then
       expect(layoutManager.error).toBe(undefined);
+    });
+
+    it("uploads a committed shared edit and clears working (working→baseline→remote→清 working)", async () => {
+      // Given: a shared layout whose edit has landed in working (debounced updateLayout) and was
+      // then committed with the explicit-save semantics (overwriteLayout) — the auto-save chain.
+      const layoutId = LayoutBuilder.layoutId();
+      const editedData = LayoutBuilder.data();
+      const sharedLayout = LayoutBuilder.layout({
+        id: layoutId,
+        permission: "ORG_WRITE",
+        working: {
+          data: editedData,
+          savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp,
+        },
+      });
+      const remoteLayout = LayoutBuilder.remoteLayout({
+        id: layoutId,
+        permission: "ORG_WRITE",
+        data: editedData,
+        savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp,
+      });
+
+      mockLocalStorage.list.mockResolvedValue([sharedLayout]);
+      mockLocalStorage.get.mockResolvedValue(sharedLayout);
+      mockRemoteStorage.getLayouts.mockResolvedValue([remoteLayout]);
+      mockRemoteStorage.updateLayout.mockResolvedValue({
+        status: "success",
+        newLayout: remoteLayout,
+      });
+
+      const layoutManager = new LayoutManager({
+        local: mockLocalStorage,
+        remote: mockRemoteStorage,
+      });
+      layoutManager.setOnline({ online: true });
+
+      // The explicit-save step uploads immediately and clears working for shared layouts.
+      const committed = await layoutManager.overwriteLayout({ id: layoutId });
+      expect(committed.working).toBe(undefined);
+      expect(committed.baseline.data).toEqual(editedData);
+      expect(committed.syncInfo?.status).toBe("tracked");
+      expect(mockRemoteStorage.updateLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ id: layoutId, data: editedData }),
+      );
+
+      // The kicked sync then has nothing left to upload: tracked and up to date.
+      const syncSpy = jest.spyOn(mockRemoteStorage, "saveNewLayout");
+      await layoutManager.syncWithRemote(new AbortController().signal);
+      expect(syncSpy).not.toHaveBeenCalled();
+      expect(mockRemoteStorage.updateLayout).toHaveBeenCalledTimes(1);
+    });
+
+    it("uploads a committed personal-remote edit directly and keeps the no-syncInfo invariant", async () => {
+      // Given: a personal layout that already exists remotely (personal-remote, has externalId).
+      // Its edit landed in working and is committed with overwriteLayout, which uploads directly
+      // (explicit-save semantics) while keeping the personal “no syncInfo” invariant.
+      const layoutId = LayoutBuilder.layoutId();
+      const editedData = LayoutBuilder.data();
+      const personalLayout = LayoutBuilder.layout({
+        id: layoutId,
+        permission: "CREATOR_WRITE",
+        externalId: "external-personal",
+        syncInfo: undefined,
+        working: {
+          data: editedData,
+          savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp,
+        },
+      });
+      const remoteLayout = LayoutBuilder.remoteLayout({
+        id: layoutId,
+        permission: "CREATOR_WRITE",
+        data: editedData,
+        savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp,
+      });
+
+      // A stateful in-memory store so post-sync assertions re-read what is actually stored.
+      let stored: ReturnType<typeof LayoutBuilder.layout> = personalLayout;
+      mockLocalStorage.get.mockImplementation(async (_namespace, key) =>
+        stored.id === key ? stored : undefined,
+      );
+      mockLocalStorage.put.mockImplementation(async (_namespace, layout) => {
+        stored = layout;
+        return stored;
+      });
+      mockLocalStorage.list.mockImplementation(async () => [stored]);
+      mockRemoteStorage.updateLayout.mockResolvedValue({
+        status: "success",
+        newLayout: remoteLayout,
+      });
+      mockRemoteStorage.getLayouts.mockResolvedValue([remoteLayout]);
+
+      const layoutManager = new LayoutManager({
+        local: mockLocalStorage,
+        remote: mockRemoteStorage,
+      });
+      layoutManager.setOnline({ online: true });
+
+      const committed = await layoutManager.overwriteLayout({ id: layoutId });
+      expect(mockRemoteStorage.updateLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ id: layoutId, data: editedData }),
+      );
+      expect(committed.working).toBe(undefined);
+      expect(committed.syncInfo).toBeUndefined(); // personal invariant: never syncInfo
+      expect(committed.baseline.data).toEqual(editedData);
+
+      // A subsequent sync must NOT re-upload the personal-remote layout (no upload-new, no
+      // update) and must leave the stored layout without syncInfo.
+      await layoutManager.syncWithRemote(new AbortController().signal);
+
+      expect(mockRemoteStorage.saveNewLayout).not.toHaveBeenCalled();
+      expect(mockRemoteStorage.updateLayout).toHaveBeenCalledTimes(1);
+      // Re-read from storage: the personal invariant holds after the sync, working is cleared,
+      // and the committed data is the baseline.
+      const afterSync = await layoutManager.getLayout(layoutId);
+      expect(afterSync).toBeDefined();
+      expect(afterSync?.syncInfo).toBeUndefined();
+      expect(afterSync?.working).toBeUndefined();
+      expect(afterSync?.baseline.data).toEqual(editedData);
+    });
+
+    it("rejects saving a personal-remote layout while offline", async () => {
+      const layoutId = LayoutBuilder.layoutId();
+      const personalLayout = LayoutBuilder.layout({
+        id: layoutId,
+        permission: "CREATOR_WRITE",
+        externalId: "external-personal",
+        working: {
+          data: LayoutBuilder.data(),
+          savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp,
+        },
+      });
+      mockLocalStorage.list.mockResolvedValue([personalLayout]);
+      mockLocalStorage.get.mockResolvedValue(personalLayout);
+
+      const layoutManager = new LayoutManager({
+        local: mockLocalStorage,
+        remote: mockRemoteStorage,
+      });
+      layoutManager.setOnline({ online: false });
+
+      await expect(layoutManager.overwriteLayout({ id: layoutId })).rejects.toThrow(
+        "Cannot save a personal remote layout while offline",
+      );
+    });
+
+    it("preserves edits made while the shared overwrite upload was in flight (no lost edits)", async () => {
+      // Given: a shared layout whose commit upload is slow. While the remote request is pending,
+      // the user keeps editing; the new working copy must survive the stale pre-request snapshot.
+      const layoutId = LayoutBuilder.layoutId();
+      const firstEdit = LayoutBuilder.data();
+      const secondEdit = LayoutBuilder.data();
+      const initialLayout = LayoutBuilder.layout({
+        id: layoutId,
+        permission: "ORG_WRITE",
+        externalId: "external-shared",
+        baseline: { data: LayoutBuilder.data(), savedAt: "2023-01-01T00:00:00.000Z" as ISO8601Timestamp },
+        working: { data: firstEdit, savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp },
+        syncInfo: { status: "tracked", lastRemoteSavedAt: "2023-01-01T00:00:00.000Z" as ISO8601Timestamp },
+      });
+
+      // A tiny in-memory layout store so the two operations observe each other's writes.
+      let stored: { layout: ReturnType<typeof LayoutBuilder.layout> } | undefined = {
+        layout: initialLayout,
+      };
+      mockLocalStorage.get.mockImplementation(async (_namespace, key) => {
+        return stored?.layout.id === key ? stored.layout : undefined;
+      });
+      mockLocalStorage.put.mockImplementation(async (_namespace, layout) => {
+        stored = { layout };
+        return layout;
+      });
+      mockLocalStorage.list.mockImplementation(async () => (stored ? [stored.layout] : []));
+
+      let resolveRemoteUpload:
+        | ((value: { status: "success"; newLayout: RemoteLayout }) => void)
+        | undefined;
+      const deferredRemote = new Promise<{ status: "success"; newLayout: RemoteLayout }>(
+        (resolve) => {
+          resolveRemoteUpload = resolve;
+        },
+      );
+      mockRemoteStorage.updateLayout.mockImplementation(async () => {
+        return await deferredRemote;
+      });
+
+      const layoutManager = new LayoutManager({
+        local: mockLocalStorage,
+        remote: mockRemoteStorage,
+      });
+      layoutManager.setOnline({ online: true });
+
+      const overwritePromise = layoutManager.overwriteLayout({ id: layoutId });
+      // While the upload is in flight, a new edit lands in working.
+      await layoutManager.updateLayout({
+        id: layoutId,
+        name: undefined,
+        data: secondEdit,
+      });
+      resolveRemoteUpload!({
+        status: "success",
+        newLayout: LayoutBuilder.remoteLayout({
+          id: layoutId,
+          permission: "ORG_WRITE",
+          data: firstEdit,
+          savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp,
+        }),
+      });
+
+      const result = await overwritePromise;
+      // The edit made during the upload survives; the baseline holds the uploaded data.
+      expect(result.working?.data).toEqual(secondEdit);
+      expect(result.baseline.data).toEqual(firstEdit);
+      expect(result.syncInfo?.status).toBe("tracked");
+    });
+
+    it("upload-updated uploads the committed baseline data, never the stale working copy", async () => {
+      // Given: a shared layout in the “updated” state (e.g. after a rename) whose baseline holds
+      // the committed edits. The upload must carry baseline.data — the data the user committed —
+      // and not the pre-commit baseline.
+      const layoutId = LayoutBuilder.layoutId();
+      const committedData = LayoutBuilder.data();
+      const sharedLayout = LayoutBuilder.layout({
+        id: layoutId,
+        permission: "ORG_WRITE",
+        baseline: { data: committedData, savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp },
+        working: { data: LayoutBuilder.data(), savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp },
+        syncInfo: { status: "updated", lastRemoteSavedAt: "2023-01-01T00:00:00.000Z" as ISO8601Timestamp },
+      });
+      const remoteLayout = LayoutBuilder.remoteLayout({
+        id: layoutId,
+        permission: "ORG_WRITE",
+        data: committedData,
+        savedAt: "2023-01-02T00:00:00.000Z" as ISO8601Timestamp,
+      });
+
+      mockLocalStorage.list.mockResolvedValue([sharedLayout]);
+      mockRemoteStorage.getLayouts.mockResolvedValue([remoteLayout]);
+      mockRemoteStorage.updateLayout.mockResolvedValue({
+        status: "success",
+        newLayout: remoteLayout,
+      });
+
+      const layoutManager = new LayoutManager({
+        local: mockLocalStorage,
+        remote: mockRemoteStorage,
+      });
+      layoutManager.setOnline({ online: true });
+
+      await layoutManager.syncWithRemote(new AbortController().signal);
+
+      expect(mockRemoteStorage.updateLayout).toHaveBeenCalledWith(
+        expect.objectContaining({ id: layoutId, data: committedData }),
+      );
     });
   });
 

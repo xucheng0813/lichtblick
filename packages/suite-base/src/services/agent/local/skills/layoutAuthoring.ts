@@ -26,8 +26,11 @@ import type { Skill } from "./types";
  */
 export const ROBOT_DEBUG_LAYOUT = {
   configById: {
-    "Quadruped Visualization.Quadruped Visualization!main": {},
+    "Quadruped Visualization.Quadruped Visualization!main": {
+      lichtblickPanelTitle: "Robot view",
+    },
     "Plot!state": {
+      lichtblickPanelTitle: "State signals",
       paths: [
         {
           value: "/odom.twist.twist.linear.x",
@@ -38,6 +41,7 @@ export const ROBOT_DEBUG_LAYOUT = {
       ],
     },
     "StateTransitions!mode": {
+      lichtblickPanelTitle: "Mode",
       paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
     },
   },
@@ -60,18 +64,21 @@ export const ROBOT_DEBUG_LAYOUT = {
 export const SENSOR_MONITORING_LAYOUT = {
   configById: {
     "Image!front": {
+      lichtblickPanelTitle: "Front camera",
       imageMode: {
         imageTopic: "/camera/front/image_raw",
         calibrationTopic: "/camera/front/camera_info",
       },
     },
     "Image!rear": {
+      lichtblickPanelTitle: "Rear camera",
       imageMode: {
         imageTopic: "/camera/rear/image_raw",
         calibrationTopic: "/camera/rear/camera_info",
       },
     },
     "Plot!imu": {
+      lichtblickPanelTitle: "IMU acceleration",
       paths: [
         {
           value: "/imu/data.linear_acceleration.x",
@@ -82,6 +89,7 @@ export const SENSOR_MONITORING_LAYOUT = {
       ],
     },
     "Gauge!battery": {
+      lichtblickPanelTitle: "Battery voltage",
       path: "/bms_state.voltage",
       minValue: 0,
       maxValue: 60,
@@ -115,11 +123,13 @@ export const SENSOR_MONITORING_LAYOUT = {
 export const LOG_TROUBLESHOOTING_LAYOUT = {
   configById: {
     "RosOut!log": {
+      lichtblickPanelTitle: "Logs",
       searchTerms: [],
       minLogLevel: 1,
       topicToRender: "/rosout",
     },
     "Plot!health": {
+      lichtblickPanelTitle: "Battery voltage",
       paths: [
         {
           value: "/bms_state.voltage",
@@ -130,6 +140,7 @@ export const LOG_TROUBLESHOOTING_LAYOUT = {
       ],
     },
     "StateTransitions!mode": {
+      lichtblickPanelTitle: "Navigation mode",
       paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
     },
   },
@@ -152,6 +163,7 @@ export const LOG_TROUBLESHOOTING_LAYOUT = {
 export const REPLAY_ANALYSIS_LAYOUT = {
   configById: {
     "Plot!cmd": {
+      lichtblickPanelTitle: "Command velocity",
       paths: [
         {
           value: "/cmd_vel.linear.x",
@@ -162,9 +174,13 @@ export const REPLAY_ANALYSIS_LAYOUT = {
       ],
     },
     "StateTransitions!mode": {
+      lichtblickPanelTitle: "Navigation mode",
       paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
     },
-    "RawMessages!detail": { topicPath: "/cmd_vel" },
+    "RawMessages!detail": {
+      lichtblickPanelTitle: "Command message",
+      topicPath: "/cmd_vel",
+    },
   },
   globalVariables: {},
   userNodes: {},
@@ -233,6 +249,24 @@ Three rules that are enforced and will reject the proposal:
 2. Every \`configById\` entry must appear in \`layout\` — no orphans.
 3. No id may appear twice in \`layout\`.
 
+## Panel titles
+
+Every panel config in a proposal must include \`lichtblickPanelTitle\`: a short description in the
+user's language of what the panel is for ("Left front wheel speed", not "Plot"). The panel
+toolbar shows this title instead of the panel type, so the user can tell panels apart at a
+glance. Prefer the user's own words; never use a panel type name as the title.
+
+Exceptions — these panels render a custom toolbar and do not display the title, so it may be
+omitted:
+
+- \`Table\`
+- \`RawMessages\`
+- \`RawMessagesVirtual\`
+
+Extension panels (for example the robot visualization panels) should carry a title too; whether
+it renders depends on the extension's toolbar, which is not visible in the panel inventory, so
+write one anyway.
+
 ## Mosaic tree
 
 A tree node is either a panel id string, or a split:
@@ -256,7 +290,7 @@ defaults handle the rest.
 \`\`\`json
 {
   "configById": {
-    "3D!main": { "topics": { "/points": { "visible": true }, "/tf": { "visible": true } } }
+    "3D!main": { "lichtblickPanelTitle": "Scene", "topics": { "/points": { "visible": true }, "/tf": { "visible": true } } }
   },
   "globalVariables": {},
   "userNodes": {},
@@ -270,8 +304,9 @@ defaults handle the rest.
 \`\`\`json
 {
   "configById": {
-    "3D!scene": { "topics": { "/points": { "visible": true } } },
+    "3D!scene": { "lichtblickPanelTitle": "Scene", "topics": { "/points": { "visible": true } } },
     "Plot!speed": {
+      "lichtblickPanelTitle": "Forward speed",
       "paths": [
         { "value": "/odom.twist.twist.linear.x", "enabled": true, "timestampMethod": "receiveTime", "label": "vx" }
       ]
@@ -290,14 +325,17 @@ defaults handle the rest.
 {
   "configById": {
     "Plot!battery": {
+      "lichtblickPanelTitle": "Battery voltage",
       "paths": [
         { "value": "/bms_state.voltage", "enabled": true, "timestampMethod": "receiveTime" }
       ]
     },
     "StateTransitions!mode": {
+      "lichtblickPanelTitle": "Navigation mode",
       "paths": [{ "value": "/nav/state.mode", "timestampMethod": "receiveTime" }]
     },
     "Indicator!health": {
+      "lichtblickPanelTitle": "System health",
       "path": "/system/healthy.data",
       "style": "bulb",
       "fallbackColor": "#a0a0a0",

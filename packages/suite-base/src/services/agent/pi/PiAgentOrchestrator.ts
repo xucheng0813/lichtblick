@@ -13,6 +13,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 
 import type { AgentConfiguration } from "@lichtblick/suite-base/services/agent/agentSettings";
+import { collectLayoutBaseline } from "@lichtblick/suite-base/services/agent/layoutDiff";
 import type { Skill } from "@lichtblick/suite-base/services/agent/local/skills";
 import {
   buildDynamicContext,
@@ -56,7 +57,7 @@ import { createPiModelRuntime, type PiModelRuntime } from "./models";
 export const PI_AGENT_EVENT_REPLAY_LIMIT = 1000;
 
 export type PiAgentToolRuntime = {
-  deps: Pick<ToolRuntimeDeps, "getCatalog" | "memoryStore" | "vtdClient">;
+  deps: Pick<ToolRuntimeDeps, "dataQuery" | "getCatalog" | "memoryStore" | "vtdClient">;
   confirmationTimeoutMs?: number;
 };
 
@@ -69,6 +70,10 @@ export type PiAgentOrchestratorOptions = {
   getServerPromptCustomization?: () => AgentPromptCustomization | undefined;
   getTimezone?: () => string;
   getWorkspaceContext?: () => string | undefined;
+  /** Current layout data; used to fingerprint the layout baseline of layout proposals. */
+  getCurrentLayout?: () => unknown;
+  /** Id of the currently selected layout; captured as the proposal baseline id. */
+  getCurrentLayoutId?: () => string | undefined;
   makeId?: () => string;
   memoryStore?: AgentMemoryStore;
   now?: () => Date;
@@ -226,6 +231,8 @@ export class PiAgentOrchestrator implements IAgentClient {
   readonly #getSystemPrompt?: () => string;
   readonly #getTimezone: () => string;
   readonly #getWorkspaceContext?: () => string | undefined;
+  readonly #getCurrentLayout?: () => unknown;
+  readonly #getCurrentLayoutId?: () => string | undefined;
   readonly #makeId: () => string;
   readonly #memoryStore?: AgentMemoryStore;
   readonly #now: () => Date;
@@ -252,6 +259,8 @@ export class PiAgentOrchestrator implements IAgentClient {
       options.getTimezone ??
       (() => Intl.DateTimeFormat().resolvedOptions().timeZone);
     this.#getWorkspaceContext = options.getWorkspaceContext;
+    this.#getCurrentLayout = options.getCurrentLayout;
+    this.#getCurrentLayoutId = options.getCurrentLayoutId;
     this.#makeId = options.makeId ?? uuidv4;
     this.#memoryStore = options.memoryStore;
     this.#now = options.now ?? (() => new Date());
@@ -655,7 +664,17 @@ export class PiAgentOrchestrator implements IAgentClient {
         this.#emit(session, {
           type: "layout-proposal",
           messageId: active.messageId,
-          proposal,
+          proposal: {
+            ...proposal,
+            // Baseline captured when the proposal is generated (over the validate+sanitize
+            // pipeline output): the apply path uses it to detect layout changes since and
+            // apply strictly incremental proposals in place.
+            ...collectLayoutBaseline(
+              this.#getCurrentLayout,
+              this.#getCurrentLayoutId,
+              this.#toolRuntime?.deps.getCatalog,
+            ),
+          },
           requestId: active.requestId,
         });
       },

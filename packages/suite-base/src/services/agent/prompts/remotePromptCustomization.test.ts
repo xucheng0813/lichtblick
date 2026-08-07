@@ -11,10 +11,12 @@ import { resolveWorkspace } from "@lichtblick/suite-base/util/vizServerParams";
 
 import {
   fetchAgentBootstrap,
+  invalidateAgentBootstrapCache,
   mergeCustomizations,
   publishCustomization,
   readCachedAgentBootstrap,
   readCurrentAgentBootstrap,
+  subscribeAgentBootstrapInvalidation,
 } from "./remotePromptCustomization";
 
 jest.mock("@lichtblick/suite-base/services/http/HttpService");
@@ -219,6 +221,87 @@ describe("remote prompt customization", () => {
     expect(mockPut).toHaveBeenCalledWith(`workspaces/${workspace}/agent/prompt`, prompt);
     expect(readCachedAgentBootstrap(workspace)).toMatchObject({
       prompt,
+      version: "v2",
+    });
+  });
+
+  it("invalidates the cache and notifies subscribers so the next fetch omits known_version", async () => {
+    const workspace = "invalidate-workspace";
+    const prompt = { ...emptyPrompt, instructions: "cached instructions" };
+    const mockGet = jest
+      .fn()
+      .mockResolvedValueOnce(response({ prompt, version: "v1" }))
+      .mockResolvedValueOnce(response({ prompt: { ...prompt, instructions: "replaced" }, version: "v2" }));
+    jest.mocked(HttpService).get = mockGet;
+    await fetchAgentBootstrap(workspace);
+    expect(readCachedAgentBootstrap(workspace)).toMatchObject({ version: "v1" });
+
+    const listener = jest.fn();
+    const unsubscribe = subscribeAgentBootstrapInvalidation(listener);
+
+    invalidateAgentBootstrapCache(workspace);
+
+    // Subscribers are notified synchronously with the workspace id…
+    expect(listener).toHaveBeenCalledWith(workspace);
+    // …the memory and persisted cache entries are gone…
+    expect(readCachedAgentBootstrap(workspace)).toBeUndefined();
+    expect(localStorage.getItem("lichtblick.vizserver.agent-bootstrap.v1")).not.toContain(
+      workspace,
+    );
+
+    // The next fetch sends no known_version and returns the full payload.
+    await fetchAgentBootstrap(workspace);
+    expect(mockGet).toHaveBeenLastCalledWith(
+      `workspaces/${workspace}/agent/bootstrap`,
+      {},
+    );
+    expect(readCachedAgentBootstrap(workspace)).toMatchObject({
+      prompt: { instructions: "replaced" },
+      version: "v2",
+    });
+
+    unsubscribe();
+    invalidateAgentBootstrapCache(workspace);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidating an uncached workspace is a no-op that still notifies subscribers", () => {
+    const listener = jest.fn();
+    subscribeAgentBootstrapInvalidation(listener);
+    invalidateAgentBootstrapCache("never-fetched-workspace");
+    expect(listener).toHaveBeenCalledWith("never-fetched-workspace");
+    expect(readCachedAgentBootstrap("never-fetched-workspace")).toBeUndefined();
+  });
+
+  it("ignores an out-of-order stale full-fetch response when writing the cache", async () => {
+    const workspace = "out-of-order-workspace";
+    let releaseStale: (() => void) | undefined;
+    const staleResponse = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const mockGet = jest
+      .fn()
+      // Stale fetch (v1) — slow, resolves after the fresher one.
+      .mockImplementationOnce(async () => {
+        await staleResponse;
+        return response({ prompt: { ...emptyPrompt, instructions: "stale v1" }, version: "v1" });
+      })
+      // Fresher fetch (v2, e.g. a post-invalidation re-fetch) — resolves first.
+      .mockResolvedValueOnce(
+        response({ prompt: { ...emptyPrompt, instructions: "fresh v2" }, version: "v2" }),
+      );
+    jest.mocked(HttpService).get = mockGet;
+
+    const staleFetch = fetchAgentBootstrap(workspace);
+    const freshFetch = fetchAgentBootstrap(workspace);
+    await freshFetch;
+    expect(readCachedAgentBootstrap(workspace)).toMatchObject({ version: "v2" });
+
+    releaseStale!();
+    await staleFetch;
+    // The late stale response must not roll the cache back to v1.
+    expect(readCachedAgentBootstrap(workspace)).toMatchObject({
+      prompt: { instructions: "fresh v2" },
       version: "v2",
     });
   });

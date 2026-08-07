@@ -591,6 +591,20 @@ describe("AgentClient", () => {
     {
       seq: 1,
       requestId: "r1",
+      type: "layout-proposal",
+      messageId: "m1",
+      proposal: { name: "layout", data: {}, baseLayoutId: null },
+    },
+    {
+      seq: 1,
+      requestId: "r1",
+      type: "layout-proposal",
+      messageId: "m1",
+      proposal: { name: "layout", data: {}, baseFingerprint: null },
+    },
+    {
+      seq: 1,
+      requestId: "r1",
       type: "open-data-source",
       messageId: "m1",
       urls: ["https://example.com/data.mcap"],

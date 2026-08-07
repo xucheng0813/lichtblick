@@ -50,13 +50,14 @@ and picking the wrong model produces a confidently wrong visualization.
 Both panels take their own configuration and an empty object is valid:
 
 \`\`\`json
-{ "configById": { "${QUADRUPED_VIZ_PANEL_TYPE}!main": {} } }
+{ "configById": { "${QUADRUPED_VIZ_PANEL_TYPE}!main": { "lichtblickPanelTitle": "Robot view" } } }
 \`\`\`
 
 They subscribe to the topics they need on their own, so unlike the built-in \`3D\` panel you do not
-have to mark topics visible for anything to appear. Keep their config minimal — pass \`{}\` unless
-the user asks for a specific setting, since these panels' option names are not documented here and
-a guessed key is silently ignored.
+have to mark topics visible for anything to appear. Keep their config minimal — pass only
+\`lichtblickPanelTitle\` (plus any setting the user asked for), since these panels' option names
+are not documented here and a guessed key is silently ignored. The title renders in the toolbar
+for these panels unless the extension uses a custom one, so write it anyway.
 
 ## Combining with other panels
 

@@ -51,7 +51,7 @@ alone never produce geometry — there must also be a renderable topic (marker, 
 path, ...) with \`visible: true\`.
 
 \`\`\`json
-{ "topics": { "/points": { "visible": true }, "/tf": { "visible": true } } }
+{ "lichtblickPanelTitle": "Point cloud scene", "topics": { "/points": { "visible": true }, "/tf": { "visible": true } } }
 \`\`\`
 
 An empty config \`{}\` is valid but renders an empty scene. Camera and scene settings can be

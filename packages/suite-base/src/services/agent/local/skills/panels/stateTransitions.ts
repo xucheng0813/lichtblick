@@ -28,7 +28,7 @@ Best suited to enums, modes, and status flags — for continuous numeric trends 
 (see panel-plot).
 
 \`\`\`json
-{ "paths": [{ "value": "/nav/state.mode", "timestampMethod": "receiveTime" }] }
+{ "lichtblickPanelTitle": "Navigation mode", "paths": [{ "value": "/nav/state.mode", "timestampMethod": "receiveTime" }] }
 \`\`\`
 
 \`enabled\` is optional here; \`timestampMethod\` should still be set. Panel-level \`isSynced\`

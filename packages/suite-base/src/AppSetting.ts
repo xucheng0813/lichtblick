@@ -56,6 +56,19 @@ export enum AppSetting {
   SHOW_OPEN_DIALOG_ON_STARTUP = "ui.open-dialog-startup",
   ENABLE_UNIFIED_NAVIGATION = "ui.new-app-menu",
 
+  // Cloud capabilities (contract frozen in plan2 v3: keys, defaults, and copy are consumed by the
+  // N1 extension auto-update and N2 layout auto-save features; do not rename or change defaults).
+  /**
+   * Default: enabled. Controls the periodic in-session check for organization extension updates.
+   * The existing startup update pass is unaffected by this switch.
+   */
+  EXTENSION_AUTO_UPDATE_ORG = "extensions.autoUpdateOrg",
+  /**
+   * Default: disabled. When enabled, edits to a remote layout are automatically saved to the
+   * cloud; concurrent edits from multiple clients are last-write-wins.
+   */
+  LAYOUT_AUTO_SAVE_TO_CLOUD = "layout.autoSaveToCloud",
+
   // Dev only
   ENABLE_LAYOUT_DEBUGGING = "enableLayoutDebugging",
   ENABLE_MEMORY_USE_INDICATOR = "dev.memory-use-indicator",

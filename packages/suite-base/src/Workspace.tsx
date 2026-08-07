@@ -16,12 +16,13 @@
 import { Link, Typography } from "@mui/material";
 import { t } from "i18next";
 import { useSnackbar } from "notistack";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { v4 as uuidv4 } from "uuid";
 
 import Logger from "@lichtblick/log";
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
+import { useDataSourceInfo } from "@lichtblick/suite-base/PanelAPI";
 import { useStyles } from "@lichtblick/suite-base/Workspace.style";
 import McapBundleAPI from "@lichtblick/suite-base/api/mcapBundle/McapBundleAPI";
 import AccountSettings from "@lichtblick/suite-base/components/AccountSettingsSidebar/AccountSettings";
@@ -29,6 +30,7 @@ import { AgentCatalogWatcher } from "@lichtblick/suite-base/components/AgentCata
 import { AgentChatSidebar } from "@lichtblick/suite-base/components/AgentChatSidebar";
 import { AlertsList } from "@lichtblick/suite-base/components/AlertList/AlertsList";
 import { AppBar } from "@lichtblick/suite-base/components/AppBar";
+import { CloudLayoutAutoSaveAdapter } from "@lichtblick/suite-base/components/CurrentLayoutSyncAdapter";
 import {
   DataSourceDialog,
   DataSourceDialogItem,
@@ -68,7 +70,7 @@ import type {
 } from "@lichtblick/suite-base/context/AgentChatContext";
 import { useAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { useAppContext } from "@lichtblick/suite-base/context/AppContext";
-import {
+import CurrentLayoutContext, {
   LayoutState,
   useCurrentLayoutSelector,
 } from "@lichtblick/suite-base/context/CurrentLayoutContext";
@@ -117,10 +119,12 @@ import {
 import { createAgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
 import { buildPanelInventory } from "@lichtblick/suite-base/services/agent/panelInventory";
 import { readAgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import { runBootstrapRefreshLoop } from "@lichtblick/suite-base/services/agent/prompts/bootstrapRefreshLoop";
 import {
   fetchAgentBootstrap,
   mergeCustomizations,
   readCachedAgentBootstrap,
+  subscribeAgentBootstrapInvalidation,
 } from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
 import type { LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
 import { useAgentWorkspaceTools } from "@lichtblick/suite-base/services/agent/workspaceTools";
@@ -786,6 +790,7 @@ function WorkspaceContent({ agentEnabled, ...props }: WorkspaceContentProps): Re
       {dataSourceDialog.open && <DataSourceDialog />}
       <DocumentDropListener onDrop={dropHandler} allowedExtensions={allowedDropExtensions} />
       <SyncAdapters />
+      <CloudLayoutAutoSaveAdapter />
       <KeyListener global keyDownHandlers={keyDownHandlers} />
       <div className={classes.container} ref={containerRef} tabIndex={0}>
         {appBar}
@@ -860,8 +865,48 @@ function ConfiguredAgentWorkspaceIntegration({
   }, [workspaceTools]);
   const getCatalog = useCallback(() => workspaceToolsRef.current.getCatalog(), []);
   const getCurrentLayout = useCallback(() => workspaceToolsRef.current.getCurrentLayout(), []);
+  const getCurrentLayoutId = useCallback(
+    () => workspaceToolsRef.current.getCurrentLayoutId(),
+    [],
+  );
+  const getCurrentLayoutState = useCallback(
+    () => ({
+      id: workspaceToolsRef.current.getCurrentLayoutId(),
+      data: workspaceToolsRef.current.getCurrentLayout(),
+    }),
+    [],
+  );
+  // Recompute the proposal card mode whenever the layout changes (edit or switch).
+  const currentLayoutContext = useContext(CurrentLayoutContext);
+  const subscribeToLayoutChanges = useCallback(
+    (listener: () => void) => {
+      currentLayoutContext?.addLayoutStateListener(listener);
+      return () => {
+        currentLayoutContext?.removeLayoutStateListener(listener);
+      };
+    },
+    [currentLayoutContext],
+  );
+  // The proposal card mode also depends on the catalog (sanitized fingerprints): notify listeners
+  // whenever the loaded topics/datatypes change so the label matches what applying would decide.
+  const { datatypes: catalogDatatypes, topics: catalogTopics } = useDataSourceInfo();
+  const catalogChangeListenersRef = useRef(new Set<() => void>());
+  useEffect(() => {
+    for (const listener of [...catalogChangeListenersRef.current]) {
+      listener();
+    }
+  }, [catalogDatatypes, catalogTopics]);
+  const subscribeToCatalogChanges = useCallback((listener: () => void) => {
+    catalogChangeListenersRef.current.add(listener);
+    return () => {
+      catalogChangeListenersRef.current.delete(listener);
+    };
+  }, []);
   const onApplyProposal = useCallback(async (proposal: LayoutProposal) => {
-    await workspaceToolsRef.current.applyLayout(proposal.name, proposal.data);
+    await workspaceToolsRef.current.applyLayout(proposal.name, proposal.data, {
+      baseLayoutId: proposal.baseLayoutId,
+      baseFingerprint: proposal.baseFingerprint,
+    });
   }, []);
   const onOpenDataSource = useCallback((urls: string[]) => {
     workspaceToolsRef.current.openDataSource(urls);
@@ -949,41 +994,56 @@ function ConfiguredAgentWorkspaceIntegration({
       return undefined;
     }
     let disposed = false;
-    let refreshing = false;
-    const refresh = async () => {
-      if (refreshing) {
-        return;
-      }
-      refreshing = true;
+    // Generation guard: an invalidation bumps the generation so a stale in-flight refresh result
+    // (started with a cached known_version) cannot overwrite the post-invalidation re-fetch.
+    let refreshGeneration = 0;
+    const refresh = async (): Promise<boolean> => {
+      const generation = ++refreshGeneration;
       try {
         const cachedBootstrap = readCachedAgentBootstrap(vizServerWorkspace);
         const knownVersion =
           cachedBootstrap?.apiKeyOmitted === true ? undefined : cachedBootstrap?.version;
         const bootstrap = await fetchAgentBootstrap(vizServerWorkspace, knownVersion);
-        if (!disposed && bootstrap.unchanged !== true) {
+        if (!disposed && generation === refreshGeneration && bootstrap.unchanged !== true) {
           serverCustomizationRef.current = bootstrap.prompt;
           setServerBootstrapRevision((revision) => revision + 1);
         }
+        return true;
       } catch {
         // Cached or built-in settings remain active while the viz server is unavailable.
-      } finally {
-        refreshing = false;
+        return false;
       }
     };
     serverCustomizationRef.current = readCachedAgentBootstrap(vizServerWorkspace)?.prompt;
-    void refresh();
-    const interval = setInterval(() => void refresh(), 5 * 60 * 1000);
+    const refreshLoop = runBootstrapRefreshLoop({ refresh });
+    const unsubscribe = subscribeAgentBootstrapInvalidation((workspace) => {
+      if (disposed || workspace !== vizServerWorkspace) {
+        return;
+      }
+      // The cache was cleared by the invalidation, so this fetch sends no known_version and
+      // replaces serverCustomizationRef immediately. refreshNow shares the loop's backoff state:
+      // a successful forced refresh resets the cadence, a failed one advances the backoff.
+      void refreshLoop.refreshNow();
+    });
     return () => {
       disposed = true;
-      clearInterval(interval);
+      refreshLoop.stop();
+      unsubscribe();
     };
   }, [vizServerWorkspace]);
   const restoreHistory = useMemo(() => persistence.restorePiLlmHistory, [persistence]);
   const onHistoryChanged = useMemo(() => persistence.onPiLlmHistoryChanged, [persistence]);
+  // Data-query tools read the loaded player state through the message pipeline getter, which is
+  // re-read on every tool call so capability gating and the active time range stay current. The
+  // adapter object is memoized so the local agent client is not rebuilt on every render.
+  const dataQueryGetter = useMessagePipelineGetter();
+  const dataQuery = useMemo(() => ({ getContext: dataQueryGetter }), [dataQueryGetter]);
   const agentClient = useLocalAgentClient(configuration, {
+    dataQuery,
     enabled: agentEnabled && migrationReady && !snapshot.storageError,
     getCatalog,
     getCurrentLayout,
+    getCurrentLayoutId,
     getPanelInventory,
     memoryStore,
     onHistoryChanged,
@@ -1051,11 +1111,15 @@ function ConfiguredAgentWorkspaceIntegration({
     <AgentChatProvider
       client={agentClient}
       enabled={configuredAgentEnabled}
+      getCatalog={getCatalog}
+      getCurrentLayoutState={getCurrentLayoutState}
       onApplyProposal={onApplyProposal}
       onGetVtdTopics={onGetVtdTopics}
       onLoadVtdRecord={onLoadVtdRecord}
       onOpenDataSource={onOpenDataSource}
       onSliceVtdRecord={onSliceVtdRecord}
+      subscribeToCatalogChanges={subscribeToCatalogChanges}
+      subscribeToLayoutChanges={subscribeToLayoutChanges}
       onSelectProfile={setSelectedProfileId}
       persistence={persistence}
       profileOptions={profileOptions}

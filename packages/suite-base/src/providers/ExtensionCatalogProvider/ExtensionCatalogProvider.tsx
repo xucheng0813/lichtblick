@@ -19,6 +19,7 @@ import {
   InstallExtensionsResult,
   LoadExtensionsResult,
 } from "@lichtblick/suite-base/context/ExtensionCatalogContext";
+import { OrgExtensionAutoUpdate } from "@lichtblick/suite-base/providers/ExtensionCatalogProvider/OrgExtensionAutoUpdate";
 import {
   extensionUniqueKey,
   loadSingleExtension,
@@ -436,6 +437,7 @@ export default function ExtensionCatalogProvider({
 
   return (
     <ExtensionCatalogContext.Provider value={store}>
+      <OrgExtensionAutoUpdate loaders={loaders} />
       {children}
     </ExtensionCatalogContext.Provider>
   );

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import type { MessagePipelineContext } from "@lichtblick/suite-base/components/MessagePipeline/types";
 import {
   validateLayoutProposal,
   type ValidatedLayoutProposal,
@@ -11,6 +12,11 @@ import {
 } from "@lichtblick/suite-base/services/agent/local/skills";
 import type { CatalogSnapshot } from "@lichtblick/suite-base/services/agent/local/types";
 import type { AgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import {
+  runPlaybackControlTool,
+  runReadMessagesTool,
+  runSearchMessagesTool,
+} from "@lichtblick/suite-base/services/agent/tools/dataQueryTools";
 import type {
   LayoutProposal,
   ToolConfirmationDecision,
@@ -43,6 +49,29 @@ export type ToolRuntimeDeps = {
     proposal: ValidatedLayoutProposal,
     signal?: AbortSignal,
   ) => Promise<void> | void;
+  /**
+   * Loaded-data reading and playback control for read_messages / search_messages /
+   * playback_control. Absent when the workspace does not provide a message pipeline.
+   */
+  dataQuery?: AgentDataQueryDeps;
+};
+
+/**
+ * The slice of the message pipeline the data-query tools consume. The context is re-read on
+ * every tool call so playback capability gating (performed by the pipeline store) and the
+ * active data time range are always current.
+ */
+export type AgentDataQueryContext = Pick<
+  MessagePipelineContext,
+  | "getBatchIterator"
+  | "startPlayback"
+  | "pausePlayback"
+  | "seekPlayback"
+  | "playerState"
+>;
+
+export type AgentDataQueryDeps = {
+  getContext: () => AgentDataQueryContext;
 };
 
 export type ToolRuntimeContext = {
@@ -57,13 +86,13 @@ export type RequestBatchConsentInput = {
   itemCount: number;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return (
     typeof value === "object" && value != undefined && !Array.isArray(value)
   );
 }
 
-function requireRecord(
+export function requireRecord(
   value: unknown,
   toolName: string,
 ): Record<string, unknown> {
@@ -73,7 +102,7 @@ function requireRecord(
   return value;
 }
 
-function requireString(
+export function requireString(
   input: Record<string, unknown>,
   property: string,
   toolName: string,
@@ -85,7 +114,7 @@ function requireString(
   return value;
 }
 
-function optionalString(
+export function optionalString(
   input: Record<string, unknown>,
   property: string,
   toolName: string,
@@ -115,7 +144,7 @@ function optionalBoolean(
   return value;
 }
 
-function optionalEnum<T extends string>(
+export function optionalEnum<T extends string>(
   input: Record<string, unknown>,
   property: string,
   toolName: string,
@@ -133,7 +162,7 @@ function optionalEnum<T extends string>(
   return value as T;
 }
 
-function optionalPositiveInteger(
+export function optionalPositiveInteger(
   input: Record<string, unknown>,
   property: string,
   toolName: string,
@@ -186,7 +215,7 @@ function optionalStringArray(
   return value as string[];
 }
 
-function optionalDecimalString(
+export function optionalDecimalString(
   input: Record<string, unknown>,
   property: string,
   toolName: string,
@@ -241,13 +270,13 @@ function normalizeCatalog(catalog: CatalogSnapshot): {
   };
 }
 
-function abortReason(signal: AbortSignal): Error {
+export function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
     : new DOMException("The operation was aborted", "AbortError");
 }
 
-async function runDependency<T>(
+export async function runDependency<T>(
   factory: () => Promise<T> | T,
   signal?: AbortSignal,
 ): Promise<T> {
@@ -677,6 +706,9 @@ export const TOOL_RUNTIME_FUNCTIONS: Readonly<
   open_data_source: runOpenDataSourceTool,
   get_data_catalog: runGetDataCatalogTool,
   propose_layout: runProposeLayoutTool,
+  read_messages: runReadMessagesTool,
+  search_messages: runSearchMessagesTool,
+  playback_control: runPlaybackControlTool,
 };
 
 export async function executeToolRuntime(

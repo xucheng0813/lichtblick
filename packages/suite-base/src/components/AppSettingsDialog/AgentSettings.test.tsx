@@ -17,13 +17,16 @@ import {
   commitAgentSettings,
 } from "@lichtblick/suite-base/services/agent/agentSettings";
 import * as agentSettingsModule from "@lichtblick/suite-base/services/agent/agentSettings";
+import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import {
   AGENT_PROMPT_MAX_CUSTOM_SKILLS,
   AGENT_PROMPT_MAX_SKILL_BODY_LENGTH,
 } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
-import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import * as agentPromptsModule from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import type { AgentBootstrapResponse } from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
 import * as remotePromptCustomizationModule from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
+import { HttpError } from "@lichtblick/suite-base/services/http/HttpError";
+import HttpService from "@lichtblick/suite-base/services/http/HttpService";
 import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAppConfiguration";
 
@@ -598,6 +601,219 @@ describe("AgentSettings", () => {
         name: "Automatic cloud skills cannot be installed locally.",
       }),
     ).toBeVisible();
+  });
+
+  it("shows delete actions only for organization skills, not reserved automatic ones", async () => {
+    mockCachedCloudSkills([
+      {
+        body: "Cloud layout instructions",
+        id: "lichtblick-layouts",
+        name: "Cloud layouts",
+        whenToUse: "When working with cloud layouts",
+      },
+      {
+        body: "Organization instructions",
+        id: "organization-safety",
+        name: "Organization safety",
+        whenToUse: "When organization policy applies",
+      },
+    ]);
+    const configuration = await makeCloudSettingsConfiguration();
+    renderSettings(configuration);
+
+    // The automatic skill row has no delete button; the organization row has one.
+    expect(
+      screen.queryAllByRole("button", { name: "Delete from organization" }),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: "Delete from organization" }),
+    ).toBeEnabled();
+  });
+
+  it("deletes a cloud skill after confirmation, invalidates the cache, and refreshes the list from the server", async () => {
+    const cloudSkill = {
+      body: "Organization instructions",
+      id: "organization-safety",
+      name: "Organization safety",
+      whenToUse: "When organization policy applies",
+    };
+    mockCachedCloudSkills([cloudSkill]);
+    const configuration = await makeCloudSettingsConfiguration();
+    const deleteMock = jest
+      .spyOn(HttpService, "delete")
+      .mockResolvedValue({
+        data: undefined,
+        path: "workspaces/cloud-workspace/agent/skill/organization-safety",
+        timestamp: new Date().toISOString(),
+      });
+    // Keep the real invalidateAgentBootstrapCache implementation so the invalidation subscription
+    // fires and the list is re-fetched from the server (pi-2 must not project a local view).
+    const invalidateSpy = jest.spyOn(
+      remotePromptCustomizationModule,
+      "invalidateAgentBootstrapCache",
+    );
+    const fetchMock = jest
+      .spyOn(remotePromptCustomizationModule, "fetchAgentBootstrap")
+      .mockResolvedValue({
+        prompt: {
+          customSkills: [],
+          instructions: "",
+          skillOverrides: {},
+        },
+        syncedAt: new Date().toISOString(),
+        version: "deleted-version",
+      });
+
+    renderSettings(configuration);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete from organization" }),
+    );
+    expect(
+      screen.getByText("Delete cloud skill Organization safety?"),
+    ).toBeVisible();
+    expect(screen.getByText(/removes it for everyone in the organization/)).toBeVisible();
+    expect(screen.getByText(/no authentication/)).toBeVisible();
+
+    fireEvent.click(screen.getByTestId("confirm-remote-skill-delete"));
+
+    await waitFor(() => {
+      expect(deleteMock).toHaveBeenCalledWith(
+        "workspaces/cloud-workspace/agent/skill/organization-safety",
+      );
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith("cloud-workspace");
+    // The invalidation subscription re-fetches the latest bootstrap; the deleted skill disappears
+    // only because the server response no longer contains it.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("cloud-workspace");
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Organization safety")).not.toBeInTheDocument();
+    });
+    expect(await screen.findByText("Cloud skill deleted.")).toBeVisible();
+  });
+
+  it("ignores a stale manual fetch response that resolves after a deletion-triggered refresh", async () => {
+    const cloudSkill = {
+      body: "Organization instructions",
+      id: "organization-safety",
+      name: "Organization safety",
+      whenToUse: "When organization policy applies",
+    };
+    mockCachedCloudSkills([cloudSkill]);
+    const configuration = await makeCloudSettingsConfiguration();
+    jest.spyOn(HttpService, "delete").mockResolvedValue({
+      data: undefined,
+      path: "workspaces/cloud-workspace/agent/skill/organization-safety",
+      timestamp: new Date().toISOString(),
+    });
+    jest.spyOn(remotePromptCustomizationModule, "invalidateAgentBootstrapCache");
+
+    // The manual "Fetch now" request A stays in flight; the deletion-triggered refresh B resolves
+    // first with the post-delete payload, then A resolves late with the stale pre-delete payload.
+    let resolveStaleFetch:
+      | ((value: AgentBootstrapResponse) => void)
+      | undefined;
+    const staleFetchPromise = new Promise<AgentBootstrapResponse>((resolve) => {
+      resolveStaleFetch = resolve;
+    });
+    const fetchMock = jest
+      .spyOn(remotePromptCustomizationModule, "fetchAgentBootstrap")
+      .mockImplementationOnce(async () => await staleFetchPromise)
+      .mockImplementationOnce(async () => ({
+        prompt: {
+          customSkills: [],
+          instructions: "",
+          skillOverrides: {},
+        },
+        syncedAt: new Date().toISOString(),
+        version: "post-delete-version",
+      }));
+
+    renderSettings(configuration);
+
+    fireEvent.click(screen.getByRole("button", { name: "Fetch now" }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete from organization" }),
+    );
+    fireEvent.click(screen.getByTestId("confirm-remote-skill-delete"));
+
+    // B (the second fetch) applies first: the deleted skill disappears.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Organization safety")).not.toBeInTheDocument();
+    });
+
+    // A resolves late with the stale payload; the generation guard must discard it so the
+    // deleted skill does not reappear.
+    await act(async () => {
+      resolveStaleFetch?.({
+        prompt: {
+          customSkills: [cloudSkill],
+          instructions: "",
+          skillOverrides: {},
+        },
+        syncedAt: new Date().toISOString(),
+        version: "stale-version",
+      });
+      await staleFetchPromise;
+    });
+    expect(screen.queryByText("Organization safety")).not.toBeInTheDocument();
+  });
+
+  it("reports an unsupported delete endpoint once and disables delete for the session", async () => {
+    mockCachedCloudSkills([
+      {
+        body: "Organization instructions",
+        id: "organization-safety",
+        name: "Organization safety",
+        whenToUse: "When organization policy applies",
+      },
+    ]);
+    const configuration = await makeCloudSettingsConfiguration();
+    const deleteMock = jest
+      .spyOn(HttpService, "delete")
+      .mockRejectedValue(
+        new HttpError("HTTP Error: 404 - Not Found", 404, "Not Found"),
+      );
+    const putMock = jest.spyOn(HttpService, "put").mockResolvedValue({
+      data: undefined,
+      path: "",
+      timestamp: new Date().toISOString(),
+    });
+
+    renderSettings(configuration);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete from organization" }),
+    );
+    fireEvent.click(screen.getByTestId("confirm-remote-skill-delete"));
+
+    expect(
+      await screen.findByText(
+        "The server does not support deleting cloud skills yet. Upgrade viz-server to enable this.",
+      ),
+    ).toBeVisible();
+    // Wait for the confirmation dialog's exit transition to unmount so the row's delete button is
+    // the only match, then assert the entry is disabled for the rest of the session and that no
+    // write attempt was made beyond the single failed DELETE (no full-PUT fallback).
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("confirm-remote-skill-delete"),
+      ).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId("delete-remote-skill-organization-safety"),
+    ).toBeDisabled();
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+    expect(putMock).not.toHaveBeenCalled();
   });
 
   it("installs a cloud skill through prompt customization and updates local state immediately", async () => {

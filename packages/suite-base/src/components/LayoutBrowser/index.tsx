@@ -317,6 +317,26 @@ export default function LayoutBrowser({
     [enqueueSnackbar, layoutsAPI, t],
   );
 
+  const onSetDefaultLayout = useCallback(
+    async (item: Layout): Promise<void> => {
+      if (layoutsAPI == undefined || item.externalId == undefined) {
+        return;
+      }
+      try {
+        await layoutsAPI.setDefaultLayout(item.externalId);
+        enqueueSnackbar(t("setAsOrgDefaultSuccess"), { variant: "success" });
+      } catch (error) {
+        enqueueSnackbar(
+          error instanceof HttpError && error.status === 404
+            ? t("layoutNotSyncedToServer")
+            : t("setAsOrgDefaultFailed"),
+          { variant: "error" },
+        );
+      }
+    },
+    [enqueueSnackbar, layoutsAPI, t],
+  );
+
   const showSignInPrompt =
     signIn != undefined && !layoutManager.supportsSharing && !hideSignInPrompt;
 
@@ -413,6 +433,11 @@ export default function LayoutBrowser({
           onRevert={onRevertLayout}
           onMakePersonalCopy={onMakePersonalCopy}
           onSetDescription={onSetDescription}
+          onSetDefaultLayout={
+            layouts.loading || layoutsAPI == undefined
+              ? undefined
+              : onSetDefaultLayout
+          }
         />
         {layoutManager.supportsSharing && (
           <LayoutSection
@@ -436,6 +461,11 @@ export default function LayoutBrowser({
             onRevert={onRevertLayout}
             onMakePersonalCopy={onMakePersonalCopy}
             onSetDescription={onSetDescription}
+            onSetDefaultLayout={
+              layouts.loading || layoutsAPI == undefined
+                ? undefined
+                : onSetDefaultLayout
+            }
           />
         )}
         {!enableNewTopNav && <Stack flexGrow={1} />}

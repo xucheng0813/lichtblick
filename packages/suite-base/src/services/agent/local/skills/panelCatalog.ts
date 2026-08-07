@@ -47,7 +47,8 @@ Panels take data in one of two ways. Confusing the two is the most common layout
 - **MessagePath-based** (\`Plot\`, \`StateTransitions\`, \`Gauge\`, \`Indicator\`, \`PieChart\`,
   \`Table\`, \`RawMessages\`, \`RawMessagesVirtual\`): configured with message-path strings such as
   \`/imu/data.linear_acceleration.x\`. The path must resolve to a value of the type the panel wants.
-- **No configuration** (\`SourceInfo\`): config must be \`{}\`.
+- **No configuration** (\`SourceInfo\`): config must be \`{}\` except for the optional
+  \`lichtblickPanelTitle\`.
 
 ## Schema name variants
 
@@ -140,6 +141,8 @@ skill):
 - \`Gauge\` / \`Indicator\` / \`PieChart\` \`path\`, \`Table\` / \`RawMessages\` \`topicPath\`, and
   \`Image\` \`imageMode.imageTopic\` are non-empty.
 - \`3D\` has at least one topic marked \`visible: true\`.
+- Every panel config carries a non-empty \`lichtblickPanelTitle\` (see the layout-authoring
+  skill for the rule and its Table/RawMessages/RawMessagesVirtual exceptions).
 - \`PieChart\` is only used for a \`float32[]\` field.
 - \`RosOut\` \`topicToRender\` names a topic whose schema is one of the eight exact Log schemas
   (\`convertibleTo\` does not qualify).`,

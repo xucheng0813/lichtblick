@@ -26,6 +26,7 @@ import CurrentLayoutContext, {
 } from "@lichtblick/suite-base/context/CurrentLayoutContext";
 import {
   AddPanelPayload,
+  AddPanelsAtomicallyPayload,
   ChangePanelLayoutPayload,
   ClosePanelPayload,
   CreateTabPanelPayload,
@@ -85,6 +86,62 @@ export default function CurrentLayoutProvider({
 
   const appParameters = useAppParameters();
   const initialLayoutLoadStarted = useRef(false);
+
+  // Monotonic selection generation; see setSelectedLayoutId below.
+  const selectionGeneration = useRef(0);
+
+  // Serialized profile-write queue: writes land strictly in selection order. Requests already
+  // stale when getLayout returns are dropped before enqueueing, so every enqueued write lands;
+  // there is no execution-time generation re-check (see writeCurrentLayoutIdToProfile).
+  const profileWriteQueue = useRef<Promise<void>>(Promise.resolve());
+
+  // A profile-write failure is stashed until the current layout request settles: deciding at
+  // failure time would misjudge when the failure lands during a pending switch (e.g. A's write
+  // fails while B is loading — A looks selected, but B may supersede it).
+  const pendingProfileWriteError = useRef<{ id: LayoutID; error: unknown } | undefined>(undefined);
+  const flushProfileWriteError = useCallback(() => {
+    const pending = pendingProfileWriteError.current;
+    if (pending == undefined) {
+      return;
+    }
+    const selected = layoutStateRef.current.selectedLayout;
+    if (selected?.loading === true) {
+      // 当前 layout 请求尚未结束：等 settle 后再按最终选中 id 决定提示或丢弃。
+      return;
+    }
+    pendingProfileWriteError.current = undefined;
+    if (selected?.id !== pending.id) {
+      // 已被更新的选择取代：丢弃，不提示。
+      return;
+    }
+    console.error(pending.error);
+    enqueueSnackbar(
+      `The current layout could not be saved. ${(pending.error as Error).toString()}`,
+      {
+        variant: "error",
+      },
+    );
+  }, [enqueueSnackbar]);
+
+  const writeCurrentLayoutIdToProfile = useCallback(
+    (id: LayoutID) => {
+      // 队列顺序即选择顺序：先入队的写入先落地。getLayout 返回前已过期的请求会在 continuation
+      // 整体被丢弃（不入队），因此已入队的成功选择写入一律按顺序落地，不做执行时代际淘汰——
+      // 否则“切换 B 失败恢复 A”场景会把 A 的排队写入一并淘汰（B 又不写），
+      // 造成 UI 是 A 而持久化仍停留在更早的值。
+      profileWriteQueue.current = profileWriteQueue.current
+        .then(async () => {
+          await setUserProfile({ currentLayoutId: id });
+        })
+        .catch((error: unknown) => {
+          // 失败先暂存：A 写入失败发生在 B pending 期间时，等当前 layout 请求结束后
+          // 按最终选中 id 决定提示或丢弃（A 成为最终布局时不静默吞错，B 成功取代则不提示）。
+          pendingProfileWriteError.current = { id, error };
+          flushProfileWriteError();
+        });
+    },
+    [flushProfileWriteError, setUserProfile],
+  );
 
   const [mosaicId] = useState(() => uuidv4());
 
@@ -147,17 +204,39 @@ export default function CurrentLayoutProvider({
       id: LayoutID | undefined,
       { saveToProfile = true }: { saveToProfile?: boolean } = {},
     ) => {
+      // Selection generation: every call invalidates all in-flight async side effects of earlier
+      // selections (layout state commits, profile writes, version alerts, snackbars, failures).
+      const generation = ++selectionGeneration.current;
       if (id == undefined) {
         setLayoutState({ selectedLayout: undefined });
+        flushProfileWriteError();
         return;
       }
+      // 切换期间保留完整的旧 selectedLayout 对象（旧 id+data 成对不拆），仅追加 loading 标记；
+      // 绝不组合“新 id + 旧 data”（CurrentLayoutLocalStorageSyncAdapter 等消费者要求
+      // id/data 始终对应）。仅首次加载（无旧 layout）允许 data: undefined。
+      // 仅把 data != undefined 的最后成功布局作为可恢复快照：无快照时失败恢复为 undefined，
+      // 避免残留 {id, data: undefined, loading: false}。
+      const previousSelectedLayout = layoutStateRef.current.selectedLayout;
+      const recoverableLayout =
+        previousSelectedLayout?.data != undefined ? previousSelectedLayout : undefined;
       try {
-        setLayoutState({ selectedLayout: { id, loading: true, data: undefined } });
+        setLayoutState({
+          selectedLayout:
+            recoverableLayout == undefined
+              ? { id, loading: true, data: undefined }
+              : { ...recoverableLayout, loading: true },
+        });
         const layout = await layoutManager.getLayout(id);
+        if (generation !== selectionGeneration.current) {
+          // 过期请求：丢弃所有异步副作用，不落地任何状态。
+          return;
+        }
         const layoutVersion = layout?.baseline.data.version;
         if (layoutVersion != undefined && layoutVersion > MAX_SUPPORTED_LAYOUT_VERSION) {
           setIncompatibleLayoutVersionError(true);
           setLayoutState({ selectedLayout: undefined });
+          flushProfileWriteError();
           return;
         }
         if (!isMounted()) {
@@ -165,8 +244,15 @@ export default function CurrentLayoutProvider({
         }
         setIncompatibleLayoutVersionError(false);
         if (layout == undefined) {
-          setLayoutState({ selectedLayout: undefined });
+          // 目标 layout 不存在：恢复旧 layout（若有）并结束 loading。
+          setLayoutState(
+            recoverableLayout == undefined
+              ? { selectedLayout: undefined }
+              : { selectedLayout: { ...recoverableLayout, loading: false } },
+          );
+          flushProfileWriteError();
         } else {
+          // 新 layout 数据取到后一次性原子替换整个对象。
           setLayoutState({
             selectedLayout: {
               loading: false,
@@ -175,28 +261,39 @@ export default function CurrentLayoutProvider({
               name: layout.name,
             },
           });
+          flushProfileWriteError();
           if (saveToProfile) {
-            setUserProfile({ currentLayoutId: id }).catch((error: unknown) => {
-              console.error(error);
-              enqueueSnackbar(
-                `The current layout could not be saved. ${(error as Error).toString()}`,
-                {
-                  variant: "error",
-                },
-              );
-            });
+            // 串行化 profile 写入：入队即按顺序落地（见 writeCurrentLayoutIdToProfile）。
+            writeCurrentLayoutIdToProfile(id);
           }
         }
       } catch (error) {
+        if (generation !== selectionGeneration.current) {
+          // 过期请求的失败不弹错误。
+          return;
+        }
         console.error(error);
         enqueueSnackbar(`The layout could not be loaded. ${error.toString()}`, {
           variant: "error",
         });
         setIncompatibleLayoutVersionError(false);
-        setLayoutState({ selectedLayout: undefined });
+        // 目标加载失败：旧 layout 完整恢复并结束 loading；无快照时清空选择。
+        setLayoutState(
+          recoverableLayout == undefined
+            ? { selectedLayout: undefined }
+            : { selectedLayout: { ...recoverableLayout, loading: false } },
+        );
+        flushProfileWriteError();
       }
     },
-    [enqueueSnackbar, isMounted, layoutManager, setLayoutState, setUserProfile],
+    [
+      enqueueSnackbar,
+      flushProfileWriteError,
+      isMounted,
+      layoutManager,
+      setLayoutState,
+      writeCurrentLayoutIdToProfile,
+    ],
   );
 
   const performAction = useCallback(
@@ -464,6 +561,9 @@ export default function CurrentLayoutProvider({
       addPanel: (payload: AddPanelPayload) => {
         performAction({ type: "ADD_PANEL", payload });
         analytics.logEvent(AppEvent.PANEL_ADD, { type: getPanelTypeFromId(payload.id) });
+      },
+      addPanelsAtomically: (payload: AddPanelsAtomicallyPayload) => {
+        performAction({ type: "ADD_PANELS_ATOMIC", payload });
       },
       dropPanel: (payload: DropPanelPayload) => {
         performAction({ type: "DROP_PANEL", payload });

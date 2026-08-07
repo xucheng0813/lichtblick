@@ -380,18 +380,51 @@ export default class LayoutManager implements ILayoutManager {
         data: localLayout.working?.data ?? localLayout.baseline.data,
         savedAt: now,
       });
-      const result = await this.local.runExclusive(
-        async (local) =>
-          await local.put({
-            ...localLayout,
-            baseline: { data: updatedBaseline.data, savedAt: updatedBaseline.savedAt },
-            working: undefined,
-            syncInfo: { status: "tracked", lastRemoteSavedAt: updatedBaseline.savedAt },
-          }),
-      );
+      const result = await this.local.runExclusive(async (local) => {
+        // Re-read the layout: an edit that landed while the remote request was in flight must not
+        // be dropped by the pre-request snapshot. Only a working copy that changed during the
+        // flight is preserved — the copy committed by this save is cleared.
+        const current = await local.get(id);
+        const workingChanged =
+          current != undefined && current.working !== localLayout.working;
+        return await local.put({
+          ...(current ?? localLayout),
+          baseline: { data: updatedBaseline.data, savedAt: updatedBaseline.savedAt },
+          working: workingChanged ? current.working : undefined,
+          syncInfo: { status: "tracked", lastRemoteSavedAt: updatedBaseline.savedAt },
+        });
+      });
       this.notifyChangeListeners({ type: "change", updatedLayout: result });
       return result;
     } else {
+      // Personal layout that already exists on the remote (personal-remote): upload the committed
+      // edit directly, like the shared explicit-save path, while keeping the personal
+      // no-syncInfo invariant — the sync machinery must never re-upload it (see
+      // computeLayoutSyncOperations).
+      if (this.remote != undefined && localLayout.externalId != undefined) {
+        if (!this.isOnline) {
+          throw new Error("Cannot save a personal remote layout while offline");
+        }
+        const updatedBaseline = await updateOrFetchLayout(this.remote, {
+          id,
+          externalId: localLayout.externalId,
+          data: localLayout.working?.data ?? localLayout.baseline.data,
+          savedAt: now,
+        });
+        const result = await this.local.runExclusive(async (local) => {
+          const current = await local.get(id);
+          const workingChanged =
+            current != undefined && current.working !== localLayout.working;
+          return await local.put({
+            ...(current ?? localLayout),
+            baseline: { data: updatedBaseline.data, savedAt: updatedBaseline.savedAt },
+            working: workingChanged ? current.working : undefined,
+            syncInfo: undefined, // Personal layouts should NEVER have syncInfo
+          });
+        });
+        this.notifyChangeListeners({ type: "change", updatedLayout: result });
+        return result;
+      }
       const result = await this.local.runExclusive(
         async (local) =>
           await local.put({
@@ -619,7 +652,11 @@ export default class LayoutManager implements ILayoutManager {
               await local.put({
                 ...localLayout,
                 baseline: { ...localLayout.baseline, savedAt: newBaseline.savedAt },
-                syncInfo: { status: "tracked", lastRemoteSavedAt: newBaseline.savedAt },
+                // Only shared layouts record sync state: personal layouts must never gain a
+                // syncInfo, otherwise they would be re-uploaded on every sync.
+                syncInfo: layoutIsShared(localLayout)
+                  ? { status: "tracked", lastRemoteSavedAt: newBaseline.savedAt }
+                  : undefined,
               });
             };
           }

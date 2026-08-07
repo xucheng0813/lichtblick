@@ -71,6 +71,7 @@ export default React.memo(function LayoutRow({
   onRevert,
   onMakePersonalCopy,
   onSetDescription,
+  onSetDefaultLayout,
 }: {
   layout: Layout;
   descriptionEditingEnabled?: boolean;
@@ -87,6 +88,7 @@ export default React.memo(function LayoutRow({
   onRevert: (item: Layout) => void;
   onMakePersonalCopy: (item: Layout) => void;
   onSetDescription?: (layoutId: string, description: string) => Promise<boolean>;
+  onSetDefaultLayout?: (layout: Layout) => Promise<void>;
 }): React.JSX.Element {
   const { t } = useTranslation("layoutBrowser");
   const isMounted = useMountedState();
@@ -297,6 +299,23 @@ export default React.memo(function LayoutRow({
         "data-testid": "upload-layout-to-org",
         disabled: readOnly || !isOnline || multiSelection,
         secondaryText: readOnly ? t("readOnlyLayout") : !isOnline ? "Offline" : undefined,
+      },
+    // "Set as organization default" only for remote layouts (externalId present) the user can
+    // write, without unsaved changes, not deleted on the server, and when the viz server is
+    // configured (onSetDefaultLayout is only wired when it is).
+    onSetDefaultLayout != undefined &&
+      !readOnly &&
+      layout.externalId != undefined &&
+      !hasModifications &&
+      !deletedOnServer &&
+      !multiSelection && {
+        type: "item",
+        key: "set-default",
+        text: t("setAsOrgDefault"),
+        onClick: () => {
+          void onSetDefaultLayout(layout);
+        },
+        "data-testid": "set-default-layout",
       },
     {
       type: "item",

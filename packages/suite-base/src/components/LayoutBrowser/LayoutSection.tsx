@@ -37,6 +37,7 @@ export default function LayoutSection({
   onRevert,
   onMakePersonalCopy,
   onSetDescription,
+  onSetDefaultLayout,
 }: Readonly<{
   title: string | undefined;
   descriptionEditingEnabled?: (layout: Layout) => boolean;
@@ -58,6 +59,7 @@ export default function LayoutSection({
   onRevert: (item: Layout) => void;
   onMakePersonalCopy: (item: Layout) => void;
   onSetDescription?: (layoutId: string, description: string) => Promise<boolean>;
+  onSetDefaultLayout?: (layout: Layout) => Promise<void>;
 }>): React.JSX.Element {
   const { classes, cx } = useLayoutSectionStyles();
 
@@ -107,6 +109,7 @@ export default function LayoutSection({
               onRevert={onRevert}
               onMakePersonalCopy={onMakePersonalCopy}
               onSetDescription={onSetDescription}
+              onSetDefaultLayout={onSetDefaultLayout}
             />
           ))}
         </List>
