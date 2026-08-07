@@ -8,6 +8,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
+import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import { makeMockAppConfiguration } from "@lichtblick/suite-base/util/makeMockAppConfiguration";
 
@@ -20,6 +21,7 @@ import {
 jest.mock("@lichtblick/suite-base/constants/config", () => ({
   APP_CONFIG: {
     apiUrl: undefined,
+    defaultWorkspace: "build-default-workspace",
   },
 }));
 
@@ -53,7 +55,39 @@ describe("vizServerParams", () => {
     globalThis.history.replaceState({}, "", "/?workspace=");
     const configuration = makeMockAppConfiguration([[AppSetting.VIZ_SERVER_WORKSPACE, ""]]);
 
-    expect(resolveWorkspace(configuration)).toBeUndefined();
+    // Temporarily remove the build-time default to verify the empty-resolution path.
+    (APP_CONFIG as { defaultWorkspace?: string }).defaultWorkspace = undefined;
+    try {
+      expect(resolveWorkspace(configuration)).toBeUndefined();
+      expect(resolveWorkspaceBestEffort()).toBeUndefined();
+    } finally {
+      (APP_CONFIG as { defaultWorkspace?: string }).defaultWorkspace = "build-default-workspace";
+    }
+  });
+
+  it("falls back to the build-time default workspace when neither URL nor setting resolves", () => {
+    globalThis.history.replaceState({}, "", "/?workspace=");
+    const configuration = makeMockAppConfiguration([[AppSetting.VIZ_SERVER_WORKSPACE, ""]]);
+
+    expect(resolveWorkspace(configuration)).toBe("build-default-workspace");
+    expect(resolveWorkspaceBestEffort()).toBe("build-default-workspace");
+  });
+
+  it("prefers the URL query parameter over the build-time default workspace", () => {
+    globalThis.history.replaceState({}, "", "/?workspace=query-workspace");
+    const configuration = makeMockAppConfiguration([[AppSetting.VIZ_SERVER_WORKSPACE, ""]]);
+
+    expect(resolveWorkspace(configuration)).toBe("query-workspace");
+    expect(resolveWorkspaceBestEffort()).toBe("query-workspace");
+  });
+
+  it("prefers the app setting over the build-time default workspace", () => {
+    globalThis.history.replaceState({}, "", "/");
+    const configuration = makeMockAppConfiguration([
+      [AppSetting.VIZ_SERVER_WORKSPACE, "configured-workspace"],
+    ]);
+
+    expect(resolveWorkspace(configuration)).toBe("configured-workspace");
   });
 
   it("best-effort resolution prefers the URL and otherwise uses the cached setting snapshot", () => {

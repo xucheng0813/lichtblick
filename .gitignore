@@ -36,3 +36,7 @@ blob-report/*
 
 # Extensions fetched by `yarn extensions:fetch`; too large to commit, see ci/extensions.json
 .extensions/
+
+# Aliyun deploy local state (see deploy/aliyun/README.md)
+deploy/aliyun/.env.deploy
+deploy/aliyun/.last-image

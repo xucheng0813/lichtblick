@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
+# SPDX-License-Identifier: MPL-2.0
+#
+# Ingress。host 与 ingressClassName 由 deploy.sh 按 .env.deploy 的 INGRESS_HOST / INGRESS_CLASS
+# 渲染；注解块按 INGRESS_CLASS 二选一（nginx | alb），不要手工编辑。
+#
+# - 必须配 TLS：tls 段引用证书 Secret（阿里云证书服务下发的证书 kubectl create secret tls，
+#   或集群已有 cert-manager 时改用 nginx 模板中的 cert-manager.io/cluster-issuer 注解自动签发）。
+# - INGRESS_HOST 必须是真实域名：example.com 占位值会被 deploy.sh 拒绝。
+# - 部署前先预检集群实际的 Ingress controller（kubectl get ingressclass），据此填 INGRESS_CLASS。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lichtblick
+  namespace: NAMESPACE_PLACEHOLDER
+  annotations:
+    # BEGIN_NGINX_ANNOTATIONS
+    # --- nginx controller 模板（INGRESS_CLASS=nginx 时启用）---
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # 若用 cert-manager 自动签发证书，取消下行注释并确认对应 ClusterIssuer 已存在：
+    # cert-manager.io/cluster-issuer: <cluster-issuer-name>
+    # END_NGINX_ANNOTATIONS
+    # BEGIN_ALB_ANNOTATIONS
+    # --- ALB controller 模板（INGRESS_CLASS=alb 时启用）---
+    # 使用前先在 AlbConfig 中配置 HTTPS 443 listener；HTTP→HTTPS 重定向前后的 80 与 443
+    # 监听端口都必须存在。Flannel 网络下 ALB 后端无法直连 Pod IP，需把 k8s/service.yaml
+    # 改为 NodePort/LoadBalancer 类型（Terway 直连 Pod ENI 模式才可用 ClusterIP 后端）。
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    # alb.ingress.kubernetes.io/ssl-redirect: "true"
+    # alb.ingress.kubernetes.io/healthcheck-method: GET
+    # （sidecar /healthz 仅接受 GET，勿改用 HEAD/POST）
+    # alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    # END_ALB_ANNOTATIONS
+spec:
+  ingressClassName: INGRESS_CLASS_PLACEHOLDER
+  tls:
+    - hosts:
+        - INGRESS_HOST_PLACEHOLDER
+      secretName: lichtblick-tls
+  rules:
+    - host: INGRESS_HOST_PLACEHOLDER
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lichtblick
+                port:
+                  number: 80

@@ -1,0 +1,29 @@
+{
+  "configById": {
+    "3D!main": {},
+    "Image!main": {},
+    "map!main": {},
+    "RosOut!main": {}
+  },
+  "globalVariables": {},
+  "layout": {
+    "direction": "row",
+    "first": {
+      "direction": "column",
+      "first": "3D!main",
+      "second": "map!main",
+      "splitPercentage": 60
+    },
+    "second": {
+      "direction": "column",
+      "first": "Image!main",
+      "second": "RosOut!main",
+      "splitPercentage": 60
+    },
+    "splitPercentage": 55
+  },
+  "playbackConfig": {
+    "speed": 1
+  },
+  "userNodes": {}
+}

@@ -10,6 +10,7 @@
 declare const API_URL: string | undefined;
 declare const LICHTBLICK_SUITE_VERSION: string | undefined;
 declare const DEV_WORKSPACE: string | undefined;
+declare const DEFAULT_WORKSPACE: string | undefined;
 
 export const APP_CONFIG = {
   /**
@@ -26,4 +27,10 @@ export const APP_CONFIG = {
    * Development workspace prefix (for local storage keys)
    */
   devWorkspace: DEV_WORKSPACE ?? "",
+
+  /**
+   * Build-time default workspace, used as the final fallback when neither the URL query
+   * parameter nor the app setting resolves a workspace.
+   */
+  defaultWorkspace: DEFAULT_WORKSPACE,
 } as const;

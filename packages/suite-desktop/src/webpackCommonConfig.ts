@@ -59,6 +59,9 @@ export function createCommonWebpackConfig(
         DEV_WORKSPACE: process.env.DEV_WORKSPACE
           ? JSON.stringify(process.env.DEV_WORKSPACE)
           : undefined,
+        DEFAULT_WORKSPACE: process.env.DEFAULT_WORKSPACE
+          ? JSON.stringify(process.env.DEFAULT_WORKSPACE)
+          : undefined,
       }),
       new ForkTsCheckerWebpackPlugin(),
     ],

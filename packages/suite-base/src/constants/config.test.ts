@@ -16,6 +16,7 @@ describe("APP_CONFIG", () => {
     delete (globalThis as any).API_URL;
     delete (globalThis as any).LICHTBLICK_SUITE_VERSION;
     delete (globalThis as any).DEV_WORKSPACE;
+    delete (globalThis as any).DEFAULT_WORKSPACE;
 
     // Clear module cache to ensure fresh imports
     jest.resetModules();
@@ -31,12 +32,14 @@ describe("APP_CONFIG", () => {
     (globalThis as any).API_URL = undefined;
     (globalThis as any).LICHTBLICK_SUITE_VERSION = undefined;
     (globalThis as any).DEV_WORKSPACE = undefined;
+    (globalThis as any).DEFAULT_WORKSPACE = undefined;
 
     const { APP_CONFIG } = await import("./config");
 
     expect(APP_CONFIG.apiUrl).toBe(undefined);
     expect(APP_CONFIG.version).toBe("unknown");
     expect(APP_CONFIG.devWorkspace).toBe("");
+    expect(APP_CONFIG.defaultWorkspace).toBe(undefined);
   });
 
   it("should use global variables when they are defined", async () => {
@@ -44,12 +47,14 @@ describe("APP_CONFIG", () => {
     (globalThis as any).API_URL = "https://api.example.com";
     (globalThis as any).LICHTBLICK_SUITE_VERSION = "1.2.3";
     (globalThis as any).DEV_WORKSPACE = "test-workspace";
+    (globalThis as any).DEFAULT_WORKSPACE = "default-workspace";
 
     const { APP_CONFIG } = await import("./config");
 
     expect(APP_CONFIG.apiUrl).toBe("https://api.example.com");
     expect(APP_CONFIG.version).toBe("1.2.3");
     expect(APP_CONFIG.devWorkspace).toBe("test-workspace");
+    expect(APP_CONFIG.defaultWorkspace).toBe("default-workspace");
   });
 
   it("should handle partial global variables", async () => {
@@ -57,12 +62,14 @@ describe("APP_CONFIG", () => {
     (globalThis as any).API_URL = "https://partial.example.com";
     (globalThis as any).LICHTBLICK_SUITE_VERSION = undefined;
     (globalThis as any).DEV_WORKSPACE = "partial-workspace";
+    (globalThis as any).DEFAULT_WORKSPACE = undefined;
 
     const { APP_CONFIG } = await import("./config");
 
     expect(APP_CONFIG.apiUrl).toBe("https://partial.example.com");
     expect(APP_CONFIG.version).toBe("unknown");
     expect(APP_CONFIG.devWorkspace).toBe("partial-workspace");
+    expect(APP_CONFIG.defaultWorkspace).toBe(undefined);
   });
 
   it("should handle null values in global variables", async () => {
@@ -70,12 +77,14 @@ describe("APP_CONFIG", () => {
     (globalThis as any).API_URL = undefined;
     (globalThis as any).LICHTBLICK_SUITE_VERSION = undefined;
     (globalThis as any).DEV_WORKSPACE = undefined;
+    (globalThis as any).DEFAULT_WORKSPACE = undefined;
 
     const { APP_CONFIG } = await import("./config");
 
     expect(APP_CONFIG.apiUrl).toBe(undefined);
     expect(APP_CONFIG.version).toBe("unknown");
     expect(APP_CONFIG.devWorkspace).toBe("");
+    expect(APP_CONFIG.defaultWorkspace).toBe(undefined);
   });
 
   it("should handle empty string values in global variables", async () => {
@@ -85,11 +94,13 @@ describe("APP_CONFIG", () => {
     (globalThis as any).API_URL = "";
     (globalThis as any).LICHTBLICK_SUITE_VERSION = "";
     (globalThis as any).DEV_WORKSPACE = "";
+    (globalThis as any).DEFAULT_WORKSPACE = "";
 
     const { APP_CONFIG } = await import("./config");
 
     expect(APP_CONFIG.apiUrl).toBe(""); // Empty string, not default
     expect(APP_CONFIG.version).toBe(""); // Empty string, not default
     expect(APP_CONFIG.devWorkspace).toBe(""); // Empty string, not default
+    expect(APP_CONFIG.defaultWorkspace).toBe(""); // Empty string, not default
   });
 });

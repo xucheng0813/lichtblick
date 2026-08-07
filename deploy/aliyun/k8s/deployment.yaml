@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
+# SPDX-License-Identifier: MPL-2.0
+#
+# Lichtblick All-in-One（Web 静态站 + vtd-sidecar API 同源单镜像，端口 8080）。
+#
+# - image: IMAGE_PLACEHOLDER 由 deploy.sh 渲染为 digest 引用（registry/ns/image@sha256:...），
+#   不要手工编辑本行。
+# - 专用占位符 # IMAGE_PULL_SECRETS_PLACEHOLDER 由 deploy.sh 按 .env.deploy 的 ACR_PULL_MODE
+#   渲染为 imagePullSecrets: [{name: acr-pull-secret}]（secret 模式）或删除（helper 模式），
+#   不提供手工注释切换。
+# - replicas: 1 为保守初始值，非结论：vtd 每次请求都新起 CLI 子进程
+#   （vtd-sidecar/server.mjs:689），slice-store→slice-get 跨进程语义待实测；执行阶段验证后
+#   再决定是否多副本（rollout/Pod 重建仍会丢容器内状态，需知悉）。
+# - resources 为初始值：sidecar 默认允许 8 个 vtd 并发、每进程 10MiB 输出缓存
+#   （vtd-sidecar/server.mjs:13），上线后按 CPU throttling/RSS/OOM 监控调整。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lichtblick
+  namespace: NAMESPACE_PLACEHOLDER
+  labels:
+    app: lichtblick
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lichtblick
+  template:
+    metadata:
+      labels:
+        app: lichtblick
+    spec:
+      # IMAGE_PULL_SECRETS_PLACEHOLDER
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+      containers:
+        - name: lichtblick
+          image: IMAGE_PLACEHOLDER
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lichtblick-secrets
+                  key: AUTH_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi

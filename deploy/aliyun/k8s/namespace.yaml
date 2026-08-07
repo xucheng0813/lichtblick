@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
+# SPDX-License-Identifier: MPL-2.0
+#
+# Lichtblick All-in-One 部署专用命名空间。deploy.sh 会 apply 本文件，首次部署无需手工创建。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: NAMESPACE_PLACEHOLDER

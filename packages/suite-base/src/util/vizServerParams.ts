@@ -6,6 +6,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
+import { APP_CONFIG } from "@lichtblick/suite-base/constants/config";
 import { IAppConfiguration } from "@lichtblick/suite-base/context/AppConfigurationContext";
 import { getHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 
@@ -37,7 +38,7 @@ export function resolveWorkspace(
     return queryWorkspace;
   }
 
-  return normalizedConfiguredWorkspace;
+  return normalizedConfiguredWorkspace ?? APP_CONFIG.defaultWorkspace;
 }
 
 /**
@@ -47,7 +48,9 @@ export function resolveWorkspace(
  * resolveWorkspace(appConfiguration), which application roots invoke during startup.
  */
 export function resolveWorkspaceBestEffort(): string | undefined {
-  return resolveQueryWorkspace() ?? configuredWorkspaceSnapshot;
+  return (
+    resolveQueryWorkspace() ?? configuredWorkspaceSnapshot ?? APP_CONFIG.defaultWorkspace
+  );
 }
 
 export function resolveVizServerConfigured(workspace: string | undefined): workspace is string {

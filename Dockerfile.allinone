@@ -2,7 +2,15 @@
 # SPDX-License-Identifier: MPL-2.0
 
 # Build the production Lichtblick Web bundle with the repository-pinned Yarn release.
-FROM node:22 AS build
+# --platform=$BUILDPLATFORM：webpack 产物与目标架构无关，构建阶段跑构建机原生架构，
+# 避免交叉构建时 esbuild 等原生工具在指令模拟下崩溃；仅运行时阶段使用 --platform 指定的目标架构。
+FROM --platform=$BUILDPLATFORM node:22 AS build
+# 可选构建参数（不传则 ENV 为空字符串，行为与未定义一致——消费方均为 falsy 检查）：
+#   API_URL            viz-server 客户端 API 基础地址，必须带 /lichtblick 前缀
+#   DEFAULT_WORKSPACE  构建期默认 workspace（URL > 设置 > 此默认值）
+ARG API_URL
+ARG DEFAULT_WORKSPACE
+ENV API_URL=$API_URL DEFAULT_WORKSPACE=$DEFAULT_WORKSPACE
 WORKDIR /src
 COPY . ./
 
