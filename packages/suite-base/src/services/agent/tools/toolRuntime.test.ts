@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import HttpVtdClient from "@lichtblick/suite-base/services/vtd/HttpVtdClient";
+import { VtdHttpError, VtdJsonError } from "@lichtblick/suite-base/services/vtd/errors";
 import type { IVtdClient } from "@lichtblick/suite-base/services/vtd/types";
 
 import {
@@ -233,6 +235,73 @@ describe("toolRuntime", () => {
     await expect(runVtdDetailTool({ id: "record-1" }, deps)).rejects.toThrow(
       "detail failed",
     );
+  });
+
+  it("surfaces VTD failures with their retry context to the agent", async () => {
+    // The HttpVtdClient embeds the retry count in the error message; the tool runtime must pass
+    // it through unchanged so the agent can tell a retried upstream failure apart from a first
+    // attempt.
+    const deps = makeDeps();
+    deps.vtdClient.search.mockRejectedValueOnce(
+      new VtdHttpError("list", 502, "Bad Gateway", "upstream hiccup", 2),
+    );
+
+    await expect(runVtdSearchTool({ botSn: "SN001" }, deps)).rejects.toThrow(
+      "(retried 2 times)",
+    );
+  });
+
+  it("surfaces the retry context through a real mixed failure chain", async () => {
+    // Two retried 502s followed by a non-retryable JSON failure: the final error must still
+    // carry the retry context, and it must survive the toolRuntime passthrough.
+    const textResponse = (status: number, text: string): Response => {
+      const bytes = new TextEncoder().encode(text);
+      let consumed = false;
+      return {
+        body: {
+          cancel: jest.fn().mockResolvedValue(undefined),
+          getReader: () => ({
+            cancel: jest.fn().mockResolvedValue(undefined),
+            read: jest.fn(async () => {
+              if (consumed) {
+                return { done: true, value: undefined };
+              }
+              consumed = true;
+              return { done: false, value: bytes };
+            }),
+            releaseLock: jest.fn(),
+          }),
+        },
+        headers: { get: () => undefined },
+        ok: status >= 200 && status < 300,
+        status,
+        statusText: "X",
+      } as unknown as Response;
+    };
+    jest.useFakeTimers();
+    jest.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      const mockFetch = jest.fn()
+        .mockResolvedValueOnce(textResponse(502, "upstream hiccup"))
+        .mockResolvedValueOnce(textResponse(502, "upstream hiccup"))
+        .mockResolvedValueOnce(textResponse(200, "not-json"));
+      const deps = makeDeps() as ToolRuntimeDeps;
+      deps.vtdClient = new HttpVtdClient("http://sidecar", mockFetch);
+
+      const promise = runVtdSearchTool({ botSn: "SN001" }, deps).catch(
+        (caught: unknown) => caught,
+      );
+      await jest.advanceTimersByTimeAsync(600); // backoff 1
+      await jest.advanceTimersByTimeAsync(1600); // backoff 2
+      const error = await promise;
+      expect(error).toBeInstanceOf(VtdJsonError);
+      expect(error).toMatchObject({ command: "list", retries: 2 });
+      expect((error as Error).message).toContain("(retried 2 times)");
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    } finally {
+      jest.useRealTimers();
+      jest.restoreAllMocks();
+    }
   });
 
   it("gets VTD topics and preserves required-string validation", async () => {

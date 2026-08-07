@@ -151,7 +151,11 @@ type Subscription = {
 
 type AgentChatRuntime = {
   disable: () => void;
-  mount: (client: IAgentClient, persistence?: AgentConversationPersistence) => () => void;
+  mount: (
+    client: IAgentClient,
+    persistence?: AgentConversationPersistence,
+    options?: { clearConversation?: boolean },
+  ) => () => void;
   store: StoreApi<AgentChatState>;
 };
 
@@ -1362,17 +1366,29 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       }
       store.setState(emptyState());
     },
-    mount: (client: IAgentClient, persistence?: AgentConversationPersistence) => {
+    mount: (
+      client: IAgentClient,
+      persistence?: AgentConversationPersistence,
+      options?: { clearConversation?: boolean },
+    ) => {
       committedEnabled = true;
       if (lifecycle != undefined) {
         stopLifecycle();
       }
+      // A different persistence object means the workspace switched (decided by the provider
+      // effect via a ref that survives component re-mounts): the session state belongs to the old
+      // workspace and must be cleared.
+      const workspaceSwitched = options?.clearConversation === true;
       const active = startLifecycle(client);
       activePersistence = persistence;
-      store.setState({
-        ...emptyState(),
+      // Re-binding (a new client object from a configuration rebuild) keeps the conversation
+      // messages but resets runtime state (sessionId/status/waitingRequest/proposals): the new
+      // client starts a fresh session while the transcript survives. A workspace switch clears
+      // everything.
+      store.setState((state) => ({
+        ...(workspaceSwitched ? emptyState() : { ...emptyState(), messages: state.messages }),
         activeConversationId: persistence?.getActiveConversationId(),
-      });
+      }));
 
       let unsubscribe: (() => void) | undefined;
       if (persistence != undefined) {
@@ -1508,12 +1524,18 @@ export default function AgentChatProvider({
     });
   }, [onSelectProfile, profileOptions, runtime, selectedProfileId]);
 
+  // Tracks whether the persistence (workspace) changed since the previous render. The ref's
+  // initial value equals the current persistence, so a component re-mount does not look like a
+  // workspace switch.
+  const prevPersistenceRef = useRef(persistence);
   useLayoutEffect(() => {
+    const clearConversation = prevPersistenceRef.current !== persistence;
+    prevPersistenceRef.current = persistence;
     if (!enabled || client == undefined) {
       runtime.disable();
       return;
     }
-    return runtime.mount(client, persistence);
+    return runtime.mount(client, persistence, { clearConversation });
   }, [client, enabled, persistence, runtime]);
 
   return <AgentChatContext.Provider value={runtime.store}>{children}</AgentChatContext.Provider>;

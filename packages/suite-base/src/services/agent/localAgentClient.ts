@@ -167,10 +167,49 @@ export function useLocalAgentClient(
   const valid =
     configurationIdentity.enabled &&
     isAgentConfigurationValid(configurationIdentity);
+  // Core configuration: these fields count as a real switch (workspace/auth/profile-like) and
+  // releasing the client clears the conversation, which is the desired behavior for those
+  // transitions. Transient validity flickers of the SAME core fields (or unrelated re-renders)
+  // must NOT release the client — releasing would make AgentChatProvider wipe the conversation.
+  const coreKey = useMemo(
+    () =>
+      [apiKey, baseUrl, desktop, model, profileId, provider, vtdAuthToken, vtdEndpoint].join(
+        "\u0000",
+      ),
+    [apiKey, baseUrl, desktop, model, profileId, provider, vtdAuthToken, vtdEndpoint],
+  );
   const [resource, setResource] = useState<{
     client: PiAgentOrchestrator;
+    coreKey: string;
     identity: object;
   }>();
+  // resourceRef is maintained manually by the build/release effects (and cleared on unmount);
+  // a render-sync effect would clobber it during StrictMode's double effect setup.
+  const resourceRef = useRef(resource);
+
+  const coreChanged = resource != undefined && resource.coreKey !== coreKey;
+  const shouldRelease = !configurationIdentity.enabled || coreChanged;
+  // Real release: the switch is off or a core configuration field changed. Runs BEFORE the build
+  // effect so the old resource is disposed and dropped first; the build effect (if the new
+  // configuration is valid) then publishes the replacement in the same commit. Consumers observe
+  // one undefined transition (AgentChatProvider clears the session) followed by the new client.
+  useLayoutEffect(() => {
+    if (!shouldRelease) {
+      return;
+    }
+    const current = resourceRef.current;
+    if (current == undefined) {
+      return;
+    }
+    resourceRef.current = undefined;
+    setResource(undefined);
+    try {
+      current.client.dispose();
+    } catch (error) {
+      log.error(error, "Failed to dispose local Agent orchestrator");
+    }
+  }, [shouldRelease]);
+
   useLayoutEffect(() => {
     if (!valid) {
       return undefined;
@@ -194,16 +233,47 @@ export function useLocalAgentClient(
       vtdAuthToken: current.vtdAuthToken,
       vtdEndpoint: current.vtdEndpoint,
     });
-    setResource({ client, identity: configurationIdentity });
+    // Atomic replacement: the new client is published in this commit; the previous one (if any)
+    // is disposed one commit later. A transient identity/validity flicker therefore never leaves
+    // consumers without a client.
+    const previous = resourceRef.current;
+    const next = { client, coreKey, identity: configurationIdentity };
+    resourceRef.current = next;
+    setResource(next);
+    // Dispose the replaced client on a microtask, after React's synchronous effect cycle (and
+    // after any cleanup microtasks of this commit): consumers are already observing the new
+    // client by then, and StrictMode's double-mount completes without a follow-up render that a
+    // state-driven disposal would need.
+    if (previous != undefined && previous.client !== client) {
+      queueMicrotask(() => {
+        if (resourceRef.current?.client === client) {
+          try {
+            previous.client.dispose();
+          } catch (error) {
+            log.error(error, "Failed to dispose local Agent orchestrator");
+          }
+        }
+      });
+    }
     return () => {
-      try {
-        client.dispose();
-      } catch (error) {
-        log.error(error, "Failed to dispose local Agent orchestrator");
-      }
+      // Unmount or StrictMode's simulated unmount: dispose the client unless a rebuild in the
+      // same commit already replaced it (the microtask runs after React's synchronous effect
+      // cycle, so a replaced ref means the component is still mounted and the replacement owns
+      // the lifecycle).
+      queueMicrotask(() => {
+        if (resourceRef.current?.client === client) {
+          resourceRef.current = undefined;
+          try {
+            client.dispose();
+          } catch (error) {
+            log.error(error, "Failed to dispose local Agent orchestrator");
+          }
+        }
+      });
     };
   }, [
     configurationIdentity,
+    coreKey,
     getPromptCustomization,
     memoryStore,
     onHistoryChanged,
@@ -216,9 +286,9 @@ export function useLocalAgentClient(
     valid,
   ]);
 
-  return valid && resource?.identity === configurationIdentity
-    ? resource.client
-    : undefined;
+  // Rebuild/validity flickers keep serving the last successfully built client; only a real
+  // disable or a core configuration switch releases it.
+  return shouldRelease ? undefined : resource?.client;
 }
 
 /**

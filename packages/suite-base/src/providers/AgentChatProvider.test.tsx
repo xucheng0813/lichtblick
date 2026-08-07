@@ -7,6 +7,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { useCallback } from "react";
 import {
   type PropsWithChildren,
   StrictMode,
@@ -23,6 +24,7 @@ import {
   AgentStreamSizeLimitError,
 } from "@lichtblick/suite-base/services/agent/AgentClient";
 import { computeLayoutFingerprint } from "@lichtblick/suite-base/services/agent/layoutDiff";
+import { useLocalAgentClient } from "@lichtblick/suite-base/services/agent/localAgentClient";
 import type { AgentConversationPersistence } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
 import type {
   AgentEvent,
@@ -139,6 +141,129 @@ function validProposal(name = "Diagnostics"): LayoutProposal {
 
 const selectState = (state: AgentChatState) => state;
 
+type MockOrchestrator = {
+  confirmToolRun: jest.Mock;
+  createSession: jest.Mock;
+  dispose: jest.Mock;
+  emit: (event: AgentEvent) => void;
+  notifyCatalogReady: jest.Mock;
+  sendMessage: jest.Mock;
+  subscribeEvents: jest.Mock;
+};
+
+const mockOrchestratorInstances: MockOrchestrator[] = [];
+
+jest.mock("@lichtblick/suite-base/services/agent/pi/PiAgentOrchestrator", () => ({
+  PiAgentOrchestrator: function OrchestratorMock() {
+    const subscriptions: Array<{
+      listener: (event: AgentEvent) => void;
+      signal?: AbortSignal;
+    }> = [];
+    const instance: MockOrchestrator = {
+      confirmToolRun: jest.fn().mockResolvedValue(undefined),
+      createSession: jest.fn().mockResolvedValue({ sessionId: "session-1" }),
+      dispose: jest.fn(),
+      emit(event: AgentEvent) {
+        for (const subscription of subscriptions) {
+          subscription.listener(event);
+        }
+      },
+      notifyCatalogReady: jest.fn().mockResolvedValue(undefined),
+      sendMessage: jest.fn().mockResolvedValue(undefined),
+      subscribeEvents: jest.fn().mockImplementation(
+        async (_sessionId: string, listener: (event: AgentEvent) => void, signal?: AbortSignal) => {
+          const pending = new Promise<void>((resolve) => {
+            if (signal?.aborted === true) {
+              resolve();
+            } else {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  resolve();
+                },
+                { once: true },
+              );
+            }
+          });
+          subscriptions.push({ listener, signal });
+          await pending;
+        },
+      ),
+    };
+    mockOrchestratorInstances.push(instance);
+    return instance;
+  },
+}));
+
+function RebindHarness({
+  getPromptCustomization,
+  storeRef,
+}: {
+  getPromptCustomization: () => string;
+  storeRef: { current?: AgentChatState };
+}): React.JSX.Element {
+  // Stable per render: the reference only changes when the prop changes (the rebind trigger),
+  // never on every render — an inline arrow would rebuild the client in a loop.
+  const stableCustomization = useCallback(
+    () => ({
+      customSkills: [],
+      instructions: getPromptCustomization(),
+      skillOverrides: {},
+    }),
+    [getPromptCustomization],
+  );
+  const client = useLocalAgentClient(
+    {
+      apiKey: "test-key",
+      baseUrl: "http://localhost:8080",
+      desktop: false,
+      model: "test-model",
+      provider: "anthropic",
+      vtdEndpoint: "http://localhost:8090",
+    },
+    {
+      enabled: true,
+      getCatalog: () => ({ topics: [], datatypes: new Map() }),
+      getPromptCustomization: stableCustomization,
+    },
+  );
+  return (
+    <AgentChatProvider client={client}>
+      <StateProbe storeRef={storeRef} />
+    </AgentChatProvider>
+  );
+}
+
+function StateProbe({ storeRef }: { storeRef: { current?: AgentChatState } }): ReactNull {
+  const state = useAgentChat((chatState) => chatState);
+  storeRef.current = state;
+  return null;
+}
+
+/** Produces a conversation through a given orchestrator instance and returns the messages. */
+async function populateMessagesThroughOrchestrator(
+  client: MockOrchestrator,
+  storeRef: { current?: AgentChatState },
+): Promise<void> {
+  let send!: Promise<void>;
+  act(() => {
+    send = storeRef.current!.actions.sendMessage("hello");
+  });
+  await waitFor(() => {
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+  const requestId = client.sendMessage.mock.calls[0]![2] as string;
+  act(() => {
+    client.emit({ type: "message-start", messageId: "assistant-1", requestId, seq: 1 });
+    client.emit({ type: "token", messageId: "assistant-1", requestId, delta: "hi", seq: 2 });
+    client.emit({ type: "message-end", messageId: "assistant-1", requestId, seq: 3 });
+    client.emit({ type: "done", requestId, seq: 4 });
+  });
+  await act(async () => {
+    await send;
+  });
+}
+
 function makeWrapper(
   client: IAgentClient,
   options: {
@@ -179,6 +304,52 @@ function makeWrapper(
     );
     return options.strict === true ? <StrictMode>{provider}</StrictMode> : provider;
   };
+}
+
+/**
+ * Wrapper whose client is read from a mutable ref, so a test can re-bind the provider to a new
+ * client object (or to undefined) mid-flight.
+ */
+function makeRebindableWrapper(
+  clientRef: { current?: IAgentClient },
+  persistenceRef: { current?: AgentConversationPersistence },
+  options: { enabled?: boolean } = {},
+): React.ComponentType<PropsWithChildren> {
+  return function Wrapper({ children }: PropsWithChildren) {
+    return (
+      <AgentChatProvider
+        client={clientRef.current}
+        enabled={options.enabled}
+        persistence={persistenceRef.current}
+      >
+        {children}
+      </AgentChatProvider>
+    );
+  };
+}
+
+/** Produces a conversation with a user and an assistant message in the store. */
+async function populateMessages(
+  harness: ClientHarness,
+  result: { current: AgentChatState },
+): Promise<void> {
+  let send!: Promise<void>;
+  act(() => {
+    send = result.current.actions.sendMessage("hello");
+  });
+  await waitFor(() => {
+    expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+  const requestId = requestIdAt(harness.client, 0);
+  act(() => {
+    harness.emit({ type: "message-start", messageId: "assistant-1", requestId, seq: 1 });
+    harness.emit({ type: "token", messageId: "assistant-1", requestId, delta: "hi", seq: 2 });
+    harness.emit({ type: "message-end", messageId: "assistant-1", requestId, seq: 3 });
+    harness.emit({ type: "done", requestId, seq: 4 });
+  });
+  await act(async () => {
+    await send;
+  });
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -1796,6 +1967,245 @@ describe("AgentChatProvider", () => {
     await act(async () => {
       await send;
     });
+  });
+
+  it("keeps messages when the client is re-bound to a new object (B1 regression)", async () => {
+    const clientRef: { current?: IAgentClient } = {};
+    const persistenceRef: { current?: AgentConversationPersistence } = {};
+    const harness = createClientHarness();
+    clientRef.current = harness.client;
+    const { result, rerender } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeRebindableWrapper(clientRef, persistenceRef),
+    });
+    await populateMessages(harness, result);
+    expect(result.current.messages.length).toBeGreaterThan(0);
+    const before = result.current.messages;
+
+    // Re-binding: a new client object (e.g. a configuration rebuild) must not clear the
+    // conversation.
+    const client2 = createMockClient();
+    client2.subscribeEvents.mockImplementation(
+      async (_sessionId, _listener, signal): Promise<void> => {
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted === true) {
+            resolve();
+          } else {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          }
+        });
+      },
+    );
+    clientRef.current = client2;
+    act(() => {
+      rerender();
+    });
+
+    expect(result.current.messages).toEqual(before);
+  });
+
+  it("keeps messages but resets runtime state when the client is re-bound (B1)", async () => {
+    const clientRef: { current?: IAgentClient } = {};
+    const persistenceRef: { current?: AgentConversationPersistence } = {};
+    const harness = createClientHarness();
+    clientRef.current = harness.client;
+    const { result, rerender } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeRebindableWrapper(clientRef, persistenceRef),
+    });
+    await populateMessages(harness, result);
+    // Sending a message lazily creates the session.
+    expect(result.current.sessionId).toBeDefined();
+    expect(result.current.messages.length).toBeGreaterThan(0);
+
+    const client2 = createMockClient();
+    client2.subscribeEvents.mockImplementation(
+      async (_sessionId, _listener, signal): Promise<void> => {
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted === true) {
+            resolve();
+          } else {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          }
+        });
+      },
+    );
+    clientRef.current = client2;
+    act(() => {
+      rerender();
+    });
+
+    // The transcript survives the re-bind; the runtime session state (sessionId/status) belongs
+    // to the new client and is reset.
+    expect(result.current.messages.length).toBeGreaterThan(0);
+    expect(result.current.sessionId).toBeUndefined();
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("keeps non-empty messages when the transcript restore rejects (B1)", async () => {
+    const clientRef: { current?: IAgentClient } = {};
+    const restoreUiMessages = jest
+      .fn()
+      .mockRejectedValue(new Error("remote unavailable"));
+    // The failing persistence is present from the very first mount: its restore rejects both on
+    // the initial mount (empty transcript — nothing to lose) and on the re-bind.
+    const failingPersistence: AgentConversationPersistence = {
+      clear: jest.fn(),
+      deleteConversation: jest.fn().mockResolvedValue(false),
+      getActiveConversationId: () => "conversation-1",
+      listConversations: jest.fn().mockResolvedValue({ items: [], total: 0, offline: false }),
+      onLlmHistoryChanged: jest.fn(),
+      onUiMessagesChanged: jest.fn(),
+      restoreLlmHistory: jest.fn().mockResolvedValue([]),
+      restoreUiMessages,
+      setProfileName: jest.fn(),
+      startNewConversation: jest.fn(() => "conversation-2"),
+      switchConversation: jest.fn(async () => {}),
+    };
+    const persistenceRef: { current?: AgentConversationPersistence } = {
+      current: failingPersistence,
+    };
+    const harness = createClientHarness();
+    clientRef.current = harness.client;
+    const { result, rerender } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeRebindableWrapper(clientRef, persistenceRef),
+    });
+    await populateMessages(harness, result);
+    expect(result.current.messages.length).toBeGreaterThan(0);
+    const before = result.current.messages;
+    const restoreCallsBeforeRebind = restoreUiMessages.mock.calls.length;
+
+    // Re-bind to a new client with the SAME persistence (no workspace switch): the restore runs
+    // again, rejects, and must not wipe the existing conversation.
+    const client2 = createMockClient();
+    client2.subscribeEvents.mockImplementation(
+      async (_sessionId, _listener, signal): Promise<void> => {
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted === true) {
+            resolve();
+          } else {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          }
+        });
+      },
+    );
+    clientRef.current = client2;
+    act(() => {
+      rerender();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The restore was actually invoked during the re-bind, rejected, and the transcript survived.
+    expect(restoreUiMessages.mock.calls.length).toBeGreaterThan(restoreCallsBeforeRebind);
+    expect(result.current.messages).toEqual(before);
+  });
+
+  it("clears the conversation when the workspace/persistence switches (B1)", async () => {
+    const clientRef: { current?: IAgentClient } = {};
+    const persistenceRef: { current?: AgentConversationPersistence } = {};
+    const harness = createClientHarness();
+    clientRef.current = harness.client;
+    const { result, rerender } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeRebindableWrapper(clientRef, persistenceRef),
+    });
+    await populateMessages(harness, result);
+    expect(result.current.messages.length).toBeGreaterThan(0);
+
+    // A different persistence object means the workspace changed: the old session must not leak
+    // into the new workspace.
+    persistenceRef.current = {
+      clear: jest.fn(),
+      deleteConversation: jest.fn().mockResolvedValue(false),
+      getActiveConversationId: () => "workspace-2-conversation",
+      listConversations: jest.fn().mockResolvedValue({ items: [], total: 0, offline: false }),
+      onLlmHistoryChanged: jest.fn(),
+      onUiMessagesChanged: jest.fn(),
+      restoreLlmHistory: jest.fn().mockResolvedValue([]),
+      restoreUiMessages: jest.fn().mockResolvedValue([]),
+      setProfileName: jest.fn(),
+      startNewConversation: jest.fn(() => "workspace-2-new"),
+      switchConversation: jest.fn(async () => {}),
+    };
+    act(() => {
+      rerender();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.activeConversationId).toBe("workspace-2-conversation");
+  });
+
+  it("clears messages only when the client becomes undefined (real disable)", async () => {
+    const clientRef: { current?: IAgentClient } = {};
+    const persistenceRef: { current?: AgentConversationPersistence } = {};
+    const harness = createClientHarness();
+    clientRef.current = harness.client;
+    const { result, rerender } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeRebindableWrapper(clientRef, persistenceRef),
+    });
+    await populateMessages(harness, result);
+    expect(result.current.messages.length).toBeGreaterThan(0);
+
+    // Real disable (e.g. the agent switch turned off): the session is cleared and the old
+    // client is no longer exposed.
+    clientRef.current = undefined;
+    act(() => {
+      rerender();
+    });
+
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("keeps messages across a real dependency-driven rebind through the full wrapper (B1)", async () => {
+    mockOrchestratorInstances.length = 0;
+    let customization: () => string = () => "v1";
+    const storeRef: { current?: AgentChatState } = {};
+    const { rerender } = render(
+      <RebindHarness getPromptCustomization={customization} storeRef={storeRef} />,
+    );
+    await waitFor(() => {
+      expect(mockOrchestratorInstances).toHaveLength(1);
+    });
+    const firstClient = mockOrchestratorInstances[0]!;
+
+    await populateMessagesThroughOrchestrator(firstClient, storeRef);
+    expect(storeRef.current!.messages.length).toBeGreaterThan(0);
+    const before = storeRef.current!.messages;
+
+    // A changing getPromptCustomization reference (a real dependency of useLocalAgentClient)
+    // rebuilds the client; the full wrapper must keep the conversation messages.
+    customization = () => "v2";
+    rerender(<RebindHarness getPromptCustomization={customization} storeRef={storeRef} />);
+    await waitFor(() => {
+      expect(mockOrchestratorInstances).toHaveLength(2);
+    });
+
+    expect(storeRef.current!.messages).toEqual(before);
+    expect(mockOrchestratorInstances[0]!.dispose).toHaveBeenCalled();
+    expect(mockOrchestratorInstances[1]!.dispose).not.toHaveBeenCalled();
   });
 
   it("supersedes an unhandled proposal from the same request without leaving a queued copy", async () => {

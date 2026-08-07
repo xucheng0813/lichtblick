@@ -28,7 +28,7 @@ class ExtensionsAPI implements IExtensionAPI {
       `${this.workspacePath}/${this.workspace}/${this.extensionPath}`,
     );
 
-    return ExtensionAdapter.toExtensionInfoList(data);
+    return ExtensionAdapter.toExtensionInfoList(data ?? []);
   }
 
   public async get(id: string): Promise<StoredExtension | undefined> {
@@ -82,6 +82,9 @@ class ExtensionsAPI implements IExtensionAPI {
       formData,
     );
 
+    if (data == undefined) {
+      throw new Error("Empty response from extension create/update");
+    }
     return ExtensionAdapter.toStoredExtension(data.extension, this.workspace);
   }
 
@@ -107,7 +110,7 @@ class ExtensionsAPI implements IExtensionAPI {
         { responseType: "arraybuffer" },
       );
 
-      return new Uint8Array(data);
+      return data == undefined ? new Uint8Array() : new Uint8Array(data);
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) {
         return undefined;

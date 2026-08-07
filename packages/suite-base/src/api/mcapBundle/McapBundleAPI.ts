@@ -18,6 +18,9 @@ export class McapBundleAPI {
         signal,
       },
     );
+    if (data == undefined) {
+      throw new Error("Empty response from mcap bundle get");
+    }
     return data.mcaps;
   }
 }

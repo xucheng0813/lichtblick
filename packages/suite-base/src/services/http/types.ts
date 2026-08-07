@@ -21,7 +21,11 @@ type ErrorResponse = {
 };
 
 type SuccessResponse<T> = {
-  data: T;
+  /**
+   * The parsed response body. For a 2xx response with no JSON body (204 No Content or an empty
+   * 200 without a JSON content type) this is `undefined` — the request succeeded with no data.
+   */
+  data: T | undefined;
   timestamp: string;
   path: string;
 };

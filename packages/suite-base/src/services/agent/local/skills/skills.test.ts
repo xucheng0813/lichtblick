@@ -238,14 +238,18 @@ describe("skill registry", () => {
   });
 
   it("requires relative VTD dates to be resolved before calling a tool", () => {
-    const vtdQuery = SKILL_REGISTRY.get("vtd-query")!.body;
-    expect(vtdQuery).toContain(
+    const vtdQuery = SKILL_REGISTRY.get("vtd-query")!;
+    expect(vtdQuery.body).toContain(
       'relative dates such as "yesterday", "today", or "last week"',
     );
-    expect(vtdQuery).toContain("current time and browser");
-    expect(vtdQuery).toContain(
+    expect(vtdQuery.body).toContain("current time and browser");
+    expect(vtdQuery.body).toContain(
       "Never pass relative-date words directly to a tool",
     );
+    // B5: the skill's trigger line scopes it to finding NEW recordings only; questions about
+    // already-loaded data never need it.
+    expect(vtdQuery.whenToUse).toContain("new VTD recordings");
+    expect(vtdQuery.whenToUse).toContain("already-loaded data");
   });
 
   it("keeps textual replies to vtd_search results brief instead of listing records", () => {

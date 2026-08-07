@@ -20,7 +20,7 @@ import {
 import * as _ from "lodash-es";
 import moment from "moment";
 import { useSnackbar } from "notistack";
-import { useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import useAsyncFn from "react-use/lib/useAsyncFn";
 
@@ -317,6 +317,33 @@ export default function LayoutBrowser({
     [enqueueSnackbar, layoutsAPI, t],
   );
 
+  const [defaultLayoutExternalId, setDefaultLayoutExternalId] = useState<
+    string | undefined
+  >();
+  // Latest-request guard: the initial default-layout fetch may still be in flight when a
+  // set-as-default refresh starts; a stale response must not overwrite the newer one, so the
+  // badge always shows exactly the latest known default.
+  const defaultLayoutFetchGenerationRef = useRef(0);
+
+  const refreshDefaultLayout = useCallback(async () => {
+    if (layoutsAPI == undefined) {
+      setDefaultLayoutExternalId(undefined);
+      return;
+    }
+    const generation = ++defaultLayoutFetchGenerationRef.current;
+    try {
+      const defaultLayout = await layoutsAPI.getDefaultLayout();
+      if (defaultLayoutFetchGenerationRef.current === generation) {
+        setDefaultLayoutExternalId(defaultLayout?.externalId);
+      }
+    } catch {
+      if (defaultLayoutFetchGenerationRef.current === generation) {
+        // Failed to learn the default: show no badge rather than a stale one.
+        setDefaultLayoutExternalId(undefined);
+      }
+    }
+  }, [layoutsAPI]);
+
   const onSetDefaultLayout = useCallback(
     async (item: Layout): Promise<void> => {
       if (layoutsAPI == undefined || item.externalId == undefined) {
@@ -325,6 +352,9 @@ export default function LayoutBrowser({
       try {
         await layoutsAPI.setDefaultLayout(item.externalId);
         enqueueSnackbar(t("setAsOrgDefaultSuccess"), { variant: "success" });
+        // Re-fetch the default so the badge moves to the newly defaulted layout (and disappears
+        // from the previous one) — the server remains the single source of truth.
+        await refreshDefaultLayout();
       } catch (error) {
         enqueueSnackbar(
           error instanceof HttpError && error.status === 404
@@ -334,8 +364,16 @@ export default function LayoutBrowser({
         );
       }
     },
-    [enqueueSnackbar, layoutsAPI, t],
+    [enqueueSnackbar, layoutsAPI, refreshDefaultLayout, t],
   );
+
+  useEffect(() => {
+    if (layoutsAPI == undefined) {
+      setDefaultLayoutExternalId(undefined);
+      return;
+    }
+    void refreshDefaultLayout();
+  }, [layoutsAPI, refreshDefaultLayout]);
 
   const showSignInPrompt =
     signIn != undefined && !layoutManager.supportsSharing && !hideSignInPrompt;
@@ -438,6 +476,7 @@ export default function LayoutBrowser({
               ? undefined
               : onSetDefaultLayout
           }
+          defaultExternalId={defaultLayoutExternalId}
         />
         {layoutManager.supportsSharing && (
           <LayoutSection
@@ -466,6 +505,7 @@ export default function LayoutBrowser({
                 ? undefined
                 : onSetDefaultLayout
             }
+            defaultExternalId={defaultLayoutExternalId}
           />
         )}
         {!enableNewTopNav && <Stack flexGrow={1} />}

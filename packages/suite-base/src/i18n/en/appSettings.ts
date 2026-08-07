@@ -53,6 +53,9 @@ export const appSettings = {
     "Deleting {{name}} removes it for everyone in the organization. The server currently has no authentication, so anyone with access can delete it. This cannot be undone.",
   agentRemoteSkillDeleteConfirmTitle: "Delete cloud skill {{name}}?",
   agentRemoteSkillDeleteFailed: "Could not delete cloud skill: {{error}}",
+  agentRemoteSkillDeleting: "Deleting…",
+  agentRemoteSkillDeleteInProgress:
+    "Another cloud skill is being deleted — wait for it to finish.",
   agentRemoteSkillDeleteSucceeded: "Cloud skill deleted.",
   agentRemoteSkillDeleteUnsupported:
     "The server does not support deleting cloud skills yet. Upgrade viz-server to enable this.",

@@ -11,7 +11,7 @@ export const VTD_QUERY_SKILL: Skill = {
   id: "vtd-query",
   name: "VTD query: finding and inspecting records",
   whenToUse:
-    "Before searching VTD, when a search returns too many or too few records, or to interpret record fields.",
+    "Only for finding new VTD recordings; questions about the already-loaded data never need this skill.",
   body: `# Finding and inspecting VTD records
 
 VTD is the recording archive. A record is one uploaded MCAP file plus its metadata.

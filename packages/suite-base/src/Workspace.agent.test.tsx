@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { act, renderHook } from "@testing-library/react";
-import { StrictMode } from "react";
+import { StrictMode, useMemo } from "react";
 
 import { AgentConfiguration } from "@lichtblick/suite-base/services/agent/agentSettings";
 import {
@@ -12,6 +12,7 @@ import {
   useLocalAgentClient,
 } from "@lichtblick/suite-base/services/agent/localAgentClient";
 import { PiAgentOrchestrator } from "@lichtblick/suite-base/services/agent/pi/PiAgentOrchestrator";
+import type { AgentDataQueryContext } from "@lichtblick/suite-base/services/agent/tools/toolRuntime";
 
 const validConfiguration: AgentConfiguration = {
   apiKey: "test-api-key",
@@ -154,6 +155,49 @@ describe("local Agent client lifecycle", () => {
       await Promise.resolve();
     });
     expect(dispose).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the client stable while the data source loads (catalog + player changes)", async () => {
+    // Simulates the Workspace wiring during a data-source load: the catalog content changes
+    // (open_data_source → catalog-ready) and the player state changes, but every dependency of
+    // useLocalAgentClient is either stable (dataQuery via useMemo, getters via useLatest*)
+    // or independent of the data source (agent configuration, profile). The client must neither
+    // be rebuilt nor released — that is the window that previously wiped the conversation.
+    type Topic = { name: string; schemaName: string };
+    const { result, rerender } = renderHook<PiAgentOrchestrator | undefined, { topics: Topic[] }>(
+      ({ topics }: { topics: Topic[] }) => {
+        const getCatalog = useLatestAgentCatalog(() => ({
+          datatypes: new Map(),
+          topics,
+        }));
+        const dataQuery = useMemo(
+          () => ({ getContext: () => ({}) as AgentDataQueryContext }),
+          [],
+        );
+        return useLocalAgentClient(validConfiguration, {
+          enabled: true,
+          getCatalog,
+          dataQuery,
+        });
+      },
+      { initialProps: { topics: [] } },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current).toBeDefined();
+    const firstClient = result.current;
+
+    // Data source loads: empty catalog → topics appear → more topics arrive.
+    rerender({ topics: [{ name: "/imu", schemaName: "sensor_msgs/Imu" }] });
+    expect(result.current).toBe(firstClient);
+    rerender({
+      topics: [
+        { name: "/imu", schemaName: "sensor_msgs/Imu" },
+        { name: "/gps", schemaName: "sensor_msgs/NavSatFix" },
+      ],
+    });
+    expect(result.current).toBe(firstClient);
   });
 
   it("does not construct a client for invalid settings", () => {

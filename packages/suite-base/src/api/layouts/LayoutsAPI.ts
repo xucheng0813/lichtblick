@@ -50,7 +50,8 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
       `${this.workspacePath}/${this.workspace}/${this.layoutPath}`,
     );
 
-    return layoutData.map(toRemoteLayout);
+    // An empty body means no layouts; treat it as an empty list.
+    return (layoutData ?? []).map(toRemoteLayout);
   }
 
   public async getDefaultLayout(): Promise<RemoteLayout | undefined> {
@@ -78,6 +79,9 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
       requestPayload,
     );
 
+    if (data == undefined) {
+      throw new Error("Empty response from layout create");
+    }
     const { layout: layoutData } = data;
 
     return toRemoteLayout(layoutData);
@@ -97,6 +101,9 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
       );
 
       // Transform the HTTP response into the expected UpdateLayoutResponse format
+      if (layoutData == undefined) {
+        throw new Error("Empty response from layout update");
+      }
       const newLayout = toRemoteLayout(layoutData);
 
       return { status: "success", newLayout };
@@ -113,7 +120,8 @@ export class LayoutsAPI implements IRemoteLayoutStorage {
       `${this.workspacePath}/${this.workspace}/${this.layoutPath}/${layoutId}/description`,
       { description },
     );
-    return data.updated;
+    // An empty body (e.g. 204) means the server did not report a result; treat as not updated.
+    return data?.updated === true;
   }
 
   public async deleteLayout(id: string): Promise<boolean> {

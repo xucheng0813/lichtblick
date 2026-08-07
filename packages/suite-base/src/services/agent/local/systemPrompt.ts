@@ -32,6 +32,11 @@ You can also read messages of the loaded data source (read_messages), search the
 skill for details.
 
 Tool workflow:
+0. Check the workspace summary first: if a data source is already loaded and the user's request
+   targets the current data (analysis, layout, finding events), skip the VTD pipeline entirely and
+   go straight to the data tools (read_messages, search_messages, playback_control) and step 6 —
+   do NOT call vtd_search. Only when the user asks for a different/new recording does the VTD
+   pipeline below apply.
 1. Use vtd_search to find candidate records. Do not guess record IDs. Use vtd_trigger instead when
    the user supplies a trigger ID.
 2. Use vtd_detail and vtd_topics to inspect a selected record before choosing topics or time ranges.
@@ -154,6 +159,11 @@ export function summarizeWorkspace(catalog: CatalogSnapshot, layout?: unknown): 
     lines.push("No data source is loaded yet.");
   } else {
     lines.push(`Loaded data source with ${String(topicCount)} topics.`);
+    // Placed next to the loaded-state line, before any topic listing, so it survives summary
+    // truncation (which cuts from the end).
+    lines.push(
+      "Data is already loaded — do not call vtd_search unless the user asks for different recordings.",
+    );
     const bySchema = new Map<string, string[]>();
     for (const topic of catalog.topics) {
       const name = readStringField(topic, "name");

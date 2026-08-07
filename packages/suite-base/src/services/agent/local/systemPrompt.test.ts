@@ -31,6 +31,17 @@ describe("LOCAL_AGENT_SYSTEM_PROMPT", () => {
     expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain("vtd_trigger");
   });
 
+  it("gates the VTD pipeline behind the loaded-data check (B5)", () => {
+    // The workflow must not present vtd_search as an unconditional first step: with data already
+    // loaded, the agent must skip the VTD pipeline entirely.
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toMatch(/already loaded.*skip the VTD pipeline/s);
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toMatch(/do NOT call vtd_search/);
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toMatch(/different\/new recording/);
+    expect(LOCAL_AGENT_SYSTEM_PROMPT.indexOf("Tool workflow:")).toBeLessThan(
+      LOCAL_AGENT_SYSTEM_PROMPT.indexOf("vtd_search"),
+    );
+  });
+
   it("advertises the data-query capabilities in one sentence", () => {
     expect(LOCAL_AGENT_SYSTEM_PROMPT).toMatch(
       /read_messages[\s\S]*search_messages[\s\S]*playback_control/,
@@ -230,6 +241,32 @@ describe("summarizeWorkspace", () => {
     });
     expect(summary).toContain("pkg/Type: /a, /b");
     expect(summary).toContain("(unknown schema): /c");
+  });
+
+  it("tells the agent not to call vtd_search when data is already loaded (B5)", () => {
+    const summary = summarizeWorkspace({
+      topics: [{ name: "/a", schemaName: "pkg/Type" }],
+      datatypes: new Map(),
+    });
+    expect(summary).toContain(
+      "Data is already loaded — do not call vtd_search unless the user asks for different recordings.",
+    );
+    expect(summary.indexOf("do not call vtd_search")).toBeLessThan(
+      summary.indexOf("Topics by schema"),
+    );
+  });
+
+  it("keeps the no-vtd_search instruction when the summary is truncated (B5)", () => {
+    // The instruction sits next to the loaded-state line, before any topic listing, so it must
+    // survive the end-truncation that a huge catalog triggers.
+    const topics = Array.from({ length: 5000 }, (_unused, index) => ({
+      name: `/topic/${String(index)}`,
+      schemaName: "pkg/Type",
+    }));
+    const summary = summarizeWorkspace({ topics, datatypes: new Map() });
+    expect(summary).toContain(
+      "Data is already loaded — do not call vtd_search unless the user asks for different recordings.",
+    );
   });
 
   it("truncates a catalog too large for the prompt and points to the full catalog tool", () => {

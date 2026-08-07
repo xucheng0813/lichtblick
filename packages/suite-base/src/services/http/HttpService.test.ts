@@ -52,6 +52,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValue({ data: {} }),
+        text: jest.fn().mockResolvedValue(JSON.stringify({ data: {} })),
       });
 
       setHttpBaseUrl("http://viz.example.com:9903/lichtblick/");
@@ -85,6 +86,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce(mockResponse),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify(mockResponse)),
       });
 
       const result = await httpService.get("test");
@@ -110,6 +112,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce(mockResponse),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify(mockResponse)),
       });
 
       await httpService.get("users", { page: "1", limit: "10" });
@@ -142,6 +145,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce(mockResponse),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify(mockResponse)),
       });
 
       const result = await httpService.post("items", requestData);
@@ -167,6 +171,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "success" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "success" })),
       });
 
       await httpService.post("action");
@@ -201,6 +206,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce(mockResponse),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify(mockResponse)),
       });
 
       const result = await httpService.post("upload", formData);
@@ -228,6 +234,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: updateData }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: updateData })),
       });
 
       await httpService.put("items/1", updateData);
@@ -254,6 +261,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({}),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({})),
       });
 
       await httpService.delete("items/1");
@@ -448,6 +456,83 @@ describe("HttpService", () => {
     });
   });
 
+  describe("empty and non-JSON success responses", () => {
+    // A real fetch Response can be read exactly once: a second read rejects. These mocks
+    // reproduce that so the implementation cannot get away with double reads.
+    const singleReadBody = (content: string) =>
+      jest
+        .fn()
+        .mockImplementationOnce(async () => await Promise.resolve(content))
+        .mockImplementation(async () =>
+          await Promise.reject(new TypeError("Body is unusable: body has already been read")),
+        );
+
+    it("treats 204 No Content as a success with undefined data", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        statusText: "No Content",
+        headers: {
+          get: jest.fn().mockReturnValue(null),
+        },
+        text: singleReadBody(""),
+      });
+
+      const result = await httpService.put("layouts/external-1/default", {
+        is_default: true,
+      });
+
+      expect(result.data).toBeUndefined();
+      expect(result.path).toBe("layouts/external-1/default");
+    });
+
+    it("treats an empty 200 response without a Content-Type as a success with undefined data", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: {
+          get: jest.fn().mockReturnValue(null),
+        },
+        text: singleReadBody(""),
+      });
+
+      const result = await httpService.delete("workspaces/ws/agent/skill/my-skill");
+
+      expect(result.data).toBeUndefined();
+    });
+
+    it("still rejects a non-empty body that is not valid JSON", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: {
+          get: jest.fn().mockReturnValue(null),
+        },
+        text: singleReadBody("not json at all"),
+      });
+
+      await expect(httpService.get("test")).rejects.toThrow("Failed to parse response");
+    });
+
+    it("returns non-JSON text bodies unchanged", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: {
+          get: jest.fn().mockReturnValue("text/plain"),
+        },
+        text: singleReadBody("plain text body"),
+      });
+
+      const result = await httpService.get("test");
+
+      expect(result.data).toBe("plain text body");
+    });
+  });
+
   describe("custom headers", () => {
     it("should merge custom headers with default headers", async () => {
       mockFetch.mockResolvedValueOnce({
@@ -458,6 +543,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "test" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "test" })),
       });
 
       await httpService.get(
@@ -496,6 +582,11 @@ describe("HttpService", () => {
           timestamp: "2023-01-01",
           path: "/upload",
         }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({
+          data: "file uploaded",
+          timestamp: "2023-01-01",
+          path: "/upload",
+        })),
       });
 
       await httpService.post("upload", "file data", {
@@ -527,6 +618,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "success" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "success" })),
       });
 
       await httpService.get("test", {}, { timeout: 5000 });
@@ -544,6 +636,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "success" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "success" })),
       });
 
       await httpService.get(
@@ -575,6 +668,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "success" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "success" })),
       });
 
       await httpService.get("test");
@@ -610,6 +704,11 @@ describe("HttpService", () => {
             timestamp: "2023-01-01",
             path: "/test",
           }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({
+            data: { success: true },
+            timestamp: "2023-01-01",
+            path: "/test",
+          })),
         });
 
         const result = await httpService.get("test");
@@ -631,6 +730,11 @@ describe("HttpService", () => {
           timestamp: "2023-01-01",
           path: "/resource",
         }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({
+          data: undefined,
+          timestamp: "2023-01-01",
+          path: "/resource",
+        })),
       });
 
       const result = await httpService.delete("resource");
@@ -693,6 +797,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "test" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "test" })),
       });
 
       await httpService.get("/api/users");
@@ -712,6 +817,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "test" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "test" })),
       });
 
       await httpService.get("test", {});
@@ -728,6 +834,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "test" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "test" })),
       });
 
       await httpService.get("test", undefined);
@@ -744,6 +851,7 @@ describe("HttpService", () => {
           get: jest.fn().mockReturnValue("application/json"),
         },
         json: jest.fn().mockResolvedValueOnce({ data: "test" }),
+        text: jest.fn().mockResolvedValueOnce(JSON.stringify({ data: "test" })),
       });
 
       await httpService.get("search", {

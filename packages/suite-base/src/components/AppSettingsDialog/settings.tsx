@@ -1672,6 +1672,10 @@ function AgentPromptSettings(): React.ReactElement {
           : response,
       );
       setRemoteSkillsFetchSucceeded(true);
+      // A manual refresh is the retry path after a 404/405 "server does not support deletion"
+      // lock: the server may have been upgraded, so a successful fetch clears the lock instead
+      // of holding it for the session.
+      setRemoteSkillDeleteUnsupported(false);
     } catch (caught) {
       if (remoteSkillsFetchGenerationRef.current !== generation) {
         return;
@@ -1935,7 +1939,22 @@ function AgentPromptSettings(): React.ReactElement {
                           </span>
                         </Tooltip>
                         {!automatic && (
-                          <Tooltip title={t("agentRemoteSkillDelete")}>
+                          // Delete is offered only for organization custom skills: the automatic
+                          // reserved ids (AUTOMATIC_REMOTE_SKILL_IDS) are never deletable, the
+                          // merged bootstrap carries no source/owner info so nothing else can be
+                          // attributed, and a 404/405 response locks deletion until the next
+                          // successful fetch (the server may have been upgraded).
+                          <Tooltip
+                            title={
+                              remoteSkillDeleteUnsupported
+                                ? t("agentRemoteSkillDeleteUnsupported")
+                                : deletingRemoteSkillId != undefined
+                                  ? deletingRemoteSkillId === skill.id
+                                    ? t("agentRemoteSkillDeleting")
+                                    : t("agentRemoteSkillDeleteInProgress")
+                                  : t("agentRemoteSkillDelete")
+                            }
+                          >
                             <span>
                               <IconButton
                                 aria-label={t("agentRemoteSkillDelete")}

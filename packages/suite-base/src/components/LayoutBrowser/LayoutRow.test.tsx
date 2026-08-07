@@ -298,6 +298,58 @@ describe("LayoutRow rendering", () => {
     expect(screen.queryByTestId("set-default-layout")).not.toBeInTheDocument();
   });
 
+  it("shows the organization-default badge on the matching remote layout", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-default",
+        working: undefined,
+      },
+      defaultExternalId: "remote-default",
+    });
+
+    expect(screen.getByTestId("org-default-badge")).toHaveTextContent("组织默认");
+  });
+
+  it("shows the badge on an ORG_READ default layout too", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-default",
+        permission: "ORG_READ",
+        working: undefined,
+      },
+      defaultExternalId: "remote-default",
+    });
+
+    expect(screen.getByTestId("org-default-badge")).toBeInTheDocument();
+  });
+
+  it("hides the badge when externalId does not match the default", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-other",
+        working: undefined,
+      },
+      defaultExternalId: "remote-default",
+    });
+
+    expect(screen.queryByTestId("org-default-badge")).not.toBeInTheDocument();
+  });
+
+  it("hides the badge when the default is unknown", () => {
+    renderComponent({
+      layout: {
+        ...defaultLayout,
+        externalId: "remote-default",
+        working: undefined,
+      },
+    });
+
+    expect(screen.queryByTestId("org-default-badge")).not.toBeInTheDocument();
+  });
+
   it("submits the description from the dialog with the layout id", async () => {
     const onSetDescription = jest.fn().mockResolvedValue(true);
     const remoteLayout = {

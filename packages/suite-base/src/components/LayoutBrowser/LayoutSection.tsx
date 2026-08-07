@@ -38,6 +38,7 @@ export default function LayoutSection({
   onMakePersonalCopy,
   onSetDescription,
   onSetDefaultLayout,
+  defaultExternalId,
 }: Readonly<{
   title: string | undefined;
   descriptionEditingEnabled?: (layout: Layout) => boolean;
@@ -60,6 +61,7 @@ export default function LayoutSection({
   onMakePersonalCopy: (item: Layout) => void;
   onSetDescription?: (layoutId: string, description: string) => Promise<boolean>;
   onSetDefaultLayout?: (layout: Layout) => Promise<void>;
+  defaultExternalId?: string;
 }>): React.JSX.Element {
   const { classes, cx } = useLayoutSectionStyles();
 
@@ -110,6 +112,7 @@ export default function LayoutSection({
               onMakePersonalCopy={onMakePersonalCopy}
               onSetDescription={onSetDescription}
               onSetDefaultLayout={onSetDefaultLayout}
+              defaultExternalId={defaultExternalId}
             />
           ))}
         </List>

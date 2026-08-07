@@ -8,6 +8,7 @@
 import ErrorIcon from "@mui/icons-material/Error";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import {
+  Chip,
   Divider,
   IconButton,
   ListItemButton,
@@ -72,6 +73,7 @@ export default React.memo(function LayoutRow({
   onMakePersonalCopy,
   onSetDescription,
   onSetDefaultLayout,
+  defaultExternalId,
 }: {
   layout: Layout;
   descriptionEditingEnabled?: boolean;
@@ -89,6 +91,8 @@ export default React.memo(function LayoutRow({
   onMakePersonalCopy: (item: Layout) => void;
   onSetDescription?: (layoutId: string, description: string) => Promise<boolean>;
   onSetDefaultLayout?: (layout: Layout) => Promise<void>;
+  /** externalId of the server's current organization default layout, if known. */
+  defaultExternalId?: string;
 }): React.JSX.Element {
   const { t } = useTranslation("layoutBrowser");
   const isMounted = useMountedState();
@@ -110,6 +114,8 @@ export default React.memo(function LayoutRow({
   const hasModifications = layout.working != undefined;
   const multiSelection = multiSelectedIds.length > 1;
   const readOnly = layoutIsReadOnly(layout);
+  const isOrgDefault =
+    layout.externalId != undefined && layout.externalId === defaultExternalId;
 
   useLayoutEffect(() => {
     const onlineListener = () => {
@@ -479,6 +485,14 @@ export default React.memo(function LayoutRow({
           >
             {layout.name}
           </Typography>
+          {isOrgDefault && (
+            <Chip
+              data-testid="org-default-badge"
+              label={t("orgDefault")}
+              size="small"
+              style={{ display: editingName ? "none" : "inline-flex" }}
+            />
+          )}
         </ListItemText>
       </ListItemButton>
       <Menu

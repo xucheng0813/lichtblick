@@ -116,7 +116,20 @@ export class HttpService {
         };
       }
 
-      const jsonData = await response.json();
+      // Read the body exactly once and decide from the content: a response body can only be
+      // consumed a single time, so a parse failure can never be retried against a fresh read.
+      // An empty body (204 No Content, or an empty 200 without a JSON content type) is a
+      // success whose data is undefined — management endpoints such as the layout-default PUT
+      // return 204/empty. A non-empty body that is not valid JSON still fails exactly as before.
+      const bodyText = await response.text();
+      if (bodyText.length === 0) {
+        return {
+          data: undefined as T,
+          timestamp: new Date().toISOString(),
+          path: endpoint,
+        };
+      }
+      const jsonData = JSON.parse(bodyText);
       return {
         data: jsonData.data as T,
         timestamp: jsonData.timestamp,

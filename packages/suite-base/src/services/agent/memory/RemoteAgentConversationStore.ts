@@ -73,6 +73,10 @@ export class RemoteAgentConversationStore {
       const response = await this.#http.get<RemoteStoredConversation>(
         `${this.#workspacePath}/${encodeURIComponent(conversationId)}`,
       );
+      if (response.data == undefined) {
+        // 2xx with an empty body: nothing to restore.
+        return undefined;
+      }
       const conversation: StoredConversation = {
         conversationId: response.data.conversationId,
         updatedAt: response.data.updatedAt,
@@ -125,6 +129,10 @@ export class RemoteAgentConversationStore {
       page: String(page),
       page_size: String(pageSize),
     });
+    if (response.data == undefined) {
+      // 2xx with an empty body: an empty page.
+      return { items: [], total: 0 };
+    }
     return response.data;
   }
 

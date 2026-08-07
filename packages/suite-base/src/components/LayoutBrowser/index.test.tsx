@@ -318,6 +318,170 @@ describe("LayoutBrowser", () => {
     }
   });
 
+  it("tracks the server default layout and shows no badge when there is none", async () => {
+    globalThis.history.replaceState({}, "", "/?workspace=test-workspace");
+    setHttpBaseUrl("http://viz.example.com:9903/lichtblick");
+    const capturedProps: Record<string, unknown>[] = [];
+    const originalLayoutSectionMock = jest.requireMock("./LayoutSection").default;
+    jest.requireMock("./LayoutSection").default = jest
+      .fn()
+      .mockImplementation((props: Record<string, unknown>) => {
+        capturedProps.push(props);
+        return <div data-testid="layout-section" />;
+      });
+    const getMock = jest.spyOn(HttpService, "get").mockResolvedValue({
+      data: null,
+      path: "workspaces/test-workspace/default-layout",
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      render(<LayoutBrowser />);
+      await waitFor(() => {
+        const last = capturedProps[capturedProps.length - 1];
+        expect(last?.onSetDefaultLayout).toBeDefined();
+        expect(last?.defaultExternalId).toBeUndefined();
+      });
+      expect(getMock).toHaveBeenCalledWith(
+        "workspaces/test-workspace/default-layout",
+      );
+    } finally {
+      getMock.mockRestore();
+      jest.requireMock("./LayoutSection").default = originalLayoutSectionMock;
+    }
+  });
+
+  it("shows no default badge when the default-layout fetch fails", async () => {
+    globalThis.history.replaceState({}, "", "/?workspace=test-workspace");
+    setHttpBaseUrl("http://viz.example.com:9903/lichtblick");
+    const capturedProps: Record<string, unknown>[] = [];
+    const originalLayoutSectionMock = jest.requireMock("./LayoutSection").default;
+    jest.requireMock("./LayoutSection").default = jest
+      .fn()
+      .mockImplementation((props: Record<string, unknown>) => {
+        capturedProps.push(props);
+        return <div data-testid="layout-section" />;
+      });
+    const getMock = jest
+      .spyOn(HttpService, "get")
+      .mockRejectedValue(new Error("network failed"));
+
+    try {
+      render(<LayoutBrowser />);
+      await waitFor(() => {
+        const last = capturedProps[capturedProps.length - 1];
+        expect(last?.onSetDefaultLayout).toBeDefined();
+        expect(last?.defaultExternalId).toBeUndefined();
+      });
+    } finally {
+      getMock.mockRestore();
+      jest.requireMock("./LayoutSection").default = originalLayoutSectionMock;
+    }
+  });
+
+  it("discards a stale initial default-layout response after a set-as-default refresh", async () => {
+    globalThis.history.replaceState({}, "", "/?workspace=test-workspace");
+    setHttpBaseUrl("http://viz.example.com:9903/lichtblick");
+    const enqueueSnackbar = jest.fn();
+    (jest.requireMock("notistack").useSnackbar as jest.Mock).mockReturnValue({
+      enqueueSnackbar,
+    });
+    const capturedProps: Record<string, unknown>[] = [];
+    const originalLayoutSectionMock = jest.requireMock("./LayoutSection").default;
+    jest.requireMock("./LayoutSection").default = jest
+      .fn()
+      .mockImplementation((props: Record<string, unknown>) => {
+        capturedProps.push(props);
+        return <div data-testid="layout-section" />;
+      });
+    const apiLayout = (externalId: string) => ({
+      createdAt: "2026-01-01T00:00:00.000Z",
+      data: {
+        configById: {},
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+      from: "test",
+      id: externalId,
+      layoutId: `layout-${externalId}`,
+      name: `Layout ${externalId}`,
+      permission: "ORG_WRITE" as const,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      workspace: "test-workspace",
+    });
+    // The initial default-layout fetch A stays pending; the refresh B after set-as-default
+    // resolves with the new default. A later stale response must not overwrite B.
+    let resolveInitial:
+      | ((value: {
+          data: ReturnType<typeof apiLayout> | null;
+          path: string;
+          timestamp: string;
+        }) => void)
+      | undefined;
+    const initialPromise = new Promise<{
+      data: ReturnType<typeof apiLayout> | null;
+      path: string;
+      timestamp: string;
+    }>((resolve) => {
+      resolveInitial = resolve;
+    });
+    const getMock = jest
+      .spyOn(HttpService, "get")
+      .mockImplementationOnce(async () => await initialPromise)
+      .mockImplementationOnce(async () => ({
+        data: apiLayout("new-id"),
+        path: "workspaces/test-workspace/default-layout",
+        timestamp: new Date().toISOString(),
+      }));
+    const putMock = jest.spyOn(HttpService, "put").mockResolvedValue({
+      data: undefined,
+      path: "",
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      render(<LayoutBrowser />);
+      await waitFor(() => {
+        const last = capturedProps[capturedProps.length - 1];
+        expect(last?.onSetDefaultLayout).toBeDefined();
+        expect(last?.defaultExternalId).toBeUndefined();
+      });
+      const onSetDefaultLayout = capturedProps[capturedProps.length - 1]!
+        .onSetDefaultLayout as (layout: Layout) => Promise<void>;
+
+      await act(async () => {
+        await onSetDefaultLayout(
+          LayoutBuilder.layout({ externalId: "new-id", permission: "CREATOR_WRITE" }),
+        );
+      });
+
+      await waitFor(() => {
+        expect(capturedProps[capturedProps.length - 1]?.defaultExternalId).toBe(
+          "new-id",
+        );
+      });
+
+      // The stale initial response arrives late and must be discarded: the badge stays on the
+      // newly defaulted layout (always exactly one badge).
+      await act(async () => {
+        resolveInitial?.({
+          data: apiLayout("old-id"),
+          path: "workspaces/test-workspace/default-layout",
+          timestamp: new Date().toISOString(),
+        });
+        await initialPromise;
+      });
+      expect(capturedProps[capturedProps.length - 1]?.defaultExternalId).toBe(
+        "new-id",
+      );
+    } finally {
+      getMock.mockRestore();
+      putMock.mockRestore();
+      jest.requireMock("./LayoutSection").default = originalLayoutSectionMock;
+    }
+  });
+
   describe("processAction useEffect", () => {
     let enqueueSnackbarMock: jest.Mock;
 

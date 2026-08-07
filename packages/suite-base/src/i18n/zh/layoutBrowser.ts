@@ -21,6 +21,7 @@ export const layoutBrowser = {
   permission: "权限",
   readOnlyLayout: "只读布局",
   save: "保存",
+  orgDefault: "组织默认",
   setAsOrgDefault: "设为组织默认",
   setAsOrgDefaultFailed: "设为组织默认失败",
   setAsOrgDefaultSuccess: "已设为组织默认视图（作为无本地选择时的默认 fallback）",

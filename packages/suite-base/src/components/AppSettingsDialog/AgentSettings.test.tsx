@@ -768,6 +768,71 @@ describe("AgentSettings", () => {
     expect(screen.queryByText("Organization safety")).not.toBeInTheDocument();
   });
 
+  it("disables other rows while a delete is in flight and explains why in their tooltips", async () => {
+    mockCachedCloudSkills([
+      {
+        body: "Skill A body",
+        id: "skill-a",
+        name: "Skill A",
+        whenToUse: "When skill A applies",
+      },
+      {
+        body: "Skill B body",
+        id: "skill-b",
+        name: "Skill B",
+        whenToUse: "When skill B applies",
+      },
+    ]);
+    const configuration = await makeCloudSettingsConfiguration();
+    let resolveDelete:
+      | ((value: {
+          data: undefined;
+          path: string;
+          timestamp: string;
+        }) => void)
+      | undefined;
+    const deletePromise = new Promise<{
+      data: undefined;
+      path: string;
+      timestamp: string;
+    }>((resolve) => {
+      resolveDelete = resolve;
+    });
+    const deleteMock = jest
+      .spyOn(HttpService, "delete")
+      .mockImplementation(async () => await deletePromise);
+    jest.spyOn(remotePromptCustomizationModule, "invalidateAgentBootstrapCache");
+
+    renderSettings(configuration);
+
+    fireEvent.click(screen.getByTestId("delete-remote-skill-skill-a"));
+    fireEvent.click(screen.getByTestId("confirm-remote-skill-delete"));
+
+    // The other row is disabled while the delete is in flight, with a tooltip explaining why.
+    const otherDeleteButton = screen.getByTestId("delete-remote-skill-skill-b");
+    await waitFor(() => {
+      expect(otherDeleteButton).toBeDisabled();
+    });
+    fireEvent.mouseOver(otherDeleteButton.parentElement!);
+    expect(
+      await screen.findByRole("tooltip", {
+        name: "Another cloud skill is being deleted — wait for it to finish.",
+      }),
+    ).toBeVisible();
+
+    await act(async () => {
+      resolveDelete?.({
+        data: undefined,
+        path: "workspaces/cloud-workspace/agent/skill/skill-a",
+        timestamp: new Date().toISOString(),
+      });
+      await deletePromise;
+    });
+    expect(deleteMock).toHaveBeenCalledWith(
+      "workspaces/cloud-workspace/agent/skill/skill-a",
+    );
+  });
+
   it("reports an unsupported delete endpoint once and disables delete for the session", async () => {
     mockCachedCloudSkills([
       {
@@ -788,6 +853,24 @@ describe("AgentSettings", () => {
       path: "",
       timestamp: new Date().toISOString(),
     });
+    const fetchMock = jest
+      .spyOn(remotePromptCustomizationModule, "fetchAgentBootstrap")
+      .mockResolvedValue({
+        prompt: {
+          customSkills: [
+            {
+              body: "Organization instructions",
+              id: "organization-safety",
+              name: "Organization safety",
+              whenToUse: "When organization policy applies",
+            },
+          ],
+          instructions: "",
+          skillOverrides: {},
+        },
+        syncedAt: new Date().toISOString(),
+        version: "refreshed-version",
+      });
 
     renderSettings(configuration);
 
@@ -809,11 +892,30 @@ describe("AgentSettings", () => {
         screen.queryByTestId("confirm-remote-skill-delete"),
       ).not.toBeInTheDocument();
     });
-    expect(
-      screen.getByTestId("delete-remote-skill-organization-safety"),
-    ).toBeDisabled();
+    const deleteButton = screen.getByTestId("delete-remote-skill-organization-safety");
+    expect(deleteButton).toBeDisabled();
     expect(deleteMock).toHaveBeenCalledTimes(1);
     expect(putMock).not.toHaveBeenCalled();
+
+    // The disabled delete button explains why via its tooltip.
+    fireEvent.mouseOver(deleteButton.parentElement!);
+    expect(
+      await screen.findByRole("tooltip", {
+        name: "The server does not support deleting cloud skills yet. Upgrade viz-server to enable this.",
+      }),
+    ).toBeVisible();
+
+    // A successful manual refresh is the retry path: the server may have been upgraded, so the
+    // lock is cleared instead of being held for the whole session.
+    fireEvent.click(screen.getByRole("button", { name: "Fetch now" }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("cloud-workspace");
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("delete-remote-skill-organization-safety"),
+      ).toBeEnabled();
+    });
   });
 
   it("installs a cloud skill through prompt customization and updates local state immediately", async () => {

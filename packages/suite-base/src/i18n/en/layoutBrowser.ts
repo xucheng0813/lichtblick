@@ -23,6 +23,7 @@ export const layoutBrowser = {
   permission: "Permission",
   readOnlyLayout: "Read-only layout",
   save: "Save",
+  orgDefault: "Organization default",
   setAsOrgDefault: "Set as organization default",
   setAsOrgDefaultFailed: "Failed to set as organization default",
   setAsOrgDefaultSuccess:
