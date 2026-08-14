@@ -8,6 +8,7 @@
 import { McapIndexedReader, McapWriter } from "@mcap/core";
 import { Blob } from "node:buffer";
 
+import Log from "@lichtblick/log";
 import { loadDecompressHandlers, TempBuffer } from "@lichtblick/mcap-support";
 import PlayerBuilder from "@lichtblick/suite-base/testing/builders/PlayerBuilder";
 import RosTimeBuilder from "@lichtblick/suite-base/testing/builders/RosTimeBuilder";
@@ -583,6 +584,131 @@ describe("McapIterableSource", () => {
 
         // When / Then
         await expect(source.terminate()).resolves.toBeUndefined();
+      });
+
+      it("logs sanitized hydration timing and persistent-readable reuse without changing behavior", async () => {
+        // The module-scope logger bound the original console.debug at import time, so re-bind by
+        // setting the level AFTER installing the spy; otherwise debug calls bypass the spy.
+        const debugSpy = jest.spyOn(console, "debug").mockImplementation(() => {});
+        for (const channel of Log.channels()) {
+          channel.setLevel("debug");
+        }
+
+        // Given two indexed MCAPs served via signed URLs (query/hash must never reach the log)
+        const topic = "/log_topic";
+        const urlWithTokenA = "https://example.com/log-a.mcap?sig=SECRET_TOKEN_A#fragment";
+        const urlWithTokenB = "https://example.com/log-b.mcap?sig=SECRET_TOKEN_B";
+        const mcapData = await buildIndexedMcapWithTopic(topic, [1_000_000_000n]);
+        mockRemoteFileReadableWith({ [urlWithTokenA]: mcapData, [urlWithTokenB]: mcapData });
+        const pool = new HydratedSourcePool({ maxCount: 1 });
+        const sourceA = new McapIterableSource({ type: "url", url: urlWithTokenA, pool });
+        const sourceB = new McapIterableSource({ type: "url", url: urlWithTokenB, pool });
+
+        // When A hydrates and iterates, B evicts A, then A re-hydrates from the pool
+        await sourceA.initialize();
+        const initialIterator = sourceA.messageIterator({
+          topics: new Map([[topic, PlayerBuilder.subscribePayload({ topic })]]),
+        });
+        await initialIterator.next();
+        // Drain the iterator so A's pool pin is released and B can evict it.
+        await initialIterator.next();
+        await sourceB.initialize();
+        const rehydratedIterator = sourceA.messageIterator({
+          topics: new Map([[topic, PlayerBuilder.subscribePayload({ topic })]]),
+        });
+        const rehydratedResult = await rehydratedIterator.next();
+        await rehydratedIterator.next();
+
+        // Then re-hydration still succeeds and is logged with the sanitized URL, duration, and the
+        // persistent-readable reuse flag
+        expect(rehydratedResult.value).toMatchObject({ type: "message-event" });
+        expect(debugSpy).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /^Hydrated source https:\/\/example\.com\/log-a\.mcap in [\d.]+ms \(reusedPersistentReadable=true\)$/,
+          ),
+        );
+        // And no signing token or fragment ever reaches the log
+        const allLogArgs = debugSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+        expect(allLogArgs).not.toContain("SECRET_TOKEN_A");
+        expect(allLogArgs).not.toContain("SECRET_TOKEN_B");
+        expect(allLogArgs).not.toContain("#fragment");
+        for (const channel of Log.channels()) {
+          channel.setLevel("warn");
+        }
+      });
+
+      it("logs failed re-hydration with the sanitized URL and lets the error propagate", async () => {
+        // The module-scope logger bound the original console.debug at import time, so re-bind by
+        // setting the level AFTER installing the spy; otherwise debug calls bypass the spy.
+        const debugSpy = jest.spyOn(console, "debug").mockImplementation(() => {});
+        for (const channel of Log.channels()) {
+          channel.setLevel("debug");
+        }
+
+        // Given two indexed MCAPs sharing a capacity-1 pool, with re-hydration of A set to fail
+        const topic = "/fail_log_topic";
+        const urlWithTokenA = "https://example.com/fail-a.mcap?sig=SECRET_TOKEN_A";
+        const urlWithTokenB = "https://example.com/fail-b.mcap";
+        const mcapData = await buildIndexedMcapWithTopic(topic, [1_000_000_000n]);
+        const readableInstancesByUrl = mockRemoteFileReadableWith({
+          [urlWithTokenA]: mcapData,
+          [urlWithTokenB]: mcapData,
+        });
+        const pool = new HydratedSourcePool({ maxCount: 1 });
+        const sourceA = new McapIterableSource({ type: "url", url: urlWithTokenA, pool });
+        const sourceB = new McapIterableSource({ type: "url", url: urlWithTokenB, pool });
+        const realInitialize = McapIndexedReader.Initialize.bind(McapIndexedReader);
+        let failRehydrateForReadable: MockRemoteReadable | undefined;
+        const fatalError = new Error("fatal indexed init");
+        jest.spyOn(McapIndexedReader, "Initialize").mockImplementation(async (args) => {
+          if (args.readable === failRehydrateForReadable) {
+            failRehydrateForReadable = undefined;
+            throw fatalError;
+          }
+          return await realInitialize(args);
+        });
+
+        await sourceA.initialize();
+        const initialIterator = sourceA.messageIterator({
+          topics: new Map([[topic, PlayerBuilder.subscribePayload({ topic })]]),
+        });
+        await initialIterator.next();
+        // Drain the iterator so A's pool pin is released and B can evict it.
+        await initialIterator.next();
+        await sourceB.initialize();
+        const firstReadable = readableInstancesByUrl.get(urlWithTokenA)?.[0];
+        expect(firstReadable).toBeDefined();
+        failRehydrateForReadable = firstReadable;
+
+        // When re-hydrating A fails, the error propagates to the caller unchanged
+        const failingIterator = sourceA.messageIterator({
+          topics: new Map([[topic, PlayerBuilder.subscribePayload({ topic })]]),
+        });
+        await expect(failingIterator.next()).rejects.toThrow(fatalError);
+
+        // Then the failure is logged with the sanitized URL, the duration, and the reuse flag
+        // (the session-persistent readable existed at failure time), without the token
+        expect(debugSpy).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /^Failed to hydrate source https:\/\/example\.com\/fail-a\.mcap after [\d.]+ms \(reusedPersistentReadable=true\)$/,
+          ),
+        );
+        const allLogArgs = debugSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+        expect(allLogArgs).not.toContain("SECRET_TOKEN_A");
+
+        // And the next attempt recovers with a fresh readable, logged as not reused
+        const recoveredIterator = sourceA.messageIterator({
+          topics: new Map([[topic, PlayerBuilder.subscribePayload({ topic })]]),
+        });
+        const recoveredResult = await recoveredIterator.next();
+        await recoveredIterator.next();
+        expect(recoveredResult.value).toMatchObject({ type: "message-event" });
+        expect(debugSpy).toHaveBeenCalledWith(
+          expect.stringMatching(/reusedPersistentReadable=false/),
+        );
+        for (const channel of Log.channels()) {
+          channel.setLevel("warn");
+        }
       });
     });
   });

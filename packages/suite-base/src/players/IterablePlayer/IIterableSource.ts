@@ -216,6 +216,14 @@ export type IterableSourceInitializeArgs = {
   maxHydratedSources?: number;
   maxHydratedBytes?: number;
   initConcurrency?: number;
+  // Number of earliest-by-start sources to prewarm before playback begins (see
+  // MultiIterableSource's prewarmCount option). Only meaningful when `files`/`urls` has more than
+  // one entry. Explicit 0 disables prewarm; when omitted, the consuming layer's default applies.
+  prewarmCount?: number;
+  // Bounds the speculative read-ahead extension (bytes) per remote source (see
+  // MultiIterableSource's readAheadBufferBytes option). Only meaningful for multi-url sources;
+  // when omitted, the consuming layer's default applies.
+  readAheadBufferBytes?: number;
   params?: Record<string, string | undefined>;
 
   api?: {

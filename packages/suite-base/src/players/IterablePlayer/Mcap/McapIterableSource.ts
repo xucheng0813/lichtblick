@@ -200,13 +200,46 @@ export class McapIterableSource implements ISerializedIterableSource {
     };
   }
 
+  // Sanitized identifier for hydration logs: remote URLs may embed signing tokens in the query
+  // string or fragment, which must never be written to logs. Unparseable URLs fall back to a
+  // generic label rather than logging the raw value.
+  #sourceLabel(): string {
+    const source = this.#source;
+    if (source.type !== "url") {
+      return source.type;
+    }
+    try {
+      const url = new URL(source.url);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return "url";
+    }
+  }
+
   // Pool hydrator: builds a ready-to-iterate indexed inner (channels parsed). The underlying
   // remote readable/connection is session-persistent and intentionally survives pool eviction.
   readonly #hydrator: SourceHydrator<HydratedInner> = {
     open: async () => {
-      const { inner, readable, weightBytes } = await this.#openInner();
-      await inner.initialize();
-      return { inner, readable, weightBytes };
+      // Time re-hydration so multi-file playback stalls caused by pool re-acquisition can be
+      // quantified from logs. #sourceLabel() strips query/hash so signed URLs never leak tokens.
+      const reusedPersistentReadable = this.#persistentReadable != undefined;
+      const startedAt = performance.now();
+      try {
+        const { inner, readable, weightBytes } = await this.#openInner();
+        await inner.initialize();
+        log.debug(
+          `Hydrated source ${this.#sourceLabel()} in ${(performance.now() - startedAt).toFixed(1)}ms ` +
+            `(reusedPersistentReadable=${reusedPersistentReadable})`,
+        );
+        return { inner, readable, weightBytes };
+      } catch (err: unknown) {
+        log.debug(
+          `Failed to hydrate source ${this.#sourceLabel()} after ` +
+            `${(performance.now() - startedAt).toFixed(1)}ms ` +
+            `(reusedPersistentReadable=${reusedPersistentReadable})`,
+        );
+        throw err;
+      }
     },
     close: async (_value) => {
       // The underlying RemoteFileReadable/connection is session-persistent (see

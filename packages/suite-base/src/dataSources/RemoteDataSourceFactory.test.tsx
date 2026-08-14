@@ -155,7 +155,94 @@ describe("RemoteDataSourceFactory", () => {
         maxHydratedSources: 4,
         maxHydratedBytes: 5678,
         initConcurrency: 3,
+        prewarmCount: 4,
       },
+    });
+  });
+
+  it("should default prewarmCount to 4 for multi-url initArgs when no override is configured", () => {
+    const mockArgs = setupArgs({
+      url: "https://example.com/test1.mcap,https://example.com/test2.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: {
+        urls: ["https://example.com/test1.mcap", "https://example.com/test2.mcap"],
+        prewarmCount: 4,
+      },
+    });
+  });
+
+  it("should preserve an explicit prewarmCount of 0 (prewarm disabled) for multi-url initArgs", () => {
+    factory = new RemoteDataSourceFactory({ prewarmCount: 0 });
+    const mockArgs = setupArgs({
+      url: "https://example.com/test1.mcap,https://example.com/test2.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: {
+        urls: ["https://example.com/test1.mcap", "https://example.com/test2.mcap"],
+        prewarmCount: 0,
+      },
+    });
+  });
+
+  it("should use an explicit prewarmCount override instead of the default for multi-url initArgs", () => {
+    factory = new RemoteDataSourceFactory({ prewarmCount: 2 });
+    const mockArgs = setupArgs({
+      url: "https://example.com/test1.mcap,https://example.com/test2.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: {
+        urls: ["https://example.com/test1.mcap", "https://example.com/test2.mcap"],
+        prewarmCount: 2,
+      },
+    });
+  });
+
+  it("should pass readAheadBufferBytes through to multi-url initArgs without a default", () => {
+    factory = new RemoteDataSourceFactory({ readAheadBufferBytes: 262144 });
+    const mockArgs = setupArgs({
+      url: "https://example.com/test1.mcap,https://example.com/test2.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: {
+        urls: ["https://example.com/test1.mcap", "https://example.com/test2.mcap"],
+        prewarmCount: 4,
+        readAheadBufferBytes: 262144,
+      },
+    });
+  });
+
+  it("should ignore configured hydration overrides for a single url (zero behavior change)", () => {
+    factory = new RemoteDataSourceFactory({
+      prewarmCount: 0,
+      readAheadBufferBytes: 262144,
+      maxHydratedSources: 4,
+    });
+    const mockArgs = setupArgs({
+      url: "https://example.com/test.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: { url: "https://example.com/test.mcap" },
     });
   });
 

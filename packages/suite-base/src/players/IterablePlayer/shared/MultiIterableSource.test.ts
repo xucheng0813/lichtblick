@@ -8,7 +8,12 @@ import RosTimeBuilder from "@lichtblick/suite-base/testing/builders/RosTimeBuild
 import delay from "@lichtblick/suite-base/util/delay";
 import { BasicBuilder } from "@lichtblick/test-builders";
 
-import { IIterableSource, Initialization, ISerializedIterableSource } from "../IIterableSource";
+import {
+  IIterableSource,
+  Initialization,
+  ISerializedIterableSource,
+  IteratorResult,
+} from "../IIterableSource";
 import { HydratedSourcePool, SourceHydrator } from "./HydratedSourcePool";
 import { MultiIterableSource } from "./MultiIterableSource";
 import { MultiSource } from "./types";
@@ -1008,6 +1013,350 @@ describe("MultiIterableSource", () => {
       expect(terminateSpy.mock.invocationCallOrder[0]!).toBeLessThan(
         poolTerminateSpy.mock.invocationCallOrder[0]!,
       );
+    });
+  });
+
+  describe("sliding-window prewarm", () => {
+    // Sliding-window prewarm sources: each yields one message at its range midpoint, and
+    // `prewarm` is a required mock so tests can assert exactly when prewarming happens.
+    type SlidingTestSource = jest.Mocked<IIterableSource<Uint8Array>> & { prewarm: jest.Mock };
+
+    const slidingSource = (
+      startSec: number,
+      endSec: number,
+      prewarm: jest.Mock,
+      terminate?: jest.Mock,
+    ): SlidingTestSource => ({
+      initialize: jest.fn().mockResolvedValue(InitializationSourceBuilder.initialization()),
+      messageIterator: jest.fn().mockImplementation(async function* () {
+        yield {
+          type: "message-event",
+          msgEvent: MessageEventBuilder.messageEvent<Uint8Array>({
+            topic: "topic",
+            message: new Uint8Array(),
+            receiveTime: { sec: (startSec + endSec) / 2, nsec: 0 },
+          }),
+        } as IteratorResult<Uint8Array>;
+      }),
+      getBackfillMessages: jest.fn().mockResolvedValue([]),
+      getStart: jest.fn().mockReturnValue({ sec: startSec, nsec: 0 }),
+      getEnd: jest.fn().mockReturnValue({ sec: endSec, nsec: 0 }),
+      prewarm,
+      ...(terminate != undefined ? { terminate } : {}),
+    });
+
+    const makeMultiSource = (sources: SlidingTestSource[]) => {
+      const multiSource = new MultiIterableSource(
+        { type: "files", files: [] },
+        mockSourceConstructor,
+      );
+      multiSource["sourceImpl"] = sources;
+      return multiSource;
+    };
+
+    const consumeAll = async (
+      iterator: AsyncIterableIterator<Readonly<IteratorResult<Uint8Array>>>,
+    ): Promise<IteratorResult<Uint8Array>[]> => {
+      const results: IteratorResult<Uint8Array>[] = [];
+      for await (const msg of iterator) {
+        results.push(msg);
+      }
+      return results;
+    };
+
+    it("prewarms the following source once the current source is activated, without blocking yields", async () => {
+      // Given: three sequential sources; s2's prewarm never settles on its own.
+      const s2Prewarm = jest.fn().mockReturnValue(new Promise(() => {}));
+      const s3Prewarm = jest.fn().mockResolvedValue(undefined);
+      const s1 = slidingSource(0, 10, jest.fn());
+      const s2 = slidingSource(10, 20, s2Prewarm);
+      const s3 = slidingSource(20, 30, s3Prewarm);
+      const multiSource = makeMultiSource([s1, s2, s3]);
+
+      // When: consuming the merge stream while s2's prewarm stays in flight.
+      const results = await consumeAll(multiSource.messageIterator({ topics: new Map() }));
+
+      // Then: messages still flow (fire-and-forget prewarm) and each activation prewarms
+      // exactly the following source — never the currently active one.
+      expect(results).toHaveLength(3);
+      expect(s1.prewarm).not.toHaveBeenCalled();
+      expect(s2Prewarm).toHaveBeenCalledTimes(1);
+      expect(s3Prewarm).toHaveBeenCalledTimes(1);
+    });
+
+    it("dedupes sliding prewarms across two concurrent merge streams", async () => {
+      // Given: s2's prewarm is gated so it stays in flight while both streams activate s1.
+      let releaseS2: () => void = () => {};
+      const s2Gate = new Promise<void>((resolve) => {
+        releaseS2 = resolve;
+      });
+      const s2Prewarm = jest.fn().mockReturnValue(s2Gate);
+      const s1 = slidingSource(0, 10, jest.fn());
+      const s2 = slidingSource(10, 20, s2Prewarm);
+      const s3 = slidingSource(20, 30, jest.fn().mockResolvedValue(undefined));
+      const multiSource = makeMultiSource([s1, s2, s3]);
+
+      // When: the playback and block-loading streams both activate s1.
+      const playback = multiSource.messageIterator({ topics: new Map() });
+      const blockLoader = multiSource.messageIterator({ topics: new Map() });
+      await playback.next();
+      await blockLoader.next();
+
+      // Then: the shared instance-level dedup map allowed only one prewarm of s2.
+      expect(s2Prewarm).toHaveBeenCalledTimes(1);
+
+      releaseS2();
+      await playback.return?.();
+      await blockLoader.return?.();
+    });
+
+    it("caps concurrent sliding prewarms at 2 and drains the latest-wins pending candidate while the stream is active", async () => {
+      // Given: five sequential sources; s2 and s3 prewarms are gated so both slots stay busy.
+      const gates: (() => void)[] = [];
+      const gatedPrewarm = () => {
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        gates.push(release);
+        return jest.fn().mockReturnValue(gate);
+      };
+      const s2Prewarm = gatedPrewarm();
+      const s3Prewarm = gatedPrewarm();
+      const s4Prewarm = jest.fn().mockResolvedValue(undefined);
+      const s5Prewarm = jest.fn().mockResolvedValue(undefined);
+      const multiSource = makeMultiSource([
+        slidingSource(0, 10, jest.fn()),
+        slidingSource(10, 20, s2Prewarm),
+        slidingSource(20, 30, s3Prewarm),
+        slidingSource(30, 40, s4Prewarm),
+        slidingSource(40, 50, s5Prewarm),
+      ]);
+
+      // When: activating the first four sources one at a time (the stream stays alive).
+      const iterator = multiSource.messageIterator({ topics: new Map() });
+      await iterator.next(); // activates s1 → prewarm s2
+      await iterator.next(); // activates s2 → prewarm s3
+      await iterator.next(); // activates s3 → s4's candidate is parked (slots full)
+      await iterator.next(); // activates s4 → s5 overwrites the parked candidate (latest-wins)
+
+      // Then: s2 and s3 hold the two concurrency slots; the parked candidates never ran.
+      expect(s2Prewarm).toHaveBeenCalledTimes(1);
+      expect(s3Prewarm).toHaveBeenCalledTimes(1);
+      expect(s4Prewarm).not.toHaveBeenCalled();
+      expect(s5Prewarm).not.toHaveBeenCalled();
+
+      // When: a slot frees while the stream is still consuming, the parked latest candidate
+      // (s5) is executed — s4 stays superseded.
+      gates[0]!();
+      await delay(1);
+      expect(s5Prewarm).toHaveBeenCalledTimes(1);
+      expect(s4Prewarm).not.toHaveBeenCalled();
+
+      // When: the stream finishes (s5 activates, then exhausts), its window is over.
+      await iterator.next(); // activates s5 → cb(undefined) clears the pending slot
+      await iterator.next(); // done
+
+      // Then: freeing the remaining slot executes nothing — no stale candidate lingers.
+      gates[1]!();
+      await delay(1);
+      expect(s4Prewarm).not.toHaveBeenCalled();
+      expect(s5Prewarm).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the parked candidate when the stream is cancelled, so stale prewarms never run later", async () => {
+      // Given: s2 and s3 prewarms are gated so both slots stay busy and s4 gets parked.
+      const gates: (() => void)[] = [];
+      const gatedPrewarm = () => {
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        gates.push(release);
+        return jest.fn().mockReturnValue(gate);
+      };
+      const s2Prewarm = gatedPrewarm();
+      const s3Prewarm = gatedPrewarm();
+      const s4Prewarm = jest.fn().mockResolvedValue(undefined);
+      const multiSource = makeMultiSource([
+        slidingSource(0, 10, jest.fn()),
+        slidingSource(10, 20, s2Prewarm),
+        slidingSource(20, 30, s3Prewarm),
+        slidingSource(30, 40, s4Prewarm),
+      ]);
+
+      // When: the stream parks s4 and is then cancelled (seek away / reset).
+      const iterator = multiSource.messageIterator({ topics: new Map() });
+      await iterator.next();
+      await iterator.next();
+      await iterator.next(); // activates s3 → s4 parked
+      expect(s4Prewarm).not.toHaveBeenCalled();
+      await iterator.return?.();
+
+      // Then: the parked candidate was dropped with the stream...
+      expect(multiSource["slidingPrewarmPending"].size).toBe(0);
+
+      // ...so when the in-flight slots later free up, the stale candidate does not execute.
+      gates[0]!();
+      gates[1]!();
+      await delay(1);
+      expect(s4Prewarm).not.toHaveBeenCalled();
+    });
+
+    it("does not accumulate pending candidates across repeated iterator rebuilds (seek/reset)", async () => {
+      // Given: gated prewarms keep both slots busy while several short-lived streams run.
+      const gates: (() => void)[] = [];
+      const gatedPrewarm = () => {
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        gates.push(release);
+        return jest.fn().mockReturnValue(gate);
+      };
+      const s2Prewarm = gatedPrewarm();
+      const s3Prewarm = gatedPrewarm();
+      const s4Prewarm = jest.fn().mockResolvedValue(undefined);
+      const multiSource = makeMultiSource([
+        slidingSource(0, 10, jest.fn()),
+        slidingSource(10, 20, s2Prewarm),
+        slidingSource(20, 30, s3Prewarm),
+        slidingSource(30, 40, s4Prewarm),
+      ]);
+
+      // When: several iterators are created and cancelled while s4 stays parked each time.
+      for (let i = 0; i < 3; i++) {
+        const iterator = multiSource.messageIterator({ topics: new Map() });
+        await iterator.next();
+        await iterator.next();
+        await iterator.next(); // s4 parked for this stream
+        expect(multiSource["slidingPrewarmPending"].size).toBe(1);
+        await iterator.return?.();
+      }
+
+      // Then: every cancelled stream dropped its own parked candidate — nothing accumulated.
+      expect(multiSource["slidingPrewarmPending"].size).toBe(0);
+
+      // ...and once slots free up, no stale candidate from a finished stream executes.
+      gates[0]!();
+      gates[1]!();
+      await delay(1);
+      expect(s4Prewarm).not.toHaveBeenCalled();
+    });
+
+    it("handles the last source without out-of-bounds and leaves a single source untouched", async () => {
+      // Given: two sources; the second is the last one.
+      const s2Prewarm = jest.fn().mockResolvedValue(undefined);
+      const multiSource = makeMultiSource([
+        slidingSource(0, 10, jest.fn()),
+        slidingSource(10, 20, s2Prewarm),
+      ]);
+
+      // When: consuming the merge stream.
+      const results = await consumeAll(multiSource.messageIterator({ topics: new Map() }));
+
+      // Then: the last source is prewarmed once (when the previous one activates) and the
+      // trailing undefined candidate is a no-op.
+      expect(results).toHaveLength(2);
+      expect(s2Prewarm).toHaveBeenCalledTimes(1);
+
+      // A single-source session prewarms nothing and yields as before.
+      const singlePrewarm = jest.fn().mockResolvedValue(undefined);
+      const singleSource = makeMultiSource([slidingSource(0, 10, singlePrewarm)]);
+      const singleResults = await consumeAll(singleSource.messageIterator({ topics: new Map() }));
+      expect(singleResults).toHaveLength(1);
+      expect(singlePrewarm).not.toHaveBeenCalled();
+    });
+
+    it("treats sliding prewarm failures as non-fatal debug events", async () => {
+      // Given: the following source's prewarm rejects.
+      const multiSource = makeMultiSource([
+        slidingSource(0, 10, jest.fn()),
+        slidingSource(10, 20, jest.fn().mockRejectedValue(new Error("prewarm boom"))),
+        slidingSource(20, 30, jest.fn().mockResolvedValue(undefined)),
+      ]);
+
+      // When: consuming the merge stream.
+      const results = await consumeAll(multiSource.messageIterator({ topics: new Map() }));
+
+      // Then: the stream is unaffected and the failure is observable at debug level.
+      expect(results).toHaveLength(3);
+      const messages = mockLogDebug.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((message) => message.includes("sliding prewarm failed"))).toBe(true);
+      expect(messages.some((message) => message.includes("sliding prewarm succeeded"))).toBe(true);
+    });
+
+    it("sanitizes signed URLs out of sliding prewarm failure logs", async () => {
+      // Given: a prewarm failure whose message embeds a signed remote URL.
+      const token = "X-Amz-Signature=SECRETTOKEN123";
+      const multiSource = makeMultiSource([
+        slidingSource(0, 10, jest.fn()),
+        slidingSource(
+          10,
+          20,
+          jest
+            .fn()
+            .mockRejectedValue(
+              new Error(`fetch failed: https://example.com/file.mcap?${token}&x=1#frag`),
+            ),
+        ),
+        slidingSource(20, 30, jest.fn().mockResolvedValue(undefined)),
+      ]);
+
+      // When: consuming the merge stream.
+      await consumeAll(multiSource.messageIterator({ topics: new Map() }));
+
+      // Then: the failure log keeps the URL but strips its query string and fragment.
+      const messages = mockLogDebug.mock.calls.map((call) => String(call[0]));
+      const failureLog = messages.find((message) => message.includes("sliding prewarm failed"));
+      expect(failureLog).toBeDefined();
+      expect(failureLog).not.toContain(token);
+      expect(failureLog).not.toContain("#frag");
+      expect(failureLog).toContain("https://example.com/file.mcap");
+    });
+
+    it("stops admitting new sliding prewarms after terminate and awaits in-flight prewarms before teardown", async () => {
+      // Given: s2's prewarm is gated so it stays in flight, and every source records terminate.
+      let releaseS2: () => void = () => {};
+      const s2Gate = new Promise<void>((resolve) => {
+        releaseS2 = resolve;
+      });
+      const s2Prewarm = jest.fn().mockReturnValue(s2Gate);
+      const s3Prewarm = jest.fn().mockResolvedValue(undefined);
+      const terminateSpy = jest.fn().mockResolvedValue(undefined);
+      const multiSource = makeMultiSource([
+        slidingSource(0, 10, jest.fn(), terminateSpy),
+        slidingSource(10, 20, s2Prewarm, terminateSpy),
+        slidingSource(20, 30, s3Prewarm, terminateSpy),
+      ]);
+
+      // Start the stream so s1 activates and s2's prewarm goes in flight.
+      const iterator = multiSource.messageIterator({ topics: new Map() });
+      await iterator.next();
+      expect(s2Prewarm).toHaveBeenCalledTimes(1);
+
+      // When: terminating while the prewarm is in flight.
+      let settled = false;
+      const termination = multiSource.terminate();
+      void termination.then(() => {
+        settled = true;
+      });
+
+      // Then: teardown waits for the in-flight prewarm to settle...
+      await delay(10);
+      expect(settled).toBe(false);
+      expect(terminateSpy).not.toHaveBeenCalled();
+
+      // ...and no new prewarm is admitted after terminate: advancing the still-running
+      // merge stream activates s2, whose callback would prewarm s3.
+      await iterator.next();
+      expect(s3Prewarm).not.toHaveBeenCalled();
+
+      // When: the in-flight prewarm finally settles, terminate completes and tears down.
+      releaseS2();
+      await termination;
+      expect(settled).toBe(true);
+      expect(terminateSpy).toHaveBeenCalledTimes(3);
     });
   });
 });

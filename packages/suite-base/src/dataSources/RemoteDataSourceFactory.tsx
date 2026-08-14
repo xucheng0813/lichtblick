@@ -47,6 +47,11 @@ const fileTypesAllowed: AllowedFileExtensions[] = [
   AllowedFileExtensions.MCAP,
 ];
 
+// Remote multi-file sessions default to prewarming the 4 earliest-by-start sources (the internal
+// MultiIterableSource default of 3 targets local multi-file sessions). Callers can override via
+// MultiFileHydrationOverrides.prewarmCount, including an explicit 0 to disable prewarm.
+const REMOTE_PREWARM_EARLIEST_COUNT = 4;
+
 class RemoteDataSourceFactory implements IDataSourceFactory {
   private readonly multiFileHydrationOverrides?: MultiFileHydrationOverrides;
 
@@ -114,7 +119,16 @@ class RemoteDataSourceFactory implements IDataSourceFactory {
     const initArgs =
       urls.length === 1
         ? { url: urls[0] }
-        : addMultiFileHydrationOverrides({ urls }, this.multiFileHydrationOverrides);
+        : addMultiFileHydrationOverrides(
+            {
+              urls,
+              // `??` keeps an explicit override (including 0, which disables prewarm) intact and
+              // only falls back to the remote default when the caller did not configure one.
+              prewarmCount:
+                this.multiFileHydrationOverrides?.prewarmCount ?? REMOTE_PREWARM_EARLIEST_COUNT,
+            },
+            this.multiFileHydrationOverrides,
+          );
     const source = new WorkerSerializedIterableSource({ initWorker, initArgs });
 
     return new IterablePlayer({

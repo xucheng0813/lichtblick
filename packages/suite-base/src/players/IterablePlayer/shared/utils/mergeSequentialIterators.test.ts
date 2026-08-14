@@ -726,3 +726,148 @@ describe("mergeSequentialIterators", () => {
     expect(results[3]!.type).toBe("alert");
   });
 });
+
+describe("mergeSequentialIterators - onSourceActivated callback", () => {
+  const defaultArgs: MessageIteratorArgs = {
+    topics: new Map([["topic", { topic: "topic" }]]),
+  };
+
+  it("fires with the following timed source after each activation, and undefined for the last", async () => {
+    // Given: three sequential sources with one message each.
+    const source1 = makeMockSource({ sec: 0, nsec: 0 }, { sec: 10, nsec: 0 }, [
+      makeMessageEvent("topic", 2),
+    ]);
+    const source2 = makeMockSource({ sec: 10, nsec: 0 }, { sec: 20, nsec: 0 }, [
+      makeMessageEvent("topic", 12),
+    ]);
+    const source3 = makeMockSource({ sec: 20, nsec: 0 }, { sec: 30, nsec: 0 }, [
+      makeMessageEvent("topic", 22),
+    ]);
+    const onSourceActivated = jest.fn();
+
+    // When: consuming the merged stream.
+    const results: IteratorResult[] = [];
+    for await (const msg of mergeSequentialIterators(
+      [source1, source2, source3],
+      defaultArgs,
+      onSourceActivated,
+    )) {
+      results.push(msg);
+    }
+
+    // Then: merge semantics are unchanged and the callback reports each next source.
+    expect(results).toHaveLength(3);
+    expect(onSourceActivated).toHaveBeenCalledTimes(3);
+    expect(onSourceActivated).toHaveBeenNthCalledWith(1, source2);
+    expect(onSourceActivated).toHaveBeenNthCalledWith(2, source3);
+    expect(onSourceActivated).toHaveBeenNthCalledWith(3, undefined);
+  });
+
+  it("fires only after the current source's first next() completes", async () => {
+    // Given: the first source's first next() is gated.
+    let releaseFirstNext: () => void = () => {};
+    const firstNextGate = new Promise<void>((resolve) => {
+      releaseFirstNext = resolve;
+    });
+    const source1 = {
+      sourceType: "serialized",
+      initialize: jest.fn(),
+      getBackfillMessages: jest.fn(),
+      getStart: () => ({ sec: 0, nsec: 0 }),
+      getEnd: () => ({ sec: 10, nsec: 0 }),
+      messageIterator: jest.fn().mockImplementation(async function* () {
+        await firstNextGate;
+        yield makeMessageEvent("topic", 1);
+      }),
+    } as unknown as IIterableSource<Uint8Array>;
+    const source2 = makeMockSource({ sec: 10, nsec: 0 }, { sec: 20, nsec: 0 }, [
+      makeMessageEvent("topic", 12),
+    ]);
+    const onSourceActivated = jest.fn();
+
+    const consume = (async () => {
+      const results: IteratorResult[] = [];
+      for await (const msg of mergeSequentialIterators(
+        [source1, source2],
+        defaultArgs,
+        onSourceActivated,
+      )) {
+        results.push(msg);
+      }
+      return results;
+    })();
+
+    // When: the first next() is still pending, the callback must not have fired.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onSourceActivated).not.toHaveBeenCalled();
+
+    // When: the first next() completes, the callback fires with the next source.
+    releaseFirstNext();
+    await expect(consume).resolves.toHaveLength(2);
+    expect(onSourceActivated).toHaveBeenCalledTimes(2);
+    expect(onSourceActivated).toHaveBeenNthCalledWith(1, source2);
+    expect(onSourceActivated).toHaveBeenNthCalledWith(2, undefined);
+  });
+
+  it("does not invoke the callback for sources without time info", async () => {
+    // Given: a source without getStart/getEnd (started eagerly) followed by a timed source.
+    const sourceNoTime = {
+      sourceType: "serialized",
+      initialize: jest.fn(),
+      getBackfillMessages: jest.fn(),
+      messageIterator: jest.fn().mockImplementation(async function* () {
+        yield makeMessageEvent("topic", 5);
+      }),
+    } as unknown as IIterableSource<Uint8Array>;
+    const sourceWithTime = makeMockSource({ sec: 10, nsec: 0 }, { sec: 20, nsec: 0 }, [
+      makeMessageEvent("topic", 15),
+    ]);
+    const onSourceActivated = jest.fn();
+
+    // When: consuming the merged stream.
+    for await (const message of mergeSequentialIterators(
+      [sourceNoTime, sourceWithTime],
+      defaultArgs,
+      onSourceActivated,
+    )) {
+      // consume everything
+      void message;
+    }
+
+    // Then: only the timed source's activation reports a (absent) next source; the
+    // eager no-time source maps to no index and is skipped entirely.
+    expect(onSourceActivated).toHaveBeenCalledTimes(1);
+    expect(onSourceActivated).toHaveBeenNthCalledWith(1, undefined);
+  });
+
+  it("passes the source following the activated one when seeking skips earlier sources", async () => {
+    // Given: three sequential sources and a seek into the middle one.
+    const source1 = makeMockSource({ sec: 0, nsec: 0 }, { sec: 10, nsec: 0 }, [
+      makeMessageEvent("topic", 5),
+    ]);
+    const source2 = makeMockSource({ sec: 10, nsec: 0 }, { sec: 20, nsec: 0 }, [
+      makeMessageEvent("topic", 15),
+    ]);
+    const source3 = makeMockSource({ sec: 20, nsec: 0 }, { sec: 30, nsec: 0 }, [
+      makeMessageEvent("topic", 25),
+    ]);
+    const onSourceActivated = jest.fn();
+
+    // When: seeking to sec 15 (source1 is skipped, source2 is activated first).
+    const results: IteratorResult[] = [];
+    for await (const msg of mergeSequentialIterators(
+      [source1, source2, source3],
+      { ...defaultArgs, start: { sec: 15, nsec: 0 } },
+      onSourceActivated,
+    )) {
+      results.push(msg);
+    }
+
+    // Then: the callback reports source3 (the source after the seek target) and then
+    // undefined once source3 is activated.
+    expect(results).toHaveLength(2);
+    expect(onSourceActivated).toHaveBeenCalledTimes(2);
+    expect(onSourceActivated).toHaveBeenNthCalledWith(1, source3);
+    expect(onSourceActivated).toHaveBeenNthCalledWith(2, undefined);
+  });
+});

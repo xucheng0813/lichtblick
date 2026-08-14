@@ -6,7 +6,11 @@ import { IterableSourceInitializeArgs } from "@lichtblick/suite-base/players/Ite
 // Shared multi-file hydration overrides passed through to MultiIterableSource.
 export type MultiFileHydrationOverrides = Pick<
   IterableSourceInitializeArgs,
-  "maxHydratedSources" | "maxHydratedBytes" | "initConcurrency"
+  | "maxHydratedSources"
+  | "maxHydratedBytes"
+  | "initConcurrency"
+  | "prewarmCount"
+  | "readAheadBufferBytes"
 >;
 
 // Pick only the hydration overrides that are explicitly defined.
@@ -19,6 +23,11 @@ export function pickDefinedHydrationOverrides(
       : {}),
     ...(source.maxHydratedBytes != undefined ? { maxHydratedBytes: source.maxHydratedBytes } : {}),
     ...(source.initConcurrency != undefined ? { initConcurrency: source.initConcurrency } : {}),
+    // Note: `??`-style semantics are handled by callers; an explicit 0 must survive this pick.
+    ...(source.prewarmCount != undefined ? { prewarmCount: source.prewarmCount } : {}),
+    ...(source.readAheadBufferBytes != undefined
+      ? { readAheadBufferBytes: source.readAheadBufferBytes }
+      : {}),
   };
 }
 

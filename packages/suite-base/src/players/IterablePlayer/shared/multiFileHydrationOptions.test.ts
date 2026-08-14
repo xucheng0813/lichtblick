@@ -1,10 +1,28 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import { MultiIterableSource } from "./MultiIterableSource";
 import {
   addMultiFileHydrationOverrides,
   pickDefinedHydrationOverrides,
 } from "./multiFileHydrationOptions";
+import { initialize } from "../Mcap/McapIterableSourceWorker.worker";
+
+// Mocks for the worker-chain tests below (mirrors McapIterableSourceWorker.worker.test.ts): the
+// worker's initialize() constructs MultiIterableSource with the picked hydration overrides.
+jest.mock("@lichtblick/comlink", () => ({
+  expose: jest.fn((val: unknown) => val),
+  proxy: jest.fn((val: unknown) => val),
+  transferHandlers: {
+    set: jest.fn(),
+  },
+}));
+
+jest.mock("../Mcap/McapIterableSource");
+jest.mock("../WorkerSerializedIterableSourceWorker");
+jest.mock("./MultiIterableSource");
+
+const MockMultiIterableSource = MultiIterableSource as jest.Mock;
 
 describe("multiFileHydrationOptions", () => {
   describe("addMultiFileHydrationOverrides", () => {
@@ -44,6 +62,8 @@ describe("multiFileHydrationOptions", () => {
         maxHydratedSources: 4,
         maxHydratedBytes: 5678,
         initConcurrency: 2,
+        prewarmCount: 0,
+        readAheadBufferBytes: 12345,
       });
 
       // THEN: every defined override field is merged into the result.
@@ -52,6 +72,26 @@ describe("multiFileHydrationOptions", () => {
         maxHydratedSources: 4,
         maxHydratedBytes: 5678,
         initConcurrency: 2,
+        prewarmCount: 0,
+        readAheadBufferBytes: 12345,
+      });
+    });
+
+    it("merges prewarmCount and readAheadBufferBytes with their exact values including explicit 0", () => {
+      // GIVEN: base init args and only the new tuning fields defined.
+      const initArgs = { urls: ["https://example.com/first.mcap"] };
+
+      // WHEN: applying the overrides.
+      const result = addMultiFileHydrationOverrides(initArgs, {
+        prewarmCount: 0,
+        readAheadBufferBytes: 262144,
+      });
+
+      // THEN: the exact values (including 0 for prewarmCount) are preserved.
+      expect(result).toEqual({
+        urls: ["https://example.com/first.mcap"],
+        prewarmCount: 0,
+        readAheadBufferBytes: 262144,
       });
     });
 
@@ -98,5 +138,74 @@ describe("multiFileHydrationOptions", () => {
         initConcurrency: 2,
       });
     });
+
+    it("carries prewarmCount (including explicit 0) and readAheadBufferBytes when defined", () => {
+      // GIVEN: an override object with the new tuning fields, one of them 0.
+      const overrides = {
+        prewarmCount: 0,
+        readAheadBufferBytes: 12345,
+      };
+
+      // WHEN: picking defined fields.
+      const result = pickDefinedHydrationOverrides(overrides);
+
+      // THEN: exact values are preserved; an explicit 0 disables prewarm and must survive.
+      expect(result).toEqual({
+        prewarmCount: 0,
+        readAheadBufferBytes: 12345,
+      });
+    });
+
+    it("omits undefined prewarmCount and readAheadBufferBytes", () => {
+      // GIVEN: an override object where the new tuning fields are not defined.
+      const overrides = {
+        prewarmCount: undefined,
+        readAheadBufferBytes: undefined,
+      };
+
+      // WHEN: picking defined fields.
+      const result = pickDefinedHydrationOverrides(overrides);
+
+      // THEN: neither field appears in the result.
+      expect(result).toEqual({});
+    });
+  });
+});
+
+describe("worker initialize chain (args -> pickDefinedHydrationOverrides -> MultiIterableSource)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("passes prewarmCount and readAheadBufferBytes through to MultiIterableSource for multiple urls", () => {
+    initialize({
+      urls: ["https://example.com/a.mcap", "https://example.com/b.mcap"],
+      prewarmCount: 0,
+      readAheadBufferBytes: 262144,
+      maxHydratedSources: 3,
+    });
+
+    expect(MockMultiIterableSource).toHaveBeenCalledWith(
+      {
+        type: "urls",
+        urls: ["https://example.com/a.mcap", "https://example.com/b.mcap"],
+        prewarmCount: 0,
+        readAheadBufferBytes: 262144,
+        maxHydratedSources: 3,
+      },
+      expect.any(Function),
+    );
+  });
+
+  it("leaves prewarmCount and readAheadBufferBytes undefined for multiple urls when not configured", () => {
+    initialize({ urls: ["https://example.com/a.mcap", "https://example.com/b.mcap"] });
+
+    expect(MockMultiIterableSource).toHaveBeenCalledWith(
+      {
+        type: "urls",
+        urls: ["https://example.com/a.mcap", "https://example.com/b.mcap"],
+      },
+      expect.any(Function),
+    );
   });
 });

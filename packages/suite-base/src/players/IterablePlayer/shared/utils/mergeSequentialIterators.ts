@@ -17,10 +17,16 @@ import {
 /**
  * Lazily merges sources in start-time order, activating each iterator only when playback reaches
  * that source's time range. This avoids starting remote reads for every file at once.
+ *
+ * When `onSourceActivated` is provided, it is invoked after the current source's first `next()`
+ * completes, receiving the next pending timed source (or undefined when the last one was
+ * activated). Callers use this to prewarm the following source while the current one is being
+ * consumed. The callback is purely additive and does not affect merge semantics.
  */
 export async function* mergeSequentialIterators<T extends IteratorResult>(
   sources: IIterableSource[],
   args: MessageIteratorArgs,
+  onSourceActivated?: (nextSource: IIterableSource | undefined) => void,
 ): AsyncIterableIterator<Readonly<T>> {
   // Separate sources into those with known time ranges and those without.
   // Sources without time ranges are started immediately (conservative approach).
@@ -69,6 +75,11 @@ export async function* mergeSequentialIterators<T extends IteratorResult>(
   async function activateNextSource(): Promise<void> {
     await activateSource(sourcesWithTime[nextSourceIndex]!.source);
     nextSourceIndex++;
+    // The current source's first next() has completed: surface the following timed source
+    // (undefined when the last one was activated) so callers can prewarm it while the current
+    // source is being consumed. The source object is passed directly (not an index) because
+    // index mapping is ambiguous after seek/filtering or with sources lacking time ranges.
+    onSourceActivated?.(sourcesWithTime[nextSourceIndex]?.source);
   }
 
   try {

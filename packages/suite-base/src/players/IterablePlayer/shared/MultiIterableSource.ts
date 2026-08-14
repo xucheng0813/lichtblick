@@ -65,6 +65,11 @@ const DEFAULT_MAX_HYDRATED_BYTES = 1024 * 1024 * 512; // 512 MiB
 // large open/request burst.
 const DEFAULT_PREWARM_EARLIEST_COUNT = 3;
 
+// Maximum number of concurrent sliding-window prewarms across all merge streams (playback and
+// block loading) of one MultiIterableSource. Each stream's working set is current + next, so two
+// streams share at most 4 hydrated slots — matching the existing pool budget without growing it.
+const MAX_SLIDING_PREWARM_CONCURRENCY = 2;
+
 // Normalize the optional prewarmCount override: finite non-negative values are floored (to avoid
 // fractional source indexes) and clamped to the total source count; 0 is valid and disables
 // prewarm; negative or non-finite values fall back to the default with a warning. Other options'
@@ -83,6 +88,12 @@ function normalizePrewarmCount(value: number | undefined, sourceCount: number): 
   return Math.min(DEFAULT_PREWARM_EARLIEST_COUNT, sourceCount);
 }
 
+// Strip query strings and fragments from URLs in error summaries before logging: remote URLs can
+// carry signed tokens that must never reach the logs.
+function sanitizeErrorMessage(message: string): string {
+  return message.replace(/(https?:\/\/[^#?\s]+)[?#][^\s]*/g, "$1");
+}
+
 export class MultiIterableSource<T extends ISerializedIterableSource, P>
   implements ISerializedIterableSource
 {
@@ -91,6 +102,15 @@ export class MultiIterableSource<T extends ISerializedIterableSource, P>
   private dataSource: MultiSource;
   private sourceImpl: IIterableSource<Uint8Array>[] = [];
   #pool: HydratedSourcePool | undefined;
+
+  // ── sliding-window prewarm state (shared across every merge stream of this instance) ──
+  // In-flight sliding prewarms deduped by source object, so the playback and block-loading
+  // merge streams never prewarm the same source twice concurrently.
+  private slidingPrewarmInFlight = new Map<IIterableSource<Uint8Array>, Promise<void>>();
+  // Bounded latest-wins pending queue: at most one candidate per merge stream (keyed by the
+  // per-iterator stream token), drained when a concurrency slot frees up.
+  private slidingPrewarmPending = new Map<object, IIterableSource<Uint8Array>>();
+  private terminated = false;
 
   public constructor(dataSource: MultiSource, SourceConstructor: IterableSourceConstructor<T, P>) {
     this.dataSource = dataSource;
@@ -264,9 +284,107 @@ export class MultiIterableSource<T extends ISerializedIterableSource, P>
     // remote reads during block loading.
     const relevantSources = filterSourcesByTimeRange(this.sourceImpl, opt.start, opt.end);
 
-    // Start later iterators only when playback reaches their start time, avoiding concurrent
-    // byte-range requests to all remote MCAP files.
-    yield* mergeSequentialIterators(relevantSources, opt);
+    // Each merge stream (playback, block loading) gets its own token so the shared pending
+    // queue keeps at most one latest candidate per stream.
+    const streamId = {};
+    try {
+      // Start later iterators only when playback reaches their start time, avoiding concurrent
+      // byte-range requests to all remote MCAP files.
+      yield* mergeSequentialIterators(relevantSources, opt, (nextSource) => {
+        // mergeSequentialIterators is generic over IIterableSource<unknown>; the sources it
+        // hands back are the same objects from sourceImpl (IIterableSource<Uint8Array>).
+        this.queueSlidingPrewarm(
+          streamId,
+          nextSource as IIterableSource<Uint8Array> | undefined,
+        );
+      });
+    } finally {
+      // The stream ended or was cancelled (seek/reset): drop this stream's parked candidate so
+      // stale tokens cannot accumulate and old candidates cannot run after a new stream started.
+      this.slidingPrewarmPending.delete(streamId);
+    }
+  }
+
+  /**
+   * Queue a sliding-window prewarm candidate for one merge stream. Fire-and-forget: the caller
+   * (merge callback) is never blocked. Candidates are deduped against in-flight prewarms and,
+   * when the shared concurrency limit is reached, parked in a per-stream latest-wins slot that
+   * is drained as soon as a slot frees up while the stream is still active — so a skipped
+   * candidate cannot leave a cold hole at the next file boundary. In-flight prewarms are never
+   * cancelled: they may be shared with other streams.
+   */
+  private queueSlidingPrewarm(
+    streamId: object,
+    nextSource: IIterableSource<Uint8Array> | undefined,
+  ): void {
+    if (nextSource == undefined) {
+      // The stream's window is complete (its last source was just activated): any parked
+      // candidate is stale — it was the source that just got activated.
+      this.slidingPrewarmPending.delete(streamId);
+      return;
+    }
+    if (this.terminated) {
+      return;
+    }
+    // Latest-wins: a newer trigger for this stream replaces any parked candidate.
+    this.slidingPrewarmPending.set(streamId, nextSource);
+    this.drainSlidingPrewarm();
+  }
+
+  private drainSlidingPrewarm(): void {
+    while (
+      !this.terminated &&
+      this.slidingPrewarmPending.size > 0 &&
+      this.slidingPrewarmInFlight.size < MAX_SLIDING_PREWARM_CONCURRENCY
+    ) {
+      const entry = this.slidingPrewarmPending.entries().next().value;
+      if (entry == undefined) {
+        break;
+      }
+      const [streamId, source] = entry;
+      this.slidingPrewarmPending.delete(streamId);
+      if (source.prewarm == undefined) {
+        // Nothing to warm; drop the candidate.
+        continue;
+      }
+      if (this.slidingPrewarmInFlight.has(source)) {
+        // Already being prewarmed by another stream: dedupe, nothing to add.
+        continue;
+      }
+      this.startSlidingPrewarm(source);
+    }
+  }
+
+  private startSlidingPrewarm(source: IIterableSource<Uint8Array>): void {
+    const promise = this.runSlidingPrewarm(source);
+    this.slidingPrewarmInFlight.set(source, promise);
+    void promise.finally(() => {
+      this.slidingPrewarmInFlight.delete(source);
+      // A concurrency slot freed up: drain any parked candidates.
+      this.drainSlidingPrewarm();
+    });
+  }
+
+  private async runSlidingPrewarm(source: IIterableSource<Uint8Array>): Promise<void> {
+    const startTime = performance.now();
+    try {
+      await source.prewarm?.();
+      const durationMs = performance.now() - startTime;
+      log.debug(
+        `MultiIterableSource: sliding prewarm succeeded for source at index ` +
+          `${this.sourceImpl.indexOf(source)} in ${durationMs.toFixed(2)}ms`,
+      );
+    } catch (err) {
+      const durationMs = performance.now() - startTime;
+      // Only log the sanitized error summary: the original error message may embed a remote
+      // URL whose query string or fragment carries a signed token.
+      const errorSummary = err instanceof Error ? err.message : String(err);
+      log.debug(
+        `MultiIterableSource: sliding prewarm failed for source at index ` +
+          `${this.sourceImpl.indexOf(source)} after ${durationMs.toFixed(2)}ms: ` +
+          sanitizeErrorMessage(errorSummary),
+      );
+    }
   }
   public async getBackfillMessages(
     args: GetBackfillMessagesArgs,
@@ -303,6 +421,12 @@ export class MultiIterableSource<T extends ISerializedIterableSource, P>
   }
 
   public async terminate(): Promise<void> {
+    // Block new sliding prewarms and drop parked candidates first, then wait for in-flight
+    // prewarms to settle before tearing down sources and the pool, so a prewarm can never
+    // outlive the pool it hydrates from.
+    this.terminated = true;
+    this.slidingPrewarmPending.clear();
+    await Promise.allSettled([...this.slidingPrewarmInFlight.values()]);
     try {
       // Attempt every source terminate; one rejection must not skip the others or the pool teardown.
       const results = await Promise.allSettled(
