@@ -10,6 +10,9 @@ import { TFunction } from "i18next";
 import { PanelInfo } from "@lichtblick/suite-base/context/PanelCatalogContext";
 
 import { TAB_PANEL_TYPE } from "../util/constants";
+// eslint-disable-next-line no-warning-comments -- placeholder until a dedicated thumbnail exists
+// TODO: replace with a dedicated Audio panel thumbnail.
+import audioThumbnail from "./Audio/thumbnail.png";
 import dataSourceInfoThumbnail from "./DataSourceInfo/thumbnail.png";
 import diagnosticStatusThumbnail from "./DiagnosticStatus/assets/diagnostic-status.png";
 import diagnosticSummaryThumbnail from "./DiagnosticSummary/assets/diagnostic-summary.png";
@@ -39,6 +42,13 @@ export const getBuiltin: (t: TFunction<"panels">) => PanelInfo[] = (t) => [
     description: t("3DPanelDescription"),
     thumbnail: threeDeeRenderThumbnail,
     module: async () => await import("./ThreeDeeRender"),
+  },
+  {
+    title: t("audio"),
+    type: "Audio",
+    description: t("audioDescription"),
+    thumbnail: audioThumbnail,
+    module: async () => await import("./Audio"),
   },
   {
     title: t("ROSDiagnosticsDetail"),

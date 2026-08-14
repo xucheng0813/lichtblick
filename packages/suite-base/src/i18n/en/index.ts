@@ -9,6 +9,7 @@ export * from "./addPanel";
 export * from "./agentChat";
 export * from "./appBar";
 export * from "./appSettings";
+export * from "./audio";
 export * from "./dataSourceInfo";
 export * from "./desktopWindow";
 export * from "./extensionsSettings";
