@@ -224,6 +224,11 @@ export type IterableSourceInitializeArgs = {
   // MultiIterableSource's readAheadBufferBytes option). Only meaningful for multi-url sources;
   // when omitted, the consuming layer's default applies.
   readAheadBufferBytes?: number;
+  // Number of parallel download connections per remote source (see RemoteFileReadable's
+  // parallelConnections option). Only meaningful for remote ("url"/"urls") sources; when
+  // omitted, the consuming layer's default applies (single MCAP files default to 4 at the
+  // RemoteFileReadable layer; multi-url sessions default to 1).
+  parallelConnections?: number;
   params?: Record<string, string | undefined>;
 
   api?: {

@@ -118,7 +118,16 @@ class RemoteDataSourceFactory implements IDataSourceFactory {
 
     const initArgs =
       urls.length === 1
-        ? { url: urls[0] }
+        ? {
+            url: urls[0],
+            // Single-file sessions only honor parallelConnections, and only for .mcap: the other
+            // multi-file hydration knobs stay disabled, and .bag keeps its legacy single-connection
+            // behavior (BagIterableSource is not wired for parallel downloads).
+            ...(extension === ".mcap" &&
+            this.multiFileHydrationOverrides?.parallelConnections != undefined
+              ? { parallelConnections: this.multiFileHydrationOverrides.parallelConnections }
+              : {}),
+          }
         : addMultiFileHydrationOverrides(
             {
               urls,

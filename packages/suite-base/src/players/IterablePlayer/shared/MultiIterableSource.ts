@@ -159,6 +159,12 @@ export class MultiIterableSource<T extends ISerializedIterableSource, P>
         (numSources > 1
           ? Math.min(DEFAULT_READ_AHEAD_BUFFER_BYTES, Math.floor(perSourceCache / 4))
           : undefined);
+      // Multi-url sessions default to a single connection per source: initialization
+      // concurrency plus sliding prewarm already keep several CachedFilelike instances active,
+      // so the connection budget wins. `??` preserves an explicit override, including 0/1 to
+      // disable parallel downloads. Captured before the closure below because union narrowing
+      // via the type discriminant is not preserved inside arrow functions.
+      const parallelConnections: number | undefined = this.dataSource.parallelConnections ?? 1;
 
       sources = this.dataSource.urls.map(
         (url) =>
@@ -168,6 +174,7 @@ export class MultiIterableSource<T extends ISerializedIterableSource, P>
             cacheSizeInBytes: perSourceCache,
             readAheadEnabled,
             readAheadBufferBytes,
+            parallelConnections,
             pool: this.#pool,
           } as P),
       );

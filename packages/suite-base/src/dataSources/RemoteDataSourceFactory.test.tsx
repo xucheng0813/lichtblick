@@ -246,6 +246,90 @@ describe("RemoteDataSourceFactory", () => {
     });
   });
 
+  it("should inject an explicit parallelConnections for a single .mcap url", () => {
+    factory = new RemoteDataSourceFactory({ parallelConnections: 2 });
+    const mockArgs = setupArgs({
+      url: "https://example.com/test.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: {
+        url: "https://example.com/test.mcap",
+        parallelConnections: 2,
+      },
+    });
+  });
+
+  it("should not inject parallelConnections for a single .bag url", () => {
+    factory = new RemoteDataSourceFactory({ parallelConnections: 4 });
+    const mockArgs = setupArgs({
+      url: "https://example.com/test.bag",
+    });
+
+    factory.initialize(mockArgs);
+
+    // THEN: the .bag path keeps its legacy single-connection behavior (BagIterableSource is not
+    // wired for parallel downloads), so no parallelConnections is added to initArgs.
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: { url: "https://example.com/test.bag" },
+    });
+  });
+
+  it("should not add a default parallelConnections for a single .mcap url (RemoteFileReadable supplies the default)", () => {
+    const mockArgs = setupArgs({
+      url: "https://example.com/test.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    // THEN: without an explicit override, the single-url initArgs stay minimal; the default of 4
+    // is applied later at the RemoteFileReadable layer.
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: { url: "https://example.com/test.mcap" },
+    });
+  });
+
+  it("should pass an explicit parallelConnections through to multi-url initArgs without a default", () => {
+    factory = new RemoteDataSourceFactory({ parallelConnections: 1 });
+    const mockArgs = setupArgs({
+      url: "https://example.com/test1.mcap,https://example.com/test2.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: {
+        urls: ["https://example.com/test1.mcap", "https://example.com/test2.mcap"],
+        prewarmCount: 4,
+        parallelConnections: 1,
+      },
+    });
+  });
+
+  it("should not add parallelConnections to multi-url initArgs when not configured", () => {
+    const mockArgs = setupArgs({
+      url: "https://example.com/test1.mcap,https://example.com/test2.mcap",
+    });
+
+    factory.initialize(mockArgs);
+
+    // THEN: the multi-url default of 1 is applied by MultiIterableSource at child-source
+    // construction, not by the factory.
+    expect(WorkerSerializedIterableSource).toHaveBeenCalledWith({
+      initWorker: expect.any(Function),
+      initArgs: {
+        urls: ["https://example.com/test1.mcap", "https://example.com/test2.mcap"],
+        prewarmCount: 4,
+      },
+    });
+  });
+
   it("should return undefined if args.params.url is undefined", () => {
     const mockArgs = setupArgs();
 

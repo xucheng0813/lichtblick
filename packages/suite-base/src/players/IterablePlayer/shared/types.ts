@@ -66,6 +66,11 @@ export type MultiSource =
       // cache budget, while single-file sessions keep the legacy 50 MiB default from
       // getNewConnection.ts.
       readAheadBufferBytes?: number;
+      // Number of parallel download connections per remote source (passed through to
+      // CachedFilelike via RemoteFileReadable). Defaults to 1 for multi-url sessions (connection
+      // budget: initialization concurrency plus sliding prewarm already keep several
+      // CachedFilelike instances active); an explicit value wins, including 0/1 to disable.
+      parallelConnections?: number;
     } & MultiSourceHydrationOptions);
 
 export type IterableSourceConstructor<T extends IIterableSource, P> = new (args: P) => T;

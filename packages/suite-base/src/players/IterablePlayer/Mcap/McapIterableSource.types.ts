@@ -19,6 +19,9 @@ export type McapSource =
       cacheSizeInBytes?: number;
       readAheadEnabled?: boolean;
       readAheadBufferBytes?: number;
+      // Number of parallel download connections for this remote source (defaults to 4 at the
+      // RemoteFileReadable layer for single-file sessions).
+      parallelConnections?: number;
       pool?: HydratedSourcePool;
     };
 

@@ -28,7 +28,16 @@ export function initialize(
     const wrapped = new WorkerSerializedIterableSourceWorker(source);
     return Comlink.proxy(wrapped);
   } else if (args.url) {
-    const source = new McapIterableSource({ type: "url", url: args.url });
+    // Single-file sessions: only parallelConnections is honored from the shared hydration
+    // overrides. The multi-file knobs (initConcurrency, maxHydratedSources, prewarmCount, ...)
+    // remain intentionally disabled for single-url sessions.
+    const source = new McapIterableSource({
+      type: "url",
+      url: args.url,
+      ...(args.parallelConnections != undefined
+        ? { parallelConnections: args.parallelConnections }
+        : {}),
+    });
     const wrapped = new WorkerSerializedIterableSourceWorker(source);
     return Comlink.proxy(wrapped);
   } else if (args.urls) {

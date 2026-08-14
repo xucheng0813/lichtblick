@@ -153,6 +153,9 @@ export class McapIterableSource implements ISerializedIterableSource {
         ...(source.readAheadBufferBytes != undefined
           ? { readAheadBufferBytes: source.readAheadBufferBytes }
           : {}),
+        ...(source.parallelConnections != undefined
+          ? { parallelConnections: source.parallelConnections }
+          : {}),
       });
       await readable.open();
       this.#persistentReadable = readable;

@@ -73,6 +73,81 @@ describe("VirtualLRUBuffer", () => {
     });
   });
 
+  describe("#setProtectedRanges", () => {
+    it("keeps protected blocks alive across interleaved writes and eviction", () => {
+      // GIVEN: a 2-block buffer where the oldest block becomes protected.
+      const vb = new VirtualLRUBuffer({ size: 25, blockSize: 10, numberOfBlocks: 2 });
+      vb.copyFrom(Buffer.from([1, 2, 3, 4]), 2); // block 0
+      vb.copyFrom(Buffer.from([5, 6, 7, 8]), 12); // block 1
+      vb.setProtectedRanges([{ start: 0, end: 4 }]); // block 0 is now protected
+
+      // WHEN: a third block is allocated, forcing an eviction.
+      vb.copyFrom(Buffer.from([9, 9, 9, 9, 9]), 20); // block 2
+
+      // THEN: the protected block survives; the oldest non-protected block is evicted instead.
+      expect(vb.hasData(2, 6)).toEqual(true);
+      expect(vb.hasData(12, 16)).toEqual(false);
+      expect(vb.hasData(20, 25)).toEqual(true);
+    });
+
+    it("evicts the least recently used block anyway when all blocks are protected (defensive path)", () => {
+      // GIVEN: a 1-block buffer whose only block is protected.
+      const vb = new VirtualLRUBuffer({ size: 25, blockSize: 10, numberOfBlocks: 1 });
+      vb.copyFrom(Buffer.from([1, 2, 3, 4]), 2); // block 0
+      vb.setProtectedRanges([{ start: 0, end: 25 }]); // every block is protected
+
+      // WHEN: a new block must be allocated.
+      vb.copyFrom(Buffer.from([5, 6, 7, 8]), 12); // block 1
+
+      // THEN: allocation still makes progress by evicting the oldest block, and the defensive
+      // path logs a warning (asserted and cleared per the test-framework convention).
+      expect(vb.hasData(2, 6)).toEqual(false);
+      expect(vb.hasData(12, 16)).toEqual(true);
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining("all other blocks are protected"),
+      );
+      (console.warn as jest.Mock).mockClear();
+    });
+
+    it("never evicts the just-allocated block when all older blocks are protected", () => {
+      // GIVEN: a full 2-block buffer where every older block is protected.
+      const vb = new VirtualLRUBuffer({ size: 25, blockSize: 10, numberOfBlocks: 2 });
+      vb.copyFrom(Buffer.from([1, 2, 3, 4]), 2); // block 0
+      vb.copyFrom(Buffer.from([5, 6, 7, 8]), 12); // block 1
+      vb.setProtectedRanges([{ start: 0, end: 20 }]); // blocks 0 and 1 are protected
+
+      // WHEN: a new (unprotected) block must be allocated. The candidate scan must not pick the
+      // just-allocated block itself (its data is not written yet); the defensive path evicts the
+      // oldest protected block instead.
+      vb.copyFrom(Buffer.from([9, 8, 7, 6, 5]), 20); // block 2
+
+      // THEN: the new block's data survives and can be sliced back out; the oldest protected
+      // block was evicted via the defensive path (with a warning).
+      expect([...vb.slice(20, 25)]).toEqual([9, 8, 7, 6, 5]);
+      expect(vb.hasData(2, 6)).toEqual(false);
+      expect(vb.hasData(12, 16)).toEqual(true);
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining("all other blocks are protected"),
+      );
+      (console.warn as jest.Mock).mockClear();
+    });
+
+    it("behaves like an unprotected buffer with an empty protection set", () => {
+      // GIVEN: a buffer with protected ranges explicitly cleared.
+      const vb = new VirtualLRUBuffer({ size: 25, blockSize: 10, numberOfBlocks: 1 });
+      vb.copyFrom(Buffer.from([1, 2, 3, 4]), 2);
+      vb.setProtectedRanges([{ start: 0, end: 4 }]);
+      vb.setProtectedRanges([]);
+
+      // WHEN: a new block is allocated.
+      vb.copyFrom(Buffer.from([5, 6, 7, 8]), 12);
+
+      // THEN: the now-unprotected oldest block is evicted as usual.
+      expect(vb.hasData(2, 6)).toEqual(false);
+      expect(vb.hasData(12, 16)).toEqual(true);
+    });
+  });
+
   describe("#slice", () => {
     // single block case covered above in .copyFrom tests.
 

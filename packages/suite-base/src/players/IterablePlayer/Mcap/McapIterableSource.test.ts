@@ -290,6 +290,27 @@ describe("McapIterableSource", () => {
       );
     });
 
+    it("should forward parallelConnections to RemoteFileReadable when provided", async () => {
+      // Given an indexed MCAP served via URL with a parallel download override
+      const mcapData = await buildIndexedMcap([{ logTime: 1_000_000_000n }]);
+      mockRemoteFileReadableWith(mcapData);
+      const parallelConnections = 4;
+
+      // When initializing a McapIterableSource with URL type
+      const source = new McapIterableSource({
+        type: "url",
+        url: urlIndexedMcap,
+        parallelConnections,
+      });
+      await source.initialize();
+
+      // Then RemoteFileReadable should receive the parallel download override
+      expect(MockRemoteFileReadable).toHaveBeenCalledWith(
+        urlIndexedMcap,
+        expect.objectContaining({ parallelConnections }),
+      );
+    });
+
     it("should delegate getStart and getEnd to the underlying indexed source", async () => {
       // Given an indexed MCAP with messages from 2s to 8s served via URL
       const mcapData = await buildIndexedMcap([

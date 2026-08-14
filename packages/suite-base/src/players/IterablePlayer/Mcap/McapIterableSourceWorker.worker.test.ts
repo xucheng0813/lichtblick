@@ -88,6 +88,43 @@ describe("initialize", () => {
     expect(result).toBeInstanceOf(WorkerSerializedIterableSourceWorker);
   });
 
+  it("should attach only parallelConnections for a single URL, dropping other hydration overrides", () => {
+    const url = `http://${BasicBuilder.string()}.com/${BasicBuilder.string()}.mcap`;
+
+    const result = initialize({
+      url,
+      parallelConnections: 2,
+      maxHydratedSources: 4,
+      maxHydratedBytes: 5678,
+      initConcurrency: 3,
+      prewarmCount: 0,
+      readAheadBufferBytes: 262144,
+    });
+
+    // THEN: the multi-file hydration knobs stay disabled for single-url sessions; only
+    // parallelConnections is honored.
+    expect(McapIterableSource).toHaveBeenCalledWith({
+      type: "url",
+      url,
+      parallelConnections: 2,
+    });
+    expect(WorkerSerializedIterableSourceWorker).toHaveBeenCalled();
+    expect(Comlink.proxy).toHaveBeenCalled();
+    expect(result).toBeInstanceOf(WorkerSerializedIterableSourceWorker);
+  });
+
+  it("should leave parallelConnections undefined for a single URL when not configured", () => {
+    const url = `http://${BasicBuilder.string()}.com/${BasicBuilder.string()}.mcap`;
+
+    initialize({
+      url,
+      prewarmCount: 3,
+    });
+
+    // THEN: prewarmCount stays ignored and no parallelConnections is fabricated.
+    expect(McapIterableSource).toHaveBeenCalledWith({ type: "url", url });
+  });
+
   it("should initialize with multiple URLs", () => {
     const urls = [
       `http://${BasicBuilder.string()}.com/${BasicBuilder.string()}.mcap`,
@@ -122,6 +159,30 @@ describe("initialize", () => {
         maxHydratedSources: 4,
         maxHydratedBytes: 5678,
         initConcurrency: 3,
+      },
+      McapIterableSource,
+    );
+    expect(WorkerSerializedIterableSourceWorker).toHaveBeenCalled();
+    expect(Comlink.proxy).toHaveBeenCalled();
+    expect(result).toBeInstanceOf(WorkerSerializedIterableSourceWorker);
+  });
+
+  it("should pass an explicit parallelConnections through for multiple URLs", () => {
+    const urls = [
+      `http://${BasicBuilder.string()}.com/${BasicBuilder.string()}.mcap`,
+      `http://${BasicBuilder.string()}.com/${BasicBuilder.string()}.mcap`,
+    ];
+
+    const result = initialize({
+      urls,
+      parallelConnections: 4,
+    });
+
+    expect(MultiIterableSource).toHaveBeenCalledWith(
+      {
+        type: "urls",
+        urls,
+        parallelConnections: 4,
       },
       McapIterableSource,
     );

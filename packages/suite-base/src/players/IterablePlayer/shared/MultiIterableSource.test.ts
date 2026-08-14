@@ -130,6 +130,7 @@ describe("MultiIterableSource", () => {
         cacheSizeInBytes: expect.any(Number),
         readAheadEnabled: true,
         readAheadBufferBytes: DEFAULT_READ_AHEAD_BUFFER_BYTES,
+        parallelConnections: 1,
         pool: expect.any(HydratedSourcePool),
       });
       expect(mockSourceConstructor).toHaveBeenNthCalledWith(2, {
@@ -138,6 +139,7 @@ describe("MultiIterableSource", () => {
         cacheSizeInBytes: expect.any(Number),
         readAheadEnabled: true,
         readAheadBufferBytes: DEFAULT_READ_AHEAD_BUFFER_BYTES,
+        parallelConnections: 1,
         pool: expect.any(HydratedSourcePool),
       });
       expect(initializations).toHaveLength(2);
@@ -424,6 +426,86 @@ describe("MultiIterableSource", () => {
       const multiSource = new MultiIterableSource(dataSource, mockSourceConstructor);
       await multiSource["loadMultipleSources"]();
       expect(mockSourceConstructor).toHaveBeenCalledTimes(2);
+    });
+    it("should default each url child source to a single parallel connection", async () => {
+      // GIVEN: a multi-url source without a parallelConnections override.
+      const urls = [BasicBuilder.string(), BasicBuilder.string(), BasicBuilder.string()];
+      const multiSource = new MultiIterableSource(
+        {
+          type: "urls",
+          urls,
+        },
+        mockSourceConstructor,
+      );
+
+      // WHEN
+      await multiSource["loadMultipleSources"]();
+
+      // THEN: every child source explicitly receives parallelConnections 1 (connection budget:
+      // initialization concurrency plus sliding prewarm keep several CachedFilelike instances
+      // active, so multi-url sessions do not fan out connections by default).
+      expect(mockSourceConstructor.mock.calls[0]![0].parallelConnections).toBe(1);
+      expect(mockSourceConstructor.mock.calls[1]![0].parallelConnections).toBe(1);
+      expect(mockSourceConstructor.mock.calls[2]![0].parallelConnections).toBe(1);
+    });
+    it("should pass an explicit parallelConnections override to every url child source", async () => {
+      // GIVEN: a multi-url source with an explicit parallelConnections of 4.
+      const urls = [BasicBuilder.string(), BasicBuilder.string(), BasicBuilder.string()];
+      const multiSource = new MultiIterableSource(
+        {
+          type: "urls",
+          urls,
+          parallelConnections: 4,
+        },
+        mockSourceConstructor,
+      );
+
+      // WHEN
+      await multiSource["loadMultipleSources"]();
+
+      // THEN: the explicit value reaches every child source.
+      expect(mockSourceConstructor.mock.calls[0]![0].parallelConnections).toBe(4);
+      expect(mockSourceConstructor.mock.calls[1]![0].parallelConnections).toBe(4);
+      expect(mockSourceConstructor.mock.calls[2]![0].parallelConnections).toBe(4);
+    });
+    it("should preserve an explicit parallelConnections of 1 (parallel downloads disabled)", async () => {
+      // GIVEN: a multi-url source that explicitly opts into a single connection.
+      const urls = [BasicBuilder.string(), BasicBuilder.string()];
+      const multiSource = new MultiIterableSource(
+        {
+          type: "urls",
+          urls,
+          parallelConnections: 1,
+        },
+        mockSourceConstructor,
+      );
+
+      // WHEN
+      await multiSource["loadMultipleSources"]();
+
+      // THEN: the explicit 1 survives the ?? default (it must not be mistaken for "unset").
+      expect(mockSourceConstructor.mock.calls[0]![0].parallelConnections).toBe(1);
+      expect(mockSourceConstructor.mock.calls[1]![0].parallelConnections).toBe(1);
+    });
+    it("should preserve an explicit parallelConnections of 0 for every url child source", async () => {
+      // GIVEN: a multi-url source with an explicit parallelConnections of 0 (CachedFilelike
+      // normalizes it to 1 with a warning downstream; the value must survive this layer).
+      const urls = [BasicBuilder.string(), BasicBuilder.string()];
+      const multiSource = new MultiIterableSource(
+        {
+          type: "urls",
+          urls,
+          parallelConnections: 0,
+        },
+        mockSourceConstructor,
+      );
+
+      // WHEN
+      await multiSource["loadMultipleSources"]();
+
+      // THEN: the explicit 0 is passed through unchanged.
+      expect(mockSourceConstructor.mock.calls[0]![0].parallelConnections).toBe(0);
+      expect(mockSourceConstructor.mock.calls[1]![0].parallelConnections).toBe(0);
     });
   });
   describe("Initialization", () => {

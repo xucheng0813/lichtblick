@@ -15,6 +15,11 @@ import type { RemoteFileReadableOptions } from "./RemoteFileReadable.types";
 
 const DEFAULT_CACHE_SIZE_BYTES = 1024 * 1024 * 500; // 500MiB
 
+// MCAP remote default: 4 parallel download connections (TOS single connection ~1.5MiB/s vs ~4MiB/s
+// with 4 concurrent connections). Kept at the RemoteFileReadable layer so other consumers of
+// CachedFilelike (e.g. BagIterableSource) keep CachedFilelike's own default of 1.
+const DEFAULT_PARALLEL_CONNECTIONS = 4;
+
 export class RemoteFileReadable {
   readonly #remoteReader: CachedFilelike;
   readonly #batchingReadable: BatchingReadable;
@@ -26,6 +31,10 @@ export class RemoteFileReadable {
       cacheSizeInBytes: options?.cacheSizeInBytes ?? DEFAULT_CACHE_SIZE_BYTES,
       readAheadEnabled: options?.readAheadEnabled,
       readAheadBufferBytes: options?.readAheadBufferBytes,
+      // MCAP single-file default: 4 parallel connections. CachedFilelike slices segments at its
+      // own safe 4MiB default whenever K > 1 and no explicit maxSegmentBytes is given (see ST8),
+      // so no segment size needs to be threaded through here.
+      parallelConnections: options?.parallelConnections ?? DEFAULT_PARALLEL_CONNECTIONS,
     });
 
     const inner: McapTypes.IReadable = {

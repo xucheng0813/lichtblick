@@ -11,6 +11,7 @@ export type MultiFileHydrationOverrides = Pick<
   | "initConcurrency"
   | "prewarmCount"
   | "readAheadBufferBytes"
+  | "parallelConnections"
 >;
 
 // Pick only the hydration overrides that are explicitly defined.
@@ -27,6 +28,10 @@ export function pickDefinedHydrationOverrides(
     ...(source.prewarmCount != undefined ? { prewarmCount: source.prewarmCount } : {}),
     ...(source.readAheadBufferBytes != undefined
       ? { readAheadBufferBytes: source.readAheadBufferBytes }
+      : {}),
+    // Note: `??`-style semantics are handled by callers; an explicit 0/1 must survive this pick.
+    ...(source.parallelConnections != undefined
+      ? { parallelConnections: source.parallelConnections }
       : {}),
   };
 }

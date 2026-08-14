@@ -9,4 +9,9 @@ export type RemoteFileReadableOptions = {
   cacheSizeInBytes?: number;
   readAheadEnabled?: boolean;
   readAheadBufferBytes?: number;
+  // Number of parallel download connections used by the underlying CachedFilelike. MCAP defaults
+  // to 4 here (single-file remote playback benefits ~2.7x with 4 HTTP/1.1 connections); an
+  // explicit value wins, including 0/1 to disable parallel downloads. CachedFilelike normalizes
+  // invalid values (CachedFilelike's own default is 1, so other consumers are unaffected).
+  parallelConnections?: number;
 };

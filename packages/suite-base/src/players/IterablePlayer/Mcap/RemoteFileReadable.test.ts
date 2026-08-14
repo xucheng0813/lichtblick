@@ -69,6 +69,39 @@ describe("RemoteFileReadable", () => {
         expect.objectContaining({ readAheadBufferBytes }),
       );
     });
+
+    it("should default to 4 parallel connections for MCAP when none provided", () => {
+      // Given a URL without a parallelConnections override
+      // When creating a RemoteFileReadable
+      new RemoteFileReadable(testUrl);
+
+      // Then CachedFilelike receives the MCAP single-file default of 4
+      expect(CachedFilelike).toHaveBeenCalledWith(
+        expect.objectContaining({ parallelConnections: 4 }),
+      );
+    });
+
+    it("should pass through an explicit parallelConnections override", () => {
+      // Given a URL with a parallel download override
+      const parallelConnections = 2;
+
+      // When creating a RemoteFileReadable
+      new RemoteFileReadable(testUrl, { parallelConnections });
+
+      // Then CachedFilelike should receive the explicit override
+      expect(CachedFilelike).toHaveBeenCalledWith(expect.objectContaining({ parallelConnections }));
+    });
+
+    it("should pass through an explicit parallelConnections of 1 (parallel downloads disabled)", () => {
+      // Given a URL that explicitly opts out of parallel downloads
+      // When creating a RemoteFileReadable
+      new RemoteFileReadable(testUrl, { parallelConnections: 1 });
+
+      // Then the explicit 1 survives the ?? 4 default
+      expect(CachedFilelike).toHaveBeenCalledWith(
+        expect.objectContaining({ parallelConnections: 1 }),
+      );
+    });
   });
 
   describe("open", () => {

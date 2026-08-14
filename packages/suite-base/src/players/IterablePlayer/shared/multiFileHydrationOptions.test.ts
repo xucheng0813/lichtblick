@@ -64,6 +64,7 @@ describe("multiFileHydrationOptions", () => {
         initConcurrency: 2,
         prewarmCount: 0,
         readAheadBufferBytes: 12345,
+        parallelConnections: 4,
       });
 
       // THEN: every defined override field is merged into the result.
@@ -74,6 +75,23 @@ describe("multiFileHydrationOptions", () => {
         initConcurrency: 2,
         prewarmCount: 0,
         readAheadBufferBytes: 12345,
+        parallelConnections: 4,
+      });
+    });
+
+    it("preserves an explicit parallelConnections of 1 (parallel downloads disabled)", () => {
+      // GIVEN: base init args and a single-connection parallelConnections override.
+      const initArgs = { urls: ["https://example.com/first.mcap"] };
+
+      // WHEN: applying the override.
+      const result = addMultiFileHydrationOverrides(initArgs, {
+        parallelConnections: 1,
+      });
+
+      // THEN: the explicit 1 is preserved (it must not be mistaken for "unset").
+      expect(result).toEqual({
+        urls: ["https://example.com/first.mcap"],
+        parallelConnections: 1,
       });
     });
 
@@ -156,6 +174,33 @@ describe("multiFileHydrationOptions", () => {
       });
     });
 
+    it("carries parallelConnections (including explicit 0 and 1) when defined", () => {
+      // GIVEN: override objects with parallelConnections set to an explicit value.
+      // WHEN/THEN: exact values are preserved at both ends of the range.
+      expect(
+        pickDefinedHydrationOverrides({ parallelConnections: 0 }),
+      ).toEqual({ parallelConnections: 0 });
+      expect(
+        pickDefinedHydrationOverrides({ parallelConnections: 1 }),
+      ).toEqual({ parallelConnections: 1 });
+      expect(
+        pickDefinedHydrationOverrides({ parallelConnections: 4 }),
+      ).toEqual({ parallelConnections: 4 });
+    });
+
+    it("omits undefined parallelConnections", () => {
+      // GIVEN: an override object where parallelConnections is not defined.
+      const overrides = {
+        parallelConnections: undefined,
+      };
+
+      // WHEN: picking defined fields.
+      const result = pickDefinedHydrationOverrides(overrides);
+
+      // THEN: the field does not appear in the result.
+      expect(result).toEqual({});
+    });
+
     it("omits undefined prewarmCount and readAheadBufferBytes", () => {
       // GIVEN: an override object where the new tuning fields are not defined.
       const overrides = {
@@ -192,6 +237,22 @@ describe("worker initialize chain (args -> pickDefinedHydrationOverrides -> Mult
         prewarmCount: 0,
         readAheadBufferBytes: 262144,
         maxHydratedSources: 3,
+      },
+      expect.any(Function),
+    );
+  });
+
+  it("passes an explicit parallelConnections through to MultiIterableSource for multiple urls", () => {
+    initialize({
+      urls: ["https://example.com/a.mcap", "https://example.com/b.mcap"],
+      parallelConnections: 2,
+    });
+
+    expect(MockMultiIterableSource).toHaveBeenCalledWith(
+      {
+        type: "urls",
+        urls: ["https://example.com/a.mcap", "https://example.com/b.mcap"],
+        parallelConnections: 2,
       },
       expect.any(Function),
     );

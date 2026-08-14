@@ -66,4 +66,101 @@ describe("FetchReader", () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });
+
+  describe("streaming events", () => {
+    // Make the queue execute the queued fetch and resolve with the fetch promise.
+    beforeEach(() => {
+      mockGlobalRequestQueue.run.mockImplementation(async (fn) => await fn());
+    });
+
+    it("emits data chunks and end while streaming a response body", async () => {
+      const encoder = new TextEncoder();
+      mockFetch.mockResolvedValue(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode("hello "));
+              controller.enqueue(encoder.encode("world"));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+
+      const reader = new FetchReader(url);
+      const chunks: string[] = [];
+      const errorPromise = new Promise<Error>((resolve) => reader.on("error", resolve));
+      const ended = new Promise<void>((resolve) => reader.on("end", resolve));
+      reader.on("data", (chunk) => chunks.push(new TextDecoder().decode(chunk)));
+      reader.read();
+
+      await Promise.race([
+        ended,
+        errorPromise.then((error) => {
+          throw error;
+        }),
+      ]);
+      expect(chunks).toEqual(["hello ", "world"]);
+      reader.destroy();
+    });
+
+    it("emits an error when the fetch fails", async () => {
+      mockFetch.mockRejectedValue(new Error("network down"));
+
+      const reader = new FetchReader(url);
+      const errorPromise = new Promise<Error>((resolve) => reader.on("error", resolve));
+      reader.read();
+
+      await expect(errorPromise).resolves.toThrow(
+        "GET <https://example.com/data.mcap> failed: Error: network down",
+      );
+      reader.destroy();
+    });
+
+    it("emits an error for a non-ok response", async () => {
+      mockFetch.mockResolvedValue(new Response(null, { status: 404, statusText: "Not Found" }));
+
+      const reader = new FetchReader(url);
+      const errorPromise = new Promise<Error>((resolve) => reader.on("error", resolve));
+      reader.read();
+
+      await expect(errorPromise).resolves.toThrow("failed with status 404 (Not Found)");
+      reader.destroy();
+    });
+
+    it("emits end instead of error when destroyed mid-read", async () => {
+      // A response body that never produces data, but errors when the request is aborted.
+      mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            init?.signal?.addEventListener("abort", () => {
+              controller.error(new DOMException("aborted", "AbortError"));
+            });
+          },
+        });
+        return new Response(stream, { status: 200 });
+      });
+
+      const reader = new FetchReader(url);
+      const errorPromise = new Promise<Error>((resolve) => reader.on("error", resolve));
+      let ended = false;
+      const endedPromise = new Promise<void>((resolve) => {
+        reader.on("end", () => {
+          ended = true;
+          resolve();
+        });
+      });
+      reader.read();
+      reader.destroy();
+
+      await Promise.race([
+        endedPromise,
+        errorPromise.then((error) => {
+          throw error;
+        }),
+      ]);
+      expect(ended).toBe(true);
+    });
+  });
 });

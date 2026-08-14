@@ -55,11 +55,22 @@ export default class VirtualLRUBuffer {
   #numberOfBlocks: number = Infinity; // How many blocks are we allowed to have at any time.
   #lastAccessedBlockIndices: number[] = []; // Indexes of blocks, from least to most recently accessed.
   #rangesWithData: Range[] = []; // Ranges for which we have data copied in (and have not been evicted).
+  // Byte ranges whose blocks must not be evicted. Used by CachedFilelike to protect pending reads
+  // and in-flight download segments from being evicted by concurrent downloads.
+  #protectedRanges: Range[] = [];
 
   public constructor(options: { size: number; blockSize?: number; numberOfBlocks?: number }) {
     this.byteLength = options.size;
     this.#blockSize = options.blockSize ?? this.#blockSize;
     this.#numberOfBlocks = options.numberOfBlocks ?? this.#numberOfBlocks;
+  }
+
+  // Set the byte ranges that must survive eviction. Eviction skips blocks that overlap any
+  // protected range; if every block is protected and a new block still needs to be allocated, the
+  // least recently used block is evicted anyway (defensive path, logged with a warning). Callers
+  // without protected ranges are unaffected (defaults to an empty set).
+  public setProtectedRanges(ranges: Range[]): void {
+    this.#protectedRanges = ranges;
   }
 
   // Check if the range between `start` (inclusive) and `end` (exclusive) fully contains data
@@ -151,10 +162,10 @@ export default class VirtualLRUBuffer {
       index,
     ];
     if (this.#lastAccessedBlockIndices.length > this.#numberOfBlocks) {
-      // If we have too many blocks, remove the least recently used one.
+      // If we have too many blocks, remove the least recently used non-protected one.
       // Note that we don't reuse blocks, since other code might still hold a reference to it
       // via the `VirtualLRUBuffer#slice` method.
-      const deleteIndex = this.#lastAccessedBlockIndices.shift();
+      const deleteIndex = this.#findBlockIndexToEvict(index);
       if (deleteIndex != undefined) {
         // eslint-disable-next-line @typescript-eslint/no-array-delete
         delete this.#blocks[deleteIndex];
@@ -170,6 +181,39 @@ export default class VirtualLRUBuffer {
     const block = this.#blocks[index];
 
     return block;
+  }
+
+  // Pick the block to evict: the oldest block that is not protected, excluding the block that is
+  // being allocated right now (it was just appended to the LRU list and its data is not written
+  // yet — evicting it would lose the copy in progress). If no older unprotected block exists,
+  // evict the oldest block anyway so allocation can always make progress (defensive path; the
+  // caller's admission control should normally prevent this from happening). The evicted index is
+  // removed from the LRU list, mirroring the previous unconditional `shift()`.
+  #findBlockIndexToEvict(newBlockIndex: number): number | undefined {
+    for (const index of this.#lastAccessedBlockIndices) {
+      if (index !== newBlockIndex && !this.#isBlockProtected(index)) {
+        this.#lastAccessedBlockIndices = this.#lastAccessedBlockIndices.filter(
+          (other) => other !== index,
+        );
+        return index;
+      }
+    }
+    console.warn(
+      "VirtualLRUBuffer: all other blocks are protected; evicting the least recently used block anyway",
+    );
+    // The new block is the newest entry (appended last), so the head of the list is an older block.
+    return this.#lastAccessedBlockIndices.shift();
+  }
+
+  #isBlockProtected(index: number): boolean {
+    const blockStart = index * this.#blockSize;
+    const blockEnd = blockStart + this.#blockSize;
+    for (const protectedRange of this.#protectedRanges) {
+      if (protectedRange.start < blockEnd && blockStart < protectedRange.end) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // For a given position, calculate `blockIndex` (which block is this position in);
