@@ -95,6 +95,28 @@ type RpcSend = <T>(
   transferables?: Transferable[],
 ) => Promise<T>;
 
+// Rpc rejects pending calls with "Rpc terminated" when the worker is torn down, which happens when
+// this component unmounts (WebWorkerManager.unregisterWorkerListener -> worker.terminate +
+// rpc.terminate). A call started before unmount can therefore reject after the component is gone;
+// those rejections are expected and are swallowed (with a debug log) so they do not surface as
+// unhandledrejection. Any other error is re-thrown so callers keep reporting real failures.
+async function sendRpc<T>(
+  send: RpcSend,
+  topic: string,
+  payload?: Record<string, unknown>,
+  transferables?: Transferable[],
+): Promise<T | undefined> {
+  try {
+    return await send<T>(topic, payload, transferables);
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message === "Rpc terminated") {
+      log.debug(`Chart rpc "${topic}" rejected after worker termination, ignoring`);
+      return undefined;
+    }
+    throw err;
+  }
+}
+
 // Chart component renders data using workers with chartjs offscreen canvas
 
 const supportsOffscreenCanvas =
@@ -265,7 +287,12 @@ function Chart(props: Props): React.JSX.Element {
         // possible when we fall behind
         const coalesced = R.mergeAll(updates);
         onStartRender?.();
-        const scales = await send<RpcScales>("update", coalesced);
+        const scales = await sendRpc<RpcScales>(send, "update", coalesced);
+        if (scales == undefined) {
+          // the worker was terminated while the update was in flight (the component is
+          // unmounting); abandon the remaining queued updates
+          break;
+        }
         maybeUpdateScales(scales);
         onFinishRender?.();
         queuedUpdates.current = queuedUpdates.current.slice(updates.length);
@@ -312,7 +339,8 @@ function Chart(props: Props): React.JSX.Element {
         if (!sendWrapperRef.current) {
           return;
         }
-        const scales = await sendWrapperRef.current<RpcScales>(
+        const scales = await sendRpc<RpcScales>(
+          sendWrapperRef.current,
           "initialize",
           {
             node: offscreenCanvas,
@@ -330,6 +358,11 @@ function Chart(props: Props): React.JSX.Element {
             offscreenCanvas as OffscreenCanvas,
           ],
         );
+        if (scales == undefined) {
+          // the worker was terminated while initializing (the component unmounted); there is
+          // nothing left to do
+          return;
+        }
         maybeUpdateScales(scales);
         onFinishRender?.();
 
@@ -364,9 +397,12 @@ function Chart(props: Props): React.JSX.Element {
     }
 
     updateChart(newUpdate).catch((err: unknown) => {
-      if (isMounted()) {
-        setUpdateError(err as Error);
+      if (!isMounted()) {
+        // the component unmounted while the update was in flight; there is nothing to report
+        log.debug("Chart update rejected after unmount, ignoring");
+        return;
       }
+      setUpdateError(err as Error);
       console.error(err);
     });
   }, [getNewUpdateMessage, isMounted, updateChart]);
@@ -389,7 +425,7 @@ function Chart(props: Props): React.JSX.Element {
       }
 
       const boundingRect = event.target.getBoundingClientRect();
-      await rpcSendRef.current<RpcScales>("panstart", {
+      await sendRpc<RpcScales>(rpcSendRef.current, "panstart", {
         event: {
           cancelable: false,
           deltaY: event.deltaY,
@@ -411,7 +447,7 @@ function Chart(props: Props): React.JSX.Element {
       }
 
       const boundingRect = event.target.getBoundingClientRect();
-      const scales = await rpcSendRef.current<RpcScales>("panmove", {
+      const scales = await sendRpc<RpcScales>(rpcSendRef.current, "panmove", {
         event: {
           cancelable: false,
           deltaY: event.deltaY,
@@ -421,7 +457,9 @@ function Chart(props: Props): React.JSX.Element {
           },
         },
       });
-      maybeUpdateScales(scales, { userInteraction: true });
+      if (scales != undefined) {
+        maybeUpdateScales(scales, { userInteraction: true });
+      }
     });
 
     hammerManager.on("panend", async (event) => {
@@ -430,7 +468,7 @@ function Chart(props: Props): React.JSX.Element {
       }
 
       const boundingRect = event.target.getBoundingClientRect();
-      const scales = await rpcSendRef.current<RpcScales>("panend", {
+      const scales = await sendRpc<RpcScales>(rpcSendRef.current, "panend", {
         event: {
           cancelable: false,
           deltaY: event.deltaY,
@@ -440,7 +478,9 @@ function Chart(props: Props): React.JSX.Element {
           },
         },
       });
-      maybeUpdateScales(scales, { userInteraction: true });
+      if (scales != undefined) {
+        maybeUpdateScales(scales, { userInteraction: true });
+      }
     });
 
     return () => {
@@ -455,7 +495,7 @@ function Chart(props: Props): React.JSX.Element {
       }
 
       const boundingRect = event.currentTarget.getBoundingClientRect();
-      const scales = await rpcSendRef.current<RpcScales>("wheel", {
+      const scales = await sendRpc<RpcScales>(rpcSendRef.current, "wheel", {
         event: {
           cancelable: false,
           deltaY: event.deltaY,
@@ -467,7 +507,9 @@ function Chart(props: Props): React.JSX.Element {
           },
         },
       });
-      maybeUpdateScales(scales, { userInteraction: true });
+      if (scales != undefined) {
+        maybeUpdateScales(scales, { userInteraction: true });
+      }
     },
     [zoomEnabled, maybeUpdateScales],
   );
@@ -480,11 +522,13 @@ function Chart(props: Props): React.JSX.Element {
         return;
       }
 
-      const scales = await rpcSendRef.current<RpcScales>("mousedown", {
+      const scales = await sendRpc<RpcScales>(rpcSendRef.current, "mousedown", {
         event: rpcMouseEvent(event),
       });
 
-      maybeUpdateScales(scales);
+      if (scales != undefined) {
+        maybeUpdateScales(scales);
+      }
     },
     [maybeUpdateScales],
   );
@@ -494,7 +538,7 @@ function Chart(props: Props): React.JSX.Element {
       return;
     }
 
-    return await rpcSendRef.current("mouseup", {
+    return await sendRpc(rpcSendRef.current, "mouseup", {
       event: rpcMouseEvent(event),
     });
   }, []);
@@ -513,7 +557,7 @@ function Chart(props: Props): React.JSX.Element {
         return;
       }
 
-      const elements = await rpcSendRef.current<RpcElement[]>("getElementsAtEvent", {
+      const elements = await sendRpc<RpcElement[]>(rpcSendRef.current, "getElementsAtEvent", {
         event: rpcMouseEvent(event),
       });
 
@@ -521,7 +565,7 @@ function Chart(props: Props): React.JSX.Element {
       // were waiting for the RPC call.
 
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-      if (isMounted() && mousePresentRef.current) {
+      if (elements != undefined && isMounted() && mousePresentRef.current) {
         onHover(elements);
       }
     },
@@ -554,9 +598,15 @@ function Chart(props: Props): React.JSX.Element {
 
       // maybe we should forward the click event and add support for datalabel listeners
       // the rpc channel doesn't have a way to send rpc back...
-      const datalabel = await rpcSendRef.current("getDatalabelAtEvent", {
+      const datalabel = await sendRpc(rpcSendRef.current, "getDatalabelAtEvent", {
         event: { x: mouseX, y: mouseY, type: "click" },
       });
+
+      if (!isMounted()) {
+        // the component unmounted while the click call was in flight (e.g. a worker termination
+        // swallowed above); do not invoke the stale onClick handler
+        return;
+      }
 
       let xVal: number | undefined;
       let yVal: number | undefined;
