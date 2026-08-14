@@ -74,11 +74,20 @@ export async function main(getParams: () => Promise<MainParams> = async () => ({
   installDevtoolsFormatters();
   overwriteFetch();
   // consider moving waitForFonts into App to display an app loading screen
-  await waitForFonts();
-  await initI18n();
-
-  const { WebRoot } = await import("./WebRoot");
-  const params = await getParams();
+  // Remaining startup steps are independent of each other, so run them in parallel: font loading,
+  // i18n initialization, the WebRoot import and getParams. Every promise is created directly in the
+  // Promise.all literal so rejection handlers are attached immediately — an early failure cannot
+  // surface as an unhandledrejection, and any rejection still rejects main() (fail-fast, unchanged).
+  // getParams is caller-supplied and may throw synchronously, which would abort evaluation of the
+  // array and leave the other startup promises floating; Promise.resolve().then(getParams) converts
+  // the throw into a rejection of the aggregate. The other elements cannot throw synchronously:
+  // dynamic import() always returns a promise, and waitForFonts/initI18n are async functions.
+  const [{ WebRoot }, params] = await Promise.all([
+    import("./WebRoot"),
+    Promise.resolve().then(getParams),
+    waitForFonts(),
+    initI18n(),
+  ]);
   const rootElement = params.rootElement ?? (
     <WebRoot extraProviders={params.extraProviders} dataSources={params.dataSources}>
       <StudioApp />

@@ -24,7 +24,12 @@ import Logger from "@lichtblick/log";
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
 import { useDataSourceInfo } from "@lichtblick/suite-base/PanelAPI";
 import { useStyles } from "@lichtblick/suite-base/Workspace.style";
-import McapBundleAPI from "@lichtblick/suite-base/api/mcapBundle/McapBundleAPI";
+import {
+  clearSessionPrefetch,
+  consumeSessionPrefetch,
+  prefetchSession,
+  type SessionPrefetchHandle,
+} from "@lichtblick/suite-base/api/mcapBundle/sessionPrefetch";
 import AccountSettings from "@lichtblick/suite-base/components/AccountSettingsSidebar/AccountSettings";
 import { AgentCatalogWatcher } from "@lichtblick/suite-base/components/AgentCatalogWatcher";
 import { AgentChatSidebar } from "@lichtblick/suite-base/components/AgentChatSidebar";
@@ -585,6 +590,16 @@ function WorkspaceContent({ agentEnabled, ...props }: WorkspaceContentProps): Re
       : undefined,
   );
 
+  // Remembers the session consumption (fixed cache key + promise) so StrictMode
+  // effect replays reuse the same request instead of issuing a duplicate.
+  const sessionPrefetchRef = useRef<
+    { mcapBundleId: string; handle: SessionPrefetchHandle } | undefined
+  >(undefined);
+  // Monotonic generation of the session effect: only the most recent consumption
+  // flow is allowed to clear the cache/ref, so a cancelled StrictMode first run
+  // never cleans up under the replay that is still consuming the same promise.
+  const sessionPrefetchGenerationRef = useRef(0);
+
   // Resolve MCAP bundle URLs when mcapBundleId is present.
   useEffect(() => {
     const mcapBundleId = targetUrlState?.mcapBundleId;
@@ -592,12 +607,31 @@ function WorkspaceContent({ agentEnabled, ...props }: WorkspaceContentProps): Re
       return;
     }
 
-    const controller = new AbortController();
-    const { signal } = controller;
+    // Reuse the handle from a previous effect run (StrictMode replay) or from
+    // the prefetch cache; a cache miss issues a request through the same shared
+    // lifecycle (prefetchSession registers it in the cache), so every session
+    // request is shared: a single consumer unmounting only ignores the result,
+    // it never aborts the in-flight request.
+    const remembered = sessionPrefetchRef.current;
+    const handle =
+      remembered?.mcapBundleId === mcapBundleId
+        ? remembered.handle
+        : (consumeSessionPrefetch(mcapBundleId) ?? prefetchSession(mcapBundleId));
+    sessionPrefetchRef.current = { mcapBundleId, handle };
+    const sessionPromise = handle.promise;
+
+    const generation = ++sessionPrefetchGenerationRef.current;
+    // The object indirection keeps the flag mutable from the cleanup closure (a
+    // plain boolean would be narrowed to `false` inside the async body by
+    // TypeScript's control flow analysis).
+    const cancelled = { current: false };
 
     void (async () => {
       try {
-        const mcaps = await McapBundleAPI.getMcapBundle(mcapBundleId, signal);
+        const mcaps = await sessionPromise;
+        if (cancelled.current) {
+          return;
+        }
         if (mcaps.length === 0) {
           enqueueSnackbar("Session contains no data sources", {
             variant: "error",
@@ -612,18 +646,30 @@ function WorkspaceContent({ agentEnabled, ...props }: WorkspaceContentProps): Re
           sourceMetadata: mcaps.map((mcap) => mcap.metadata),
         });
       } catch (error) {
-        if (signal.aborted) {
+        if (cancelled.current) {
           return;
         }
         log.error("Failed to fetch session MCAP URLs:", error);
         enqueueSnackbar("Failed to load session data sources", {
           variant: "error",
         });
+      } finally {
+        if (generation === sessionPrefetchGenerationRef.current) {
+          // The consumption flow has settled and been handled (including
+          // errors): only now drop the cache entry and the ref, so later
+          // retries issue a fresh request instead of reusing a consumed
+          // promise. The identity guards make sure a stale handle or a newer
+          // entry under the same key is never cleared by mistake.
+          clearSessionPrefetch(handle);
+          if (sessionPrefetchRef.current?.handle.promise === sessionPromise) {
+            sessionPrefetchRef.current = undefined;
+          }
+        }
       }
     })();
 
     return () => {
-      controller.abort();
+      cancelled.current = true;
     };
   }, [targetUrlState?.mcapBundleId, enqueueSnackbar]);
 

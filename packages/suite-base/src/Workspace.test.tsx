@@ -5,9 +5,10 @@
 
 import "@testing-library/jest-dom";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
-import { useContext, useEffect, useState } from "react";
+import { StrictMode, useContext, useEffect, useState } from "react";
 
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
+import { clearAllSessionPrefetches, consumeSessionPrefetch, prefetchSession } from "@lichtblick/suite-base/api/mcapBundle/sessionPrefetch";
 import {
   useMessagePipeline,
   useMessagePipelineGetter,
@@ -811,6 +812,8 @@ describe("Workspace - session-based MCAP resolution", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    clearAllSessionPrefetches();
+    setHttpBaseUrl(undefined);
 
     (useMessagePipeline as jest.Mock).mockImplementation(
       (selector: (ctx: typeof mockPipelineContext) => unknown) => selector(mockPipelineContext),
@@ -865,7 +868,7 @@ describe("Workspace - session-based MCAP resolution", () => {
 
     // Then
     await waitFor(() => {
-      expect(mockGetMcapBundle).toHaveBeenCalledWith(mcapBundleId, expect.any(AbortSignal));
+      expect(mockGetMcapBundle).toHaveBeenCalledWith(mcapBundleId);
     });
     await waitFor(() => {
       expect(mockSelectSource).toHaveBeenCalledWith("remote-file", {
@@ -889,7 +892,7 @@ describe("Workspace - session-based MCAP resolution", () => {
 
     // Then
     await waitFor(() => {
-      expect(mockGetMcapBundle).toHaveBeenCalledWith(mcapBundleId, expect.any(AbortSignal));
+      expect(mockGetMcapBundle).toHaveBeenCalledWith(mcapBundleId);
     });
     await waitFor(() => {
       expect(mockEnqueueSnackbar).toHaveBeenCalledWith("Failed to load session data sources", {
@@ -910,6 +913,276 @@ describe("Workspace - session-based MCAP resolution", () => {
 
     // Then
     expect(mockGetMcapBundle).not.toHaveBeenCalled();
+  });
+
+  it("consumes the prefetched session promise instead of issuing a second request", async () => {
+    // Given: WebRoot would have prefetched during render.
+    const sessionId = "prefetched-session";
+    const mockMcaps = [{ url: "https://example.com/f1.mcap", metadata: { a: 1 } }];
+    mockGetMcapBundle.mockResolvedValue(mockMcaps);
+    void prefetchSession(sessionId);
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+
+    // When
+    render(<Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />);
+
+    // Then: the prefetch issued the only request; the consumer reused the cached promise.
+    await waitFor(() => {
+      expect(mockSelectSource).toHaveBeenCalledWith("remote-file", {
+        type: "connection",
+        params: { url: "https://example.com/f1.mcap" },
+        sourceMetadata: [{ a: 1 }],
+      });
+    });
+    expect(mockGetMcapBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a snackbar when the prefetched session contains no data sources", async () => {
+    // Given
+    const sessionId = "empty-session";
+    mockGetMcapBundle.mockResolvedValue([]);
+    void prefetchSession(sessionId);
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+
+    // When
+    render(<Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />);
+
+    // Then
+    await waitFor(() => {
+      expect(mockEnqueueSnackbar).toHaveBeenCalledWith("Session contains no data sources", {
+        variant: "error",
+      });
+    });
+    expect(mockGetMcapBundle).toHaveBeenCalledTimes(1);
+    expect(mockSelectSource).not.toHaveBeenCalled();
+  });
+
+  it("issues a single session request under StrictMode effect replay with a prefetch", async () => {
+    // Given
+    const sessionId = "strict-prefetched-session";
+    const mockMcaps = [{ url: "https://example.com/f1.mcap", metadata: {} }];
+    mockGetMcapBundle.mockResolvedValue(mockMcaps);
+    void prefetchSession(sessionId);
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+
+    // When: StrictMode mounts the component, replays the effect, then cleans up
+    // the first run before the prefetched promise settles.
+    render(
+      <StrictMode>
+        <Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />
+      </StrictMode>,
+    );
+
+    // Then
+    await waitFor(() => {
+      expect(mockSelectSource).toHaveBeenCalledWith("remote-file", expect.anything());
+    });
+    expect(mockGetMcapBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("issues a single session request under StrictMode effect replay without a prefetch", async () => {
+    // Given: no prefetch, so Workspace issues the request itself.
+    const sessionId = "strict-own-session";
+    const mockMcaps = [{ url: "https://example.com/f1.mcap", metadata: {} }];
+    mockGetMcapBundle.mockResolvedValue(mockMcaps);
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+
+    // When
+    render(
+      <StrictMode>
+        <Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />
+      </StrictMode>,
+    );
+
+    // Then: the ref reuse keeps the effect replay from issuing a duplicate request.
+    await waitFor(() => {
+      expect(mockSelectSource).toHaveBeenCalledWith("remote-file", expect.anything());
+    });
+    expect(mockGetMcapBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cross-contaminate prefetches across sessionIds", async () => {
+    // Given: a prefetch for session-a is in flight.
+    mockGetMcapBundle.mockImplementation(async (sessionId: string) => [
+      { url: `https://example.com/${sessionId}.mcap`, metadata: {} },
+    ]);
+    void prefetchSession("session-a");
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: "session-b" });
+
+    // When: Workspace consumes a different sessionId.
+    render(<Workspace deepLinks={["https://app.example.com/?mcap-bundle=session-b"]} />);
+
+    // Then: the cache misses for session-b and a separate request is issued.
+    await waitFor(() => {
+      expect(mockSelectSource).toHaveBeenCalledWith("remote-file", {
+        type: "connection",
+        params: { url: "https://example.com/session-b.mcap" },
+        sourceMetadata: [{}],
+      });
+    });
+    expect(mockGetMcapBundle).toHaveBeenCalledTimes(2);
+    expect(mockGetMcapBundle).toHaveBeenNthCalledWith(1, "session-a");
+    expect(mockGetMcapBundle).toHaveBeenNthCalledWith(2, "session-b");
+  });
+
+  it("surfaces prefetch failures without unhandledrejection and allows retry", async () => {
+    // Given: the prefetch fails before Workspace mounts.
+    const sessionId = "early-fail-session";
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      mockGetMcapBundle.mockRejectedValueOnce(new Error("Network error"));
+      void prefetchSession(sessionId);
+      (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+
+      // When: Workspace consumes the rejected prefetch.
+      const first = render(
+        <Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />,
+      );
+
+      // Then: the error is surfaced through the existing snackbar and no
+      // unhandledrejection escapes the shared prefetch.
+      await waitFor(() => {
+        expect(mockEnqueueSnackbar).toHaveBeenCalledWith(
+          "Failed to load session data sources",
+          { variant: "error" },
+        );
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+
+      // The consumer cleared the cache entry after handling the error, so a
+      // remount retries with a fresh request instead of being poisoned.
+      first.unmount();
+      mockGetMcapBundle.mockResolvedValue([{ url: "https://example.com/retry.mcap", metadata: {} }]);
+      render(<Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />);
+
+      await waitFor(() => {
+        expect(mockSelectSource).toHaveBeenCalledWith("remote-file", {
+          type: "connection",
+          params: { url: "https://example.com/retry.mcap" },
+          sourceMetadata: [{}],
+        });
+      });
+      expect(mockGetMcapBundle).toHaveBeenCalledTimes(2);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  it("re-runs the session flow with a fresh request after a completed consumption", async () => {
+    // Given
+    const sessionId = "rerun-session";
+    const mockMcaps = [{ url: "https://example.com/f1.mcap", metadata: {} }];
+    mockGetMcapBundle.mockResolvedValue(mockMcaps);
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+
+    // When: the first consumption completes successfully.
+    const root = render(
+      <Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />,
+    );
+    await waitFor(() => {
+      expect(mockSelectSource).toHaveBeenCalledTimes(1);
+    });
+
+    // Then: navigating away and back issues a fresh request instead of reusing
+    // the consumed promise (the ref was cleared once the flow completed).
+    (parseAppURLState as jest.Mock).mockReturnValue(undefined);
+    root.rerender(<Workspace deepLinks={["https://app.example.com/"]} />);
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+    root.rerender(<Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />);
+
+    await waitFor(() => {
+      expect(mockSelectSource).toHaveBeenCalledTimes(2);
+    });
+    expect(mockGetMcapBundle).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares a Workspace-initiated request with a second consumer mounting mid-flight", async () => {
+    // Given: no prefetch, so the first Workspace issues the request itself and
+    // registers it in the shared cache.
+    const sessionId = "shared-own-session";
+    let resolveMcaps: (value: { url: string; metadata: Record<string, unknown> }[]) => void =
+      () => {};
+    const pending = new Promise<{ url: string; metadata: Record<string, unknown> }[]>(
+      (resolve) => {
+        resolveMcaps = resolve;
+      },
+    );
+    mockGetMcapBundle.mockReturnValue(pending);
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+
+    const first = render(
+      <Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />,
+    );
+    await waitFor(() => {
+      expect(mockGetMcapBundle).toHaveBeenCalledTimes(1);
+    });
+
+    // When: a second consumer mounts while the request is still in flight.
+    const second = render(
+      <Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />,
+    );
+    await waitFor(() => {
+      expect(mockGetMcapBundle).toHaveBeenCalledTimes(1);
+    });
+
+    // Then: both consumers handle the shared result and no duplicate request
+    // is issued.
+    act(() => {
+      resolveMcaps([{ url: "https://example.com/shared.mcap", metadata: {} }]);
+    });
+    await waitFor(() => {
+      expect(mockSelectSource).toHaveBeenCalledTimes(2);
+    });
+    expect(mockGetMcapBundle).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    second.unmount();
+  });
+
+  it("does not let a superseded flow clear the shared cache entry", async () => {
+    // Given: the request for the first session stays in flight.
+    const sessionId = "superseded-session";
+    let resolveFirst: (value: { url: string; metadata: Record<string, unknown> }[]) => void =
+      () => {};
+    const firstPending = new Promise<{ url: string; metadata: Record<string, unknown> }[]>(
+      (resolve) => {
+        resolveFirst = resolve;
+      },
+    );
+    mockGetMcapBundle
+      .mockReturnValueOnce(firstPending)
+      .mockResolvedValue([{ url: "https://example.com/other.mcap", metadata: {} }]);
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: sessionId });
+
+    const root = render(
+      <Workspace deepLinks={[`https://app.example.com/?mcap-bundle=${sessionId}`]} />,
+    );
+    await waitFor(() => {
+      expect(mockGetMcapBundle).toHaveBeenCalledTimes(1);
+    });
+
+    // When: the user navigates to another session before the request settles.
+    (parseAppURLState as jest.Mock).mockReturnValue({ mcapBundleId: "other-session" });
+    root.rerender(<Workspace deepLinks={["https://app.example.com/?mcap-bundle=other-session"]} />);
+    await waitFor(() => {
+      expect(mockSelectSource).toHaveBeenCalledWith("remote-file", expect.anything());
+    });
+    act(() => {
+      resolveFirst([{ url: "https://example.com/superseded.mcap", metadata: {} }]);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: the superseded (cancelled, stale generation) flow ignored its
+    // result and left the shared entry in place for a later consumer of the
+    // same session.
+    expect(consumeSessionPrefetch(sessionId)?.promise).toBeDefined();
+    expect(mockGetMcapBundle).toHaveBeenCalledTimes(2);
+    root.unmount();
   });
 });
 

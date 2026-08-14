@@ -101,6 +101,12 @@ export function UnconnectedPanelLayout(props: Readonly<Props>): React.ReactEleme
 
   const panelCatalog = usePanelCatalog();
 
+  // `installedExtensions` stays `undefined` while the extension catalog is still loading (e.g.
+  // remote extension loaders have not finished yet). In that window we keep rendering the mosaic
+  // so built-in panels mount and start subscribing immediately; tiles referencing extension panels
+  // that are not in the catalog yet show a loading placeholder instead of UnknownPanel.
+  const registeredExtensions = useExtensionCatalog((state) => state.installedExtensions);
+
   const panelComponents = useMemo(
     () =>
       new Map(
@@ -121,6 +127,13 @@ export function UnconnectedPanelLayout(props: Readonly<Props>): React.ReactEleme
       const PanelComponent = panelComponents.get(type);
       if (PanelComponent) {
         panel = <PanelComponent childId={id} tabId={tabId} />;
+      } else if (registeredExtensions == undefined) {
+        // The extension catalog is still loading: the panel may be provided by an extension that
+        // has not been registered yet, so render a loading placeholder instead of UnknownPanel.
+        // When the catalog finishes loading, PanelCatalogProvider re-renders with the updated
+        // panels and this tile automatically recovers to the real panel (or to UnknownPanel if
+        // the type is genuinely unknown).
+        panel = <ExtensionsLoadingState />;
       } else {
         // If we haven't found a panel of the given type, render the panel selector
         panel = <UnknownPanel childId={id} tabId={tabId} overrideConfig={{ type, id }} />;
@@ -154,7 +167,7 @@ export function UnconnectedPanelLayout(props: Readonly<Props>): React.ReactEleme
       }
       return mosaicWindow;
     },
-    [panelComponents, createTile, tabId],
+    [panelComponents, createTile, registeredExtensions, tabId],
   );
 
   const bodyToRender = useMemo(
@@ -205,7 +218,6 @@ export default function PanelLayout(): React.JSX.Element {
   const { changePanelLayout } = useCurrentLayoutActions();
   const layoutExists = useCurrentLayoutSelector(selectedLayoutExistsSelector);
   const mosaicLayout = useCurrentLayoutSelector(selectedLayoutMosaicSelector);
-  const registeredExtensions = useExtensionCatalog((state) => state.installedExtensions);
   const { installingProgress } = useInstallingExtensionsStore();
 
   const isInstallingExtensions = installingProgress.inProgress;
@@ -219,9 +231,6 @@ export default function PanelLayout(): React.JSX.Element {
     [changePanelLayout],
   );
 
-  if (registeredExtensions == undefined) {
-    return <ExtensionsLoadingState />;
-  }
   const loadingComponent = isInstallingExtensions ? (
     <Stack className={classes.overlayStyle}>
       <ExtensionsLoadingState />

@@ -19,13 +19,14 @@ const DEFAULT_READ_AHEAD_BUFFER_BYTES = 1024 * 1024 * 2;
 // Variables whose names start with "mock" are hoisted by babel-jest alongside jest.mock(),
 // so mockLogWarn is guaranteed to be defined before the factory executes.
 const mockLogWarn = jest.fn();
+const mockLogDebug = jest.fn();
 jest.mock("@lichtblick/log", () => ({
   getLogger: jest.fn(() => ({
-    debug: jest.fn(),
+    // Wrap in arrow functions so the mock variables are only read when log.debug()/log.warn()
+    // are actually invoked during a test (after the `const mockLog* = jest.fn()` lines have
+    // executed), not at module-import time when jest.mock factories are evaluated.
+    debug: (...args: unknown[]) => mockLogDebug(...args),
     info: jest.fn(),
-    // Wrap in an arrow function so mockLogWarn is only read when log.warn() is actually
-    // invoked during a test (after the `const mockLogWarn = jest.fn()` line has executed),
-    // not at module-import time when jest.mock factories are evaluated.
     warn: (...args: unknown[]) => mockLogWarn(...args),
     error: jest.fn(),
   })),
@@ -61,6 +62,7 @@ describe("MultiIterableSource", () => {
   let dataSource: MultiSource;
   beforeEach(() => {
     mockLogWarn.mockClear();
+    mockLogDebug.mockClear();
     mockSourceConstructor = jest.fn().mockImplementation(
       () =>
         ({
@@ -748,6 +750,170 @@ describe("MultiIterableSource", () => {
       expect(openCounts.get(urls[1]!)).toBe(2);
       expect(openCounts.get(urls[2]!)).toBe(2);
     }, 5000);
+  });
+
+  describe("prewarmCount injection", () => {
+    // `prewarm` is optional on IIterableSource, and jest.Mocked<T> does not convert optional
+    // methods into mocks, so intersect with an explicit required mock to assert on prewarm calls.
+    type PrewarmableTestSource = jest.Mocked<IIterableSource> & { prewarm: jest.Mock };
+
+    const prewarmableSource = (startSec: number, prewarm: jest.Mock): PrewarmableTestSource =>
+      ({
+        initialize: jest.fn().mockResolvedValue(
+          InitializationSourceBuilder.initialization({
+            start: RosTimeBuilder.time({ sec: startSec, nsec: 0 }),
+            end: RosTimeBuilder.time({ sec: startSec + 1, nsec: 0 }),
+          }),
+        ),
+        messageIterator: jest.fn().mockResolvedValue({ done: true, value: undefined }),
+        getBackfillMessages: jest.fn().mockResolvedValue([]),
+        getStart: jest.fn().mockReturnValue({ sec: startSec, nsec: 0 }),
+        getEnd: jest.fn().mockReturnValue({ sec: startSec + 1, nsec: 0 }),
+        prewarm,
+      });
+
+    // Build `sourceCount` sources with ascending start times (creation order == sorted order)
+    // and initialize the multi-source, returning the created sources for prewarm assertions.
+    const initializeSources = async (
+      sourceCount: number,
+      prewarmCount?: number,
+    ): Promise<PrewarmableTestSource[]> => {
+      const sources = Array.from({ length: sourceCount }, (_, index) =>
+        prewarmableSource(index, jest.fn().mockResolvedValue(undefined)),
+      );
+      for (const source of sources) {
+        mockSourceConstructor.mockImplementationOnce(() => source);
+      }
+      const multiSource = new MultiIterableSource(
+        {
+          type: "files",
+          files: Array.from({ length: sourceCount }, () => new Blob()),
+          ...(prewarmCount != undefined ? { prewarmCount } : {}),
+        },
+        mockSourceConstructor,
+      );
+      await multiSource.initialize();
+      return sources;
+    };
+
+    const prewarmCallCounts = (sources: PrewarmableTestSource[]): number[] =>
+      sources.map((source) => source.prewarm.mock.calls.length);
+
+    it("should prewarm the default 3 earliest sources when prewarmCount is not set", async () => {
+      // GIVEN: five sources and no prewarmCount override.
+      const sources = await initializeSources(5);
+
+      // THEN: the three earliest-by-start sources are prewarmed exactly once, later ones not at all.
+      expect(prewarmCallCounts(sources)).toEqual([1, 1, 1, 0, 0]);
+    });
+
+    it("should honor an explicit prewarmCount", async () => {
+      // GIVEN: five sources and prewarmCount = 2.
+      const sources = await initializeSources(5, 2);
+
+      // THEN: only the two earliest sources are prewarmed.
+      expect(prewarmCallCounts(sources)).toEqual([1, 1, 0, 0, 0]);
+    });
+
+    it("should disable prewarm when prewarmCount is 0", async () => {
+      // GIVEN: five sources and prewarmCount = 0 (valid, disables prewarm).
+      const sources = await initializeSources(5, 0);
+
+      // THEN: no source is prewarmed and no warning is emitted.
+      expect(prewarmCallCounts(sources)).toEqual([0, 0, 0, 0, 0]);
+      expect(mockLogWarn).not.toHaveBeenCalled();
+    });
+
+    it("should floor fractional prewarmCount values", async () => {
+      // GIVEN: five sources and a fractional prewarmCount of 2.9.
+      const sources = await initializeSources(5, 2.9);
+
+      // THEN: Math.floor(2.9) = 2 sources are prewarmed, avoiding fractional indexes.
+      expect(prewarmCallCounts(sources)).toEqual([1, 1, 0, 0, 0]);
+    });
+
+    it("should clamp prewarmCount to the total source count", async () => {
+      // GIVEN: only two sources and prewarmCount far above the source count.
+      const sources = await initializeSources(2, 10);
+
+      // THEN: every source is prewarmed exactly once; nothing is prewarmed twice.
+      expect(prewarmCallCounts(sources)).toEqual([1, 1]);
+    });
+
+    it("should fall back to the default with a warning for negative prewarmCount", async () => {
+      // GIVEN: five sources and a negative prewarmCount.
+      const sources = await initializeSources(5, -1);
+
+      // THEN: the default of 3 is used and a warning is logged.
+      expect(prewarmCallCounts(sources)).toEqual([1, 1, 1, 0, 0]);
+      expect(mockLogWarn).toHaveBeenCalledTimes(1);
+      expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining("prewarmCount"));
+    });
+
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+      "should fall back to the default with a warning for non-finite prewarmCount %p",
+      async (prewarmCount) => {
+        // GIVEN: five sources and a non-finite prewarmCount.
+        const sources = await initializeSources(5, prewarmCount);
+
+        // THEN: the default of 3 is used and a warning is logged.
+        expect(prewarmCallCounts(sources)).toEqual([1, 1, 1, 0, 0]);
+        expect(mockLogWarn).toHaveBeenCalledTimes(1);
+        expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining("prewarmCount"));
+      },
+    );
+
+    it("should log debug metrics for source initialize, prewarm, and total initialize durations", async () => {
+      // GIVEN: two sources with a working prewarm.
+      await initializeSources(2);
+
+      // THEN: debug metrics cover per-source initialize, prewarm success, and total duration.
+      const messages = mockLogDebug.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((message) => message.includes("source initialize took"))).toBe(true);
+      expect(messages.some((message) => message.includes("prewarm succeeded"))).toBe(true);
+      expect(messages.some((message) => message.includes("total initialize took"))).toBe(true);
+    });
+
+    it("should log a debug metric when prewarm fails without changing non-fatal behavior", async () => {
+      // GIVEN: a source whose prewarm rejects; initialization itself succeeds.
+      const failingPrewarmSource = prewarmableSource(
+        0,
+        jest.fn().mockRejectedValue(new Error("prewarm boom")),
+      );
+      const healthySource = prewarmableSource(1, jest.fn().mockResolvedValue(undefined));
+      mockSourceConstructor.mockImplementationOnce(() => failingPrewarmSource);
+      mockSourceConstructor.mockImplementationOnce(() => healthySource);
+      const multiSource = new MultiIterableSource(
+        { type: "files", files: [new Blob(), new Blob()] },
+        mockSourceConstructor,
+      );
+
+      // WHEN: prewarm fails.
+      await expect(multiSource.initialize()).resolves.toBeDefined();
+
+      // THEN: the failure is observable at debug level but does not fail initialization.
+      const messages = mockLogDebug.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((message) => message.includes("prewarm failed"))).toBe(true);
+      expect(messages.some((message) => message.includes("total initialize took"))).toBe(true);
+    });
+
+    it("should log a debug metric when a source initialize fails without changing fail-fast behavior", async () => {
+      // GIVEN: a source whose initialize rejects.
+      const failingInitSource = prewarmableSource(0, jest.fn().mockResolvedValue(undefined));
+      failingInitSource.initialize.mockRejectedValue(new Error("init boom"));
+      mockSourceConstructor.mockImplementationOnce(() => failingInitSource);
+      const multiSource = new MultiIterableSource(
+        { type: "files", files: [new Blob()] },
+        mockSourceConstructor,
+      );
+
+      // WHEN: initialize fails.
+      await expect(multiSource.initialize()).rejects.toThrow("init boom");
+
+      // THEN: the failure is observable at debug level and still propagates.
+      const messages = mockLogDebug.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((message) => message.includes("source initialize failed"))).toBe(true);
+    });
   });
 
   describe("HydratedSourcePool wiring", () => {

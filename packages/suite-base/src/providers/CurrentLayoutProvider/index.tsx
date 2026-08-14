@@ -66,6 +66,18 @@ import { IncompatibleLayoutVersionAlert } from "./IncompatibleLayoutVersionAlert
 const log = Logger.getLogger(__filename);
 
 /**
+ * 选择来源标记:仅用于区分 selection generation 变化的原因(用户切换 vs 内部 fallback/刷新),
+ * 以及测试断言。它不参与重校验的准入判定——generation 一旦变化,无论来源(用户切换或内部
+ * delete listener 切换)都直接放弃后台重校验,内部来源的变化不允许穿过检查继续执行。
+ */
+type SelectionSource =
+  | "user"
+  | "revalidation-refresh"
+  | "fallback-initial-load"
+  | "fallback-delete-listener"
+  | "fallback-revalidation";
+
+/**
  * Concrete implementation of CurrentLayoutContext.Provider which handles
  * automatically restoring the current layout from LayoutStorage.
  */
@@ -89,6 +101,12 @@ export default function CurrentLayoutProvider({
 
   // Monotonic selection generation; see setSelectedLayoutId below.
   const selectionGeneration = useRef(0);
+  const selectionSources = useRef(new Map<number, SelectionSource>());
+
+  // 同一 generation 的 fallback 只执行一次(single-flight):delete listener 与重校验可能同时
+  // 通过 generation 检查进入统一 fallback,按 generation 复用同一个 Promise,避免重复云端
+  // 查询/选择/profile 写入/默认布局创建。
+  const fallbackInFlight = useRef(new Map<number, Promise<void>>());
 
   // Serialized profile-write queue: writes land strictly in selection order. Requests already
   // stale when getLayout returns are dropped before enqueueing, so every enqueued write lands;
@@ -199,18 +217,26 @@ export default function CurrentLayoutProvider({
     [],
   );
 
+  // setSelectedLayoutId 的返回:true=选择已落地;false=选择失败(布局不存在/加载失败);
+  // "incompatible"=版本不兼容(有意拒绝,仅提示不选择);undefined=期间被更新的选择取代。
   const [, setSelectedLayoutId] = useAsyncFn(
     async (
       id: LayoutID | undefined,
-      { saveToProfile = true }: { saveToProfile?: boolean } = {},
+      {
+        saveToProfile = true,
+        source,
+      }: { saveToProfile?: boolean; source?: SelectionSource } = {},
     ) => {
       // Selection generation: every call invalidates all in-flight async side effects of earlier
       // selections (layout state commits, profile writes, version alerts, snackbars, failures).
       const generation = ++selectionGeneration.current;
+      // 记录该 generation 的来源(默认视为用户操作),仅用于区分变化原因与测试断言。
+      selectionSources.current.clear();
+      selectionSources.current.set(generation, source ?? "user");
       if (id == undefined) {
         setLayoutState({ selectedLayout: undefined });
         flushProfileWriteError();
-        return;
+        return true;
       }
       // 切换期间保留完整的旧 selectedLayout 对象（旧 id+data 成对不拆），仅追加 loading 标记；
       // 绝不组合“新 id + 旧 data”（CurrentLayoutLocalStorageSyncAdapter 等消费者要求
@@ -229,18 +255,18 @@ export default function CurrentLayoutProvider({
         });
         const layout = await layoutManager.getLayout(id);
         if (generation !== selectionGeneration.current) {
-          // 过期请求：丢弃所有异步副作用，不落地任何状态。
-          return;
+          // 过期请求：丢弃所有异步副作用，不落地任何状态。返回 undefined 表示被取代。
+          return undefined;
         }
         const layoutVersion = layout?.baseline.data.version;
         if (layoutVersion != undefined && layoutVersion > MAX_SUPPORTED_LAYOUT_VERSION) {
           setIncompatibleLayoutVersionError(true);
           setLayoutState({ selectedLayout: undefined });
           flushProfileWriteError();
-          return;
+          return "incompatible";
         }
         if (!isMounted()) {
-          return;
+          return undefined;
         }
         setIncompatibleLayoutVersionError(false);
         if (layout == undefined) {
@@ -251,6 +277,7 @@ export default function CurrentLayoutProvider({
               : { selectedLayout: { ...recoverableLayout, loading: false } },
           );
           flushProfileWriteError();
+          return false;
         } else {
           // 新 layout 数据取到后一次性原子替换整个对象。
           setLayoutState({
@@ -266,11 +293,12 @@ export default function CurrentLayoutProvider({
             // 串行化 profile 写入：入队即按顺序落地（见 writeCurrentLayoutIdToProfile）。
             writeCurrentLayoutIdToProfile(id);
           }
+          return true;
         }
       } catch (error) {
         if (generation !== selectionGeneration.current) {
           // 过期请求的失败不弹错误。
-          return;
+          return undefined;
         }
         console.error(error);
         enqueueSnackbar(`The layout could not be loaded. ${error.toString()}`, {
@@ -284,6 +312,7 @@ export default function CurrentLayoutProvider({
             : { selectedLayout: { ...recoverableLayout, loading: false } },
         );
         flushProfileWriteError();
+        return false;
       }
     },
     [
@@ -360,7 +389,223 @@ export default function CurrentLayoutProvider({
     };
   }, [layoutManager, setLayoutState]);
 
-  // Make sure our layout still exists after changes. If not deselect it.
+  /**
+   * 统一 fallback:由初始加载(本地无命中)、delete listener、同步后重校验三方共用,保证行为
+   * 一处定义。语义与现状(初始加载的 fallback 链)完全一致:app parameter 指定优先;「注入默认
+   * 布局」不是独立选择步骤,它的作用是抑制云端 fallback、并在完全无布局时作为 DEFAULT_LAYOUT
+   * 的数据来源;云端默认路径一旦启用即为终止路径(即使返回空/失败也不再继续选本地);其余为
+   * 组织布局优先排序 → 本地布局 → DEFAULT_LAYOUT。
+   *
+   * 可选 generation 守卫:调用方(delete listener / 重校验)传入快照后,每次落地选择副作用前
+   * 校验 generation 未变化;期间发生用户切换或另一方 fallback 已落地选择时直接放弃,避免重复
+   * 云端查询/选择/profile 写入。同一 generation 的并发调用(delete listener 与重校验同时通过
+   * 检查)按 generation 复用同一个 Promise(single-flight),保证云端查询/默认布局创建最多一次。
+   * 初始加载路径不传 generation,行为与现状完全一致。
+   */
+  const selectFallbackLayout = useCallback(
+    async ({ generation, source }: { generation?: number; source?: SelectionSource } = {}) => {
+      if (generation != undefined) {
+        const existing = fallbackInFlight.current.get(generation);
+        if (existing != undefined) {
+          // 同一 generation 已有 fallback 在执行:复用同一个 Promise(single-flight),
+          // 避免重复云端查询/选择/profile 写入/默认布局创建。
+          await existing;
+          return;
+        }
+      }
+
+      const runFallback = async (): Promise<void> => {
+        const isStale = () =>
+          generation != undefined && selectionGeneration.current !== generation;
+
+        const layouts = await layoutManager.getLayouts();
+        // await getLayouts() 期间 selection 可能已变化:先检查 stale 再解析布局/发出提示,
+        // 避免已过期的 fallback 产生可见副作用(如“URL 默认布局不存在”snackbar)。
+        if (isStale()) {
+          return;
+        }
+
+        // Check if there's a layout specified by app parameter. When multiple layouts share the
+        // name, prefer the organizational (shared) layout over a local one.
+        const matchingLayouts = layouts.filter((l) => l.name === appParameters.defaultLayout);
+        const defaultLayoutFromParameters =
+          matchingLayouts.find((l) => l.permission.startsWith(ORG_PERMISSION_PREFIX)) ??
+          matchingLayouts[0];
+        if (defaultLayoutFromParameters) {
+          if (isStale()) {
+            return;
+          }
+          // Apply the URL-selected layout for the current session only, without persisting it to the
+          // user's profile, so a one-off ?layout= override does not become sticky on later visits.
+          await setSelectedLayoutId(defaultLayoutFromParameters.id, {
+            saveToProfile: false,
+            source,
+          });
+          return;
+        }
+
+        // It there is a defaultLayout setted but didnt found a layout, show a error to the user
+        if (appParameters.defaultLayout) {
+          enqueueSnackbar(
+            t("noDefaultLayoutParameter", { layoutName: appParameters.defaultLayout }),
+            {
+              variant: "warning",
+            },
+          );
+        }
+
+        // A Docker-injected default retains priority over the cloud fallback. The existing fallback
+        // below will persist that injected data only when there are no layouts at all.
+        if (!hasInjectedDefaultLayout && remoteLayoutStorage?.getDefaultLayout != undefined) {
+          if (isStale()) {
+            return;
+          }
+          await selectCloudDefaultLayout({
+            layoutManager,
+            remoteLayoutStorage,
+            selectLayout: async (id) => {
+              // 云端默认路径一旦启用即为终止路径:即使选择已被更新的 selection 取代,
+              // 也不再继续选本地布局。
+              if (!isStale()) {
+                await setSelectedLayoutId(id, { source });
+              }
+            },
+          });
+          // A configured server owns this fallback. On null, failure, or timeout, keep the current
+          // unselected state instead of creating a local copy that a later sync could upload.
+          return;
+        }
+
+        if (layouts.length > 0) {
+          const orgLayouts = layouts.filter((l) => l.permission.startsWith(ORG_PERMISSION_PREFIX));
+          const layoutsToSort = orgLayouts.length > 0 ? orgLayouts : layouts;
+          const sortedLayouts = [...layoutsToSort].sort((a, b) => a.name.localeCompare(b.name));
+          if (isStale()) {
+            return;
+          }
+          await setSelectedLayoutId(sortedLayouts[0]!.id, { source });
+          return;
+        }
+
+        if (isStale()) {
+          return;
+        }
+        const defaultLayout = await layoutManager.saveNewLayout(DEFAULT_LAYOUT);
+        // saveNewLayout await 期间 selection 可能已变化:变化则不再选中新创建的布局。
+        if (isStale()) {
+          return;
+        }
+        await setSelectedLayoutId(defaultLayout.id, { source });
+      };
+
+      const promise = runFallback();
+      if (generation != undefined) {
+        fallbackInFlight.current.set(generation, promise);
+        const cleanup = () => {
+          if (fallbackInFlight.current.get(generation) === promise) {
+            fallbackInFlight.current.delete(generation);
+          }
+        };
+        void promise.then(cleanup, cleanup);
+      }
+      await promise;
+    },
+    [
+      appParameters,
+      enqueueSnackbar,
+      layoutManager,
+      remoteLayoutStorage,
+      setSelectedLayoutId,
+      t,
+    ],
+  );
+
+  /**
+   * 等待 layout manager 结束所有进行中的操作(如拉取远端布局)。语义与现状一致:不忙立即返回;
+   * 忙则轮询,超时后警告并继续。
+   */
+  const waitForBusyEnd = useCallback(async () => {
+    if (!layoutManager.isBusy()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const startTime = Date.now();
+
+      const checkBusy = () => {
+        const elapsed = Date.now() - startTime;
+
+        if (!layoutManager.isBusy()) {
+          resolve();
+        } else if (elapsed >= BUSY_POLLING_TIMEOUT_MS) {
+          console.warn(
+            `CurrentLayoutProvider: timeout after ${BUSY_POLLING_TIMEOUT_MS}ms, continuing anyway`,
+          );
+          resolve();
+        } else {
+          setTimeout(checkBusy, BUSY_POLLING_INTERVAL_MS);
+        }
+      };
+      checkBusy();
+    });
+  }, [layoutManager]);
+
+  /**
+   * 同步结束后的重校验(快速路径专用,严格的 generation 快照并发语义)。
+   *
+   * 快速路径选中时记录当时的 selection generation 与 layoutId;busy 结束时仅当 generation
+   * 未变化、仍选中原 layout、且未编辑(不能只看 working copy:CurrentLayoutSyncAdapter 有
+   * 1 秒 debounce)才重新 getLayout 校验。generation 一旦变化,无论来源(用户切换或内部
+   * delete listener 切换)都直接放弃——内部 delete 变化意味着统一 fallback 已由 listener 执行,
+   * 再跑会造成重复云端查询/选择/profile 写入。
+   */
+  const revalidateSelectionAfterSync = useCallback(
+    async (generationSnapshot: number, layoutId: LayoutID) => {
+      if (selectionGeneration.current !== generationSnapshot) {
+        log.debug(
+          "Skipping layout revalidation: selection changed",
+          selectionSources.current.get(selectionGeneration.current),
+        );
+        return;
+      }
+      const selected = layoutStateRef.current.selectedLayout;
+      if (selected?.id !== layoutId || selected.edited === true) {
+        return;
+      }
+
+      const layout = await layoutManager.getLayout(layoutId);
+
+      // getLayout await 期间 selection 可能再次变化(用户切换/编辑,或内部 delete listener
+      // 的 fallback 已落地):按 generation 快照重新检查后才可执行任何副作用。
+      if (selectionGeneration.current !== generationSnapshot) {
+        return;
+      }
+      const selectedNow = layoutStateRef.current.selectedLayout;
+      if (selectedNow?.id !== layoutId || selectedNow.edited === true) {
+        return;
+      }
+
+      if (layout == undefined) {
+        // 布局已被远端同步删除:与 delete listener 共用统一 fallback(带 generation 守卫)。
+        await selectFallbackLayout({
+          generation: generationSnapshot,
+          source: "fallback-revalidation",
+        });
+        return;
+      }
+
+      // baseline 有更新 → 用新数据刷新已选布局(复用 setSelectedLayoutId 刷新路径,内部标记);
+      // 无变化 → 不动。
+      const fetchedData = layout.working?.data ?? layout.baseline.data;
+      if (selectedNow.data != undefined && !_.isEqual(selectedNow.data, fetchedData)) {
+        await setSelectedLayoutId(layoutId, { saveToProfile: false, source: "revalidation-refresh" });
+      }
+    },
+    [layoutManager, selectFallbackLayout, setSelectedLayoutId],
+  );
+
+  // Make sure our layout still exists after changes. If not, run the unified fallback.
+  // The fallback semantics are defined in exactly one place (selectFallbackLayout), shared with
+  // the post-sync revalidation above.
   useEffect(() => {
     const listener: LayoutManagerEventTypes["change"] = async (event) => {
       if (event.type !== "delete" || !layoutStateRef.current.selectedLayout?.id) {
@@ -368,8 +613,15 @@ export default function CurrentLayoutProvider({
       }
 
       if (event.layoutId === layoutStateRef.current.selectedLayout.id) {
-        const layouts = await layoutManager.getLayouts();
-        await setSelectedLayoutId(layouts[0]?.id);
+        // 记录触发时的 generation 快照:统一 fallback 落地选择前若 selection 已被其他来源
+        // (用户切换或重校验 fallback)改变,直接放弃,避免与重校验重复执行云端查询/选择/profile 写入。
+        const generation = selectionGeneration.current;
+        try {
+          await selectFallbackLayout({ generation, source: "fallback-delete-listener" });
+        } catch (error) {
+          // listener 的 rejection 无人消费,必须在此兜底。
+          log.error("Fallback layout selection failed", error);
+        }
       }
     };
 
@@ -377,7 +629,7 @@ export default function CurrentLayoutProvider({
     return () => {
       layoutManager.off("change", listener);
     };
-  }, [enqueueSnackbar, layoutManager, setSelectedLayoutId]);
+  }, [layoutManager, selectFallbackLayout]);
 
   // Load initial state by re-selecting the last selected layout from the UserProfile.
   useAsync(async () => {
@@ -391,34 +643,54 @@ export default function CurrentLayoutProvider({
       return;
     }
 
-    // For some reason, this needs to go before the setSelectedLayoutId, probably some initialization
-    const { currentLayoutId } = await getUserProfile();
+    // getUserProfile 与 loadDefaultLayouts 无相互依赖:并行执行,避免串行多一次往返。
+    const [{ currentLayoutId }] = await Promise.all([
+      getUserProfile(),
+      loadDefaultLayouts(layoutManager, loaders),
+    ]);
 
-    // Try to load default layouts, before checking to add the fallback "Default".
-    await loadDefaultLayouts(layoutManager, loaders);
+    // 快速路径:进入 isBusy 等待前,用 getLayouts()(本地列表语义)判定 profile 记录的
+    // currentLayoutId 是否本地命中。不得用 getLayout(id) 作本地探针——本地未命中会穿透访问远端。
+    const localLayouts = await layoutManager.getLayouts();
+    if (currentLayoutId != undefined) {
+      const localHit = localLayouts.find((element) => element.id === currentLayoutId);
+      if (localHit != undefined) {
+        // 本地命中:立即选中(用户马上看到面板、数据开始拉取)……
+        // setSelectedLayoutId 的返回用于确认快速选择确实成功:true=已落地;false=失败
+        // (getLayouts() 命中后、getLayout() 前布局被同步删除/加载失败);"incompatible"=
+        // 版本不兼容(alert 已弹出,与现状一致不再选择);undefined=期间被更新的选择取代。
+        const fastPathResult = await setSelectedLayoutId(currentLayoutId, {
+          saveToProfile: false,
+        });
+        // 记录本次快速路径选择的 generation 快照与 layoutId;busy 结束后据此重校验。
+        const fastPathGeneration = selectionGeneration.current;
 
-    // Wait for layout manager to finish any ongoing operations (e.g. fetching remote layouts)
-    if (layoutManager.isBusy()) {
-      await new Promise<void>((resolve) => {
-        const startTime = Date.now();
-
-        const checkBusy = () => {
-          const elapsed = Date.now() - startTime;
-
-          if (!layoutManager.isBusy()) {
-            resolve();
-          } else if (elapsed >= BUSY_POLLING_TIMEOUT_MS) {
-            console.warn(
-              `CurrentLayoutProvider: timeout after ${BUSY_POLLING_TIMEOUT_MS}ms, continuing anyway`,
-            );
-            resolve();
-          } else {
-            setTimeout(checkBusy, BUSY_POLLING_INTERVAL_MS);
+        if (fastPathResult === true) {
+          // ……同时继续在后台等待 busy 结束。
+          await waitForBusyEnd();
+          await revalidateSelectionAfterSync(fastPathGeneration, currentLayoutId);
+          return;
+        }
+        if (fastPathResult === false) {
+          // 快速选择失败:同一 generation 下(无用户切换)等待同步结束并进入统一 fallback;
+          // generation 已变化则说明期间发生了用户选择,不覆盖。
+          await waitForBusyEnd();
+          if (selectionGeneration.current === fastPathGeneration) {
+            await selectFallbackLayout({
+              generation: fastPathGeneration,
+              source: "fallback-revalidation",
+            });
           }
-        };
-        checkBusy();
-      });
+          return;
+        }
+        // "incompatible":版本不兼容,保持现状(仅提示,不选择);undefined:快速选择期间被
+        // 用户切换取代 → 保留用户选择。两种情况下都不做任何事。
+        return;
+      }
     }
+
+    // 本地无命中(首启/无缓存):行为与现状完全一致,照常等待 busy 后再走完整选择链。
+    await waitForBusyEnd();
 
     const layouts = await layoutManager.getLayouts();
 
@@ -432,51 +704,7 @@ export default function CurrentLayoutProvider({
       return;
     }
 
-    // Check if there's a layout specified by app parameter. When multiple layouts share the
-    // name, prefer the organizational (shared) layout over a local one.
-    const matchingLayouts = layouts.filter((l) => l.name === appParameters.defaultLayout);
-    const defaultLayoutFromParameters =
-      matchingLayouts.find((l) => l.permission.startsWith(ORG_PERMISSION_PREFIX)) ??
-      matchingLayouts[0];
-    if (defaultLayoutFromParameters) {
-      // Apply the URL-selected layout for the current session only, without persisting it to the
-      // user's profile, so a one-off ?layout= override does not become sticky on later visits.
-      await setSelectedLayoutId(defaultLayoutFromParameters.id, { saveToProfile: false });
-      return;
-    }
-
-    // It there is a defaultLayout setted but didnt found a layout, show a error to the user
-    if (appParameters.defaultLayout) {
-      enqueueSnackbar(t("noDefaultLayoutParameter", { layoutName: appParameters.defaultLayout }), {
-        variant: "warning",
-      });
-    }
-
-    // A Docker-injected default retains priority over the cloud fallback. The existing fallback
-    // below will persist that injected data only when there are no layouts at all.
-    if (!hasInjectedDefaultLayout && remoteLayoutStorage?.getDefaultLayout != undefined) {
-      await selectCloudDefaultLayout({
-        layoutManager,
-        remoteLayoutStorage,
-        selectLayout: async (id) => {
-          await setSelectedLayoutId(id);
-        },
-      });
-      // A configured server owns this fallback. On null, failure, or timeout, keep the current
-      // unselected state instead of creating a local copy that a later sync could upload.
-      return;
-    }
-
-    if (layouts.length > 0) {
-      const orgLayouts = layouts.filter((l) => l.permission.startsWith(ORG_PERMISSION_PREFIX));
-      const layoutsToSort = orgLayouts.length > 0 ? orgLayouts : layouts;
-      const sortedLayouts = [...layoutsToSort].sort((a, b) => a.name.localeCompare(b.name));
-      await setSelectedLayoutId(sortedLayouts[0]!.id);
-      return;
-    }
-
-    const defaultLayout = await layoutManager.saveNewLayout(DEFAULT_LAYOUT);
-    await setSelectedLayoutId(defaultLayout.id);
+    await selectFallbackLayout({ source: "fallback-initial-load" });
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getUserProfile, layoutManager, remoteLayoutStorage, setSelectedLayoutId, enqueueSnackbar]);

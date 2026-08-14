@@ -59,9 +59,29 @@ const DEFAULT_INIT_CONCURRENCY = 4;
 const DEFAULT_MAX_HYDRATED_SOURCES = 4;
 const DEFAULT_MAX_HYDRATED_BYTES = 1024 * 1024 * 512; // 512 MiB
 
-// Earliest-by-start sources to prewarm for t=0 playback. Not part of MultiSourceHydrationOptions:
-// intentionally fixed and small to avoid a large open/request burst.
-const PREWARM_EARLIEST_COUNT = 3;
+// Default number of earliest-by-start sources to prewarm for t=0 playback. Callers can override
+// this via the optional `prewarmCount` MultiSourceHydrationOptions field; the value is floored and
+// clamped to the source count, and 0 disables prewarm entirely. Kept small by default to avoid a
+// large open/request burst.
+const DEFAULT_PREWARM_EARLIEST_COUNT = 3;
+
+// Normalize the optional prewarmCount override: finite non-negative values are floored (to avoid
+// fractional source indexes) and clamped to the total source count; 0 is valid and disables
+// prewarm; negative or non-finite values fall back to the default with a warning. Other options'
+// validation behavior is intentionally untouched.
+function normalizePrewarmCount(value: number | undefined, sourceCount: number): number {
+  if (value == undefined) {
+    return Math.min(DEFAULT_PREWARM_EARLIEST_COUNT, sourceCount);
+  }
+  const floored = Math.floor(value);
+  if (Number.isFinite(value) && floored >= 0) {
+    return Math.min(floored, sourceCount);
+  }
+  log.warn(
+    `Invalid prewarmCount (${value}); falling back to default ${DEFAULT_PREWARM_EARLIEST_COUNT}.`,
+  );
+  return Math.min(DEFAULT_PREWARM_EARLIEST_COUNT, sourceCount);
+}
 
 export class MultiIterableSource<T extends ISerializedIterableSource, P>
   implements ISerializedIterableSource
@@ -154,12 +174,31 @@ export class MultiIterableSource<T extends ISerializedIterableSource, P>
     // initializations stay aligned with `sources`.
     return await Promise.all(
       sources.map(
-        async (source) => await semaphore.runExclusive(async () => await source.initialize()),
+        async (source) =>
+          await semaphore.runExclusive(async () => {
+            const startTime = performance.now();
+            try {
+              const result = await source.initialize();
+              const durationMs = performance.now() - startTime;
+              log.debug(
+                `MultiIterableSource: source initialize took ${durationMs.toFixed(2)}ms`,
+              );
+              return result;
+            } catch (err) {
+              const durationMs = performance.now() - startTime;
+              log.debug(
+                `MultiIterableSource: source initialize failed after ${durationMs.toFixed(2)}ms`,
+                err,
+              );
+              throw err;
+            }
+          }),
       ),
     );
   }
 
   public async initialize(): Promise<Initialization> {
+    const startTime = performance.now();
     const initializations: Initialization[] = await this.loadMultipleSources();
 
     const resultInit: Initialization = this.mergeInitializations(initializations);
@@ -171,23 +210,49 @@ export class MultiIterableSource<T extends ISerializedIterableSource, P>
     });
 
     // Warm earliest sources so t=0 playback does not stall re-hydrating them.
-    await this.#prewarmEarliestSources();
+    const prewarmCount = normalizePrewarmCount(
+      this.dataSource.prewarmCount,
+      this.sourceImpl.length,
+    );
+    await this.#prewarmEarliestSources(prewarmCount);
+
+    const durationMs = performance.now() - startTime;
+    log.debug(
+      `MultiIterableSource: total initialize took ${durationMs.toFixed(2)}ms for ` +
+        `${this.sourceImpl.length} sources`,
+    );
 
     return resultInit;
   }
 
   // Touch earliest sources in descending start order so the earliest become most-recently-used.
-  // Prewarm failures are non-fatal; the source will hydrate on demand later.
-  async #prewarmEarliestSources(): Promise<void> {
-    if (!this.#pool) {
+  // Prewarm failures are non-fatal; the source will hydrate on demand later. `prewarmCount` is
+  // already normalized (floored, clamped, 0 disables).
+  async #prewarmEarliestSources(prewarmCount: number): Promise<void> {
+    if (!this.#pool || prewarmCount <= 0) {
       return;
     }
-    const warmCount = Math.min(PREWARM_EARLIEST_COUNT, this.sourceImpl.length);
+    const warmCount = Math.min(prewarmCount, this.sourceImpl.length);
     for (let index = warmCount - 1; index >= 0; index--) {
+      const source = this.sourceImpl[index];
+      if (source?.prewarm == undefined) {
+        continue;
+      }
+      const startTime = performance.now();
       try {
-        await this.sourceImpl[index]?.prewarm?.();
+        await source.prewarm();
+        const durationMs = performance.now() - startTime;
+        log.debug(
+          `MultiIterableSource: prewarm succeeded for source at index ${index} in ` +
+            `${durationMs.toFixed(2)}ms`,
+        );
       } catch (err) {
-        log.debug("prewarmEarliestSources: source prewarm failed", err);
+        const durationMs = performance.now() - startTime;
+        log.debug(
+          `MultiIterableSource: prewarm failed for source at index ${index} after ` +
+            `${durationMs.toFixed(2)}ms`,
+          err,
+        );
       }
     }
   }

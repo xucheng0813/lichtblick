@@ -24,6 +24,7 @@ import {
   UlogLocalDataSourceFactory,
 } from "@lichtblick/suite-base";
 import { AppSetting } from "@lichtblick/suite-base/AppSetting";
+import { prefetchSession } from "@lichtblick/suite-base/api/mcapBundle/sessionPrefetch";
 import { AppParametersInput } from "@lichtblick/suite-base/context/AppParametersContext";
 import { setHttpBaseUrl } from "@lichtblick/suite-base/services/http/httpBaseUrl";
 import {
@@ -57,6 +58,16 @@ export function WebRoot(props: {
     new IdbExtensionLoader("local"),
   ];
   const url = new URL(globalThis.location.href);
+
+  // Prefetch the MCAP bundle during render (after setHttpBaseUrl above and before
+  // the tree mounts) so the Workspace effect can consume the cached promise
+  // instead of paying an extra round-trip after mount. Repeated renders (e.g.
+  // StrictMode) hit the prefetch cache and do not issue duplicate requests.
+  const mcapBundleId = url.searchParams.get("mcap-bundle") ?? undefined;
+  if (mcapBundleId != undefined && mcapBundleId !== "") {
+    void prefetchSession(mcapBundleId);
+  }
+
   const workspace = resolveWorkspace(appConfiguration);
 
   if (resolveVizServerConfigured(workspace)) {

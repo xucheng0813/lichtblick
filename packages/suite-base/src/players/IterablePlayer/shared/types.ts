@@ -41,6 +41,10 @@ type MultiSourceHydrationOptions = {
   // concurrently parsing many MCAP channel schemas (and, for remote sources, the initial request
   // burst from concurrent MCAP summary reads).
   initConcurrency?: number;
+  // Number of earliest-by-start sources to prewarm before playback begins (default 3). Finite
+  // non-negative values are floored and clamped to the total source count; 0 disables prewarm;
+  // invalid values fall back to the default and log a warning.
+  prewarmCount?: number;
 };
 
 export type MultiSource =
