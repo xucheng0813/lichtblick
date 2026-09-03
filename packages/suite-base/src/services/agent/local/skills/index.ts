@@ -6,8 +6,10 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/
 
 import { COLLECTD_METRICS_SKILL } from "./collectdMetrics";
+import { DATA_DIAGNOSIS_SKILL } from "./dataDiagnosis";
 import { DATA_QUERY_SKILL } from "./dataQuery";
 import { LAYOUT_AUTHORING_SKILL } from "./layoutAuthoring";
+import { MESSAGE_PATH_SKILL } from "./messagePath";
 import { PANEL_CATALOG_SKILL } from "./panelCatalog";
 import { PANEL_3D_SKILL } from "./panels/3d";
 import { PANEL_GAUGE_SKILL } from "./panels/gauge";
@@ -34,12 +36,14 @@ export type { Skill } from "./types";
 const SKILLS: readonly Skill[] = [
   COLLECTD_METRICS_SKILL,
   DATA_QUERY_SKILL,
+  DATA_DIAGNOSIS_SKILL,
   VTD_QUERY_SKILL,
   VTD_SLICE_SKILL,
   VTD_TRIGGER_SKILL,
   PANEL_CATALOG_SKILL,
   ROBOT_VIZ_SKILL,
   LAYOUT_AUTHORING_SKILL,
+  MESSAGE_PATH_SKILL,
   USER_SCRIPTS_SKILL,
   // Per-panel reference detail. Marked indexed: false so the prompt index stays small; the
   // panel-catalog skill routes to them by id before any panel is proposed.

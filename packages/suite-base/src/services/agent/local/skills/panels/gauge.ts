@@ -7,11 +7,7 @@
 
 import type { Skill } from "../types";
 
-/**
- * The `Gauge` panel (panels/Gauge). Config verified against panels/Gauge/types.ts: GaugeConfig is
- * colorMap/colorMode/gradient/maxValue/minValue/path/reverse; defaults are 0/1 for the range,
- * which pins any real-world signal unless minValue/maxValue are set.
- */
+/** Config facts come from GaugeConfig in panels/Gauge/types.ts. Keep them in sync. */
 export const PANEL_GAUGE_SKILL: Skill = {
   id: "panel-gauge",
   name: "Gauge panel: single-value dial configuration",
@@ -19,7 +15,7 @@ export const PANEL_GAUGE_SKILL: Skill = {
   indexed: false,
   body: `# The \`Gauge\` panel
 
-MessagePath-based panel: one numeric value on a dial. Single path.
+MessagePath-based panel: one numeric value on a dial. Single path (message-path skill).
 
 \`\`\`json
 { "lichtblickPanelTitle": "Battery level", "path": "/battery.percentage", "minValue": 0, "maxValue": 100, "colorMode": "colormap", "colorMap": "red-yellow-green" }
@@ -28,12 +24,18 @@ MessagePath-based panel: one numeric value on a dial. Single path.
 **Always set \`minValue\` and \`maxValue\` to the signal's real range.** They default to 0 and 1, so
 any signal with a larger range pins the needle.
 
-- \`colorMap\` is one of \`"red-yellow-green"\`, \`"rainbow"\`, \`"turbo"\`.
-- \`colorMode\` is \`"colormap"\` (default) or \`"gradient"\`; \`gradient\` (exactly two color
-  strings) applies only when \`colorMode\` is \`"gradient"\`.
-- \`reverse\` (boolean) mirrors the color gradient so the start color sits at the high end of
-  the dial; the pointer position is unaffected (it is computed from the value alone).
+## Config reference
+
+- \`path\`: the message path; it must resolve to a single numeric field. An array or object field
+  renders nothing, and \`/topic\` alone resolves to the message object.
+- \`minValue\`, \`maxValue\`: numbers.
+- \`colorMode\`: \`"colormap"\` (default) or \`"gradient"\`. With \`"colormap"\`, \`colorMap\` is one of
+  \`"red-yellow-green"\`, \`"rainbow"\`, \`"turbo"\`. With \`"gradient"\`, \`gradient\` is exactly two
+  color strings.
+- \`reverse\` (boolean) mirrors the colors so the start color sits at the high end of the dial;
+  the pointer position is unaffected.
 - Values must be numbers or numeric strings.
 
-The path must resolve to a single numeric field — an array or object field renders nothing.`,
+Not supported (ignored if written): \`style\`, \`tickInterval\`, \`showTicks\`, \`reverseDirection\`,
+\`min\` / \`max\` (the keys are \`minValue\` / \`maxValue\`).`,
 };

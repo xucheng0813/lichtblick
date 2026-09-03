@@ -201,7 +201,7 @@ export const REPLAY_ANALYSIS_LAYOUT = {
 export const LAYOUT_AUTHORING_SKILL: Skill = {
   id: "layout-authoring",
   name: "Layout authoring: AgentSafeLayoutData structure",
-  whenToUse: "Before calling propose_layout, for the exact JSON structure and worked examples.",
+  whenToUse: "Before propose_layout: exact JSON shape, limits, worked examples.",
   body: `# Layout authoring
 
 \`propose_layout\` takes \`{ name, summary?, data }\` where \`data\` is AgentSafeLayoutData. A
@@ -462,9 +462,20 @@ Plot for a Table (topicPath pointing at an object array).
 The patterns above stay far below every budget (≤ 4 panels, ≤ 3 nesting levels), so following a
 pattern cannot hit a budget by itself — only the paths and configs added on top of one can.
 
+## Extending the layout the user has open
+
+The workspace summary lists the open layout's panel ids (\`Plot!abc\`, ...) but not their
+configurations, so you cannot reproduce existing panels. Give every panel in your proposal a
+fresh id that does not collide with the listed ones.
+
+Lichtblick compares the proposal with the open layout when the user applies it: a proposal that
+is exactly the open layout plus new panels is added in place; anything else — and any proposal
+that carries \`userNodes\` — is saved as a new layout. You do not control which happens, so say
+"adds panels" or "new layout" only as the card shows it, and never claim the layout was applied.
+
 ## Before proposing
 
-Build paths and topic names only from the loaded catalog — never from memory of what a robot
+Load the message-path skill for every path you write. Build paths and topic names only from the loaded catalog — never from memory of what a robot
 "usually" publishes. Load the panel-catalog skill if unsure which panel accepts a given schema, and
 check the per-panel requirements there that validation does not enforce. Say briefly why the chosen
 panels answer the user's question.`,

@@ -8,10 +8,9 @@
 import type { Skill } from "../types";
 
 /**
- * The `RosOut` panel (panels/Log). Every claim verified against panels/Log: the eight exact
- * schema names matched with `includes` (never convertibleTo), and Config from panels/Log/types.ts
- * (searchTerms, minLogLevel, optional topicToRender, optional nameFilter) with default
- * `{ searchTerms: [], minLogLevel: 1 }`.
+ * The schema allowlist below is pinned by skills.test.ts against the eight names the Log panel
+ * matches with `includes` (never convertibleTo), and the Config keys come from
+ * panels/Log/types.ts. Keep both in sync.
  */
 export const PANEL_ROSOUT_SKILL: Skill = {
   id: "panel-rosout",
@@ -52,5 +51,10 @@ exactly.
 - \`nameFilter\` (optional): \`{ "<node-name>": { "visible": false } }\` hides messages from that
   node.
 
-A bare \`{}\` config is valid: it renders the first supported log topic with no filtering.`,
+These four keys are the whole config. \`showLevel\`, \`showDate\`, \`showTime\`, \`fontSize\`, and
+similar keys from other tools are ignored here.
+
+A bare \`{}\` config is valid: it renders the first supported log topic with no filtering. To jump
+to an error, pair the panel with \`search_messages({ topic, level: "error" })\` and seek to the
+hit's \`receiveTimeNs\` (data-query skill).`,
 };

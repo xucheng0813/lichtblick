@@ -7,11 +7,7 @@
 
 import type { Skill } from "../types";
 
-/**
- * The `map` panel (panels/Map). Config verified against panels/Map/config.ts: Config is
- * center/customTileUrl/disabledTopics/followTopic/layer/topicColors/zoomLevel/maxNativeZoom;
- * eligible schemas are NavSatFix, LocationFix and GeoJSON with their name variants.
- */
+/** Config facts come from panels/Map/config.ts. Keep them in sync. */
 export const PANEL_MAP_SKILL: Skill = {
   id: "panel-map",
   name: "map panel: geographic position and GeoJSON overlays",
@@ -19,8 +15,9 @@ export const PANEL_MAP_SKILL: Skill = {
   indexed: false,
   body: `# The \`map\` panel
 
-Topic-based panel: geographic positions and GeoJSON overlays. Accepts exactly these schemas (with
-their name variants): \`sensor_msgs/NavSatFix\`, \`foxglove.LocationFix\`, \`foxglove.GeoJSON\`.
+Topic-based panel: geographic positions and GeoJSON overlays. The panel type is lowercase
+\`map\` even though the UI shows "Map". Accepts exactly these schemas (with their name variants):
+\`sensor_msgs/NavSatFix\`, \`foxglove.LocationFix\`, \`foxglove.GeoJSON\`.
 
 All eligible topics are drawn unless listed in \`disabledTopics\`.
 
@@ -28,12 +25,18 @@ All eligible topics are drawn unless listed in \`disabledTopics\`.
 { "lichtblickPanelTitle": "GPS position", "layer": "map", "followTopic": "/gps/fix", "disabledTopics": [], "topicColors": {} }
 \`\`\`
 
-- \`layer\` is \`"map"\`, \`"satellite"\`, or \`"custom"\`. With \`"custom"\`, \`customTileUrl\` may
-  only contain \`{x}\`, \`{y}\`, \`{z}\` placeholders.
-- \`followTopic\` cannot be a GeoJSON topic.
-- \`topicColors\` maps topic names to CSS color strings.
-- Optional view state: \`center\` (\`{ lat, lon }\`), \`zoomLevel\`, \`maxNativeZoom\`.
+## Config reference
+
+- \`layer\`: \`"map"\` (street tiles), \`"satellite"\`, or \`"custom"\`. With \`"custom"\`,
+  \`customTileUrl\` is required and may only contain \`{x}\`, \`{y}\`, \`{z}\` placeholders;
+  \`maxNativeZoom\` caps tile zoom.
+- \`followTopic\`: the topic the view centers on; it cannot be a GeoJSON topic.
+- \`disabledTopics\`: topic names to hide. \`topicColors\`: topic name → CSS color.
+- \`center\` \`{ "lat", "lon" }\` and \`zoomLevel\`: initial view when not following.
 - Points are plotted only when latitude and longitude are finite.
+
+Not supported (ignored if written): \`topicConfig\`, \`followFrame\`, \`layers\`, per-topic history
+or point-style settings, and the layer names \`"street"\` or \`"shaded-relief"\`.
 
 For robot localization, prefer pairing the \`map\` panel with a \`3D\` or robot panel rather than
 overloading one view — see the panel-catalog skill.`,

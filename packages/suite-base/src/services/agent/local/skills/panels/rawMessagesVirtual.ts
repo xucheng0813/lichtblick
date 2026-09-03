@@ -7,11 +7,7 @@
 
 import type { Skill } from "../types";
 
-/**
- * The `RawMessagesVirtual` panel (panels/RawMessagesVirtual). Config verified against
- * panels/RawMessagesVirtual/RawMessagesVirtual.tsx: identical shape to RawMessages (topicPath,
- * diff fields, fontSize) — only the rendering is virtualized.
- */
+/** Config facts come from RawMessagesVirtualPanelConfig in panels/RawMessagesCommon/types.ts. */
 export const PANEL_RAW_MESSAGES_VIRTUAL_SKILL: Skill = {
   id: "panel-raw-messages-virtual",
   name: "RawMessagesVirtual panel: virtualized message inspection",
@@ -20,17 +16,19 @@ export const PANEL_RAW_MESSAGES_VIRTUAL_SKILL: Skill = {
   body: `# The \`RawMessagesVirtual\` panel
 
 The virtualized variant of \`RawMessages\`: same config, same any-schema message-tree rendering,
-but rows are rendered on demand. Prefer it for large messages or topics with many fields, where
-the plain \`RawMessages\` panel would render the whole tree eagerly.
+but rows are rendered on demand. Prefer it for large messages or topics with many fields (point
+clouds, big diagnostics arrays), where the plain \`RawMessages\` panel would render the whole tree
+eagerly.
 
 \`\`\`json
 { "lichtblickPanelTitle": "Odometry message", "topicPath": "/nav/odom" }
 \`\`\`
 
-Identical optional diffing fields as \`RawMessages\`: \`diffEnabled\`, \`diffMethod\`
-(\`"custom"\` or \`"previous message"\`), \`diffTopicPath\`, \`showFullMessageForDiff\`, plus
-\`fontSize\`. Any schema is accepted, so this panel is also a valid fallback when a message path
-cannot be built — see the "never guess fields" rule in the panel-catalog skill.
+Config keys are identical to \`RawMessages\`: \`topicPath\` (topic or message path; the key is
+never \`topic\`), \`diffEnabled\`, \`diffMethod\` (\`"custom"\` or \`"previous message"\`),
+\`diffTopicPath\`, \`showFullMessageForDiff\`, \`expansion\`, \`fontSize\`. Any schema is accepted,
+so this panel is also a valid fallback when a message path cannot be built — see the "never guess
+fields" rule in the panel-catalog skill.
 
 For the non-virtualized behavior and diff semantics, see panel-raw-messages.`,
 };

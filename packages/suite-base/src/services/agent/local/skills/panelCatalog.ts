@@ -17,7 +17,7 @@ export const PANEL_CATALOG_SKILL: Skill = {
   id: "panel-catalog",
   name: "Panel catalog: choosing the right panel",
   whenToUse:
-    "Load before choosing panels for a layout — it routes to the per-panel skill for each panel you plan to use.",
+    "Before choosing panels: schema-to-panel routing and the panel-* skill to load.",
   body: `# Panel catalog
 
 This is the router for panel selection. It tells you which panel fits a topic's schema and which
@@ -37,6 +37,14 @@ memory of what a robot "usually" publishes. Call \`get_data_catalog\` **only** w
 A large catalog truncates at a fixed byte budget, so fetch it minimally: one call per need, not
 one per panel. When even the full catalog result is truncated, fall back to schema-driven panels
 and \`RawMessages\`, and ask the user rather than guessing paths (see below).
+
+## Two more skills to load
+
+- Whenever a panel takes a message path (every MessagePath-based panel below), load the
+  message-path skill for the grammar, the filter and modifier rules, and what each panel needs the
+  path to end at.
+- When the user reports a panel that shows nothing, a topic that seems empty, or values that look
+  wrong, load the data-diagnosis skill before changing any config.
 
 ## How panels select data
 
@@ -124,6 +132,8 @@ So only build paths from topics and fields actually present in the loaded catalo
   not its structure), **never guess a field name or a messagePath**.
 - Instead, choose a schema-driven panel that needs no path — \`Image\`, \`map\`, \`3D\`, \`RosOut\`
   — or \`RawMessages\`/\`RawMessagesVirtual\`, which need only a topic name.
+- Or read one real message with \`read_messages\` and build the path from the fields it actually
+  contains (message-path skill).
 - Or ask the user which field to show. A guessed path that renders nothing is worse than one
   clarifying question.
 

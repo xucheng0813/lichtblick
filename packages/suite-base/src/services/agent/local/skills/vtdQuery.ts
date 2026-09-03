@@ -7,39 +7,50 @@
 
 import type { Skill } from "./types";
 
+/**
+ * Semantics come from vtd-cli/docs/README.md (`vtd list`, `detail`, `topics`) and from the
+ * sidecar whitelist in vtd-sidecar/server.mjs (which flags are reachable, page/size caps, the
+ * fixed `--count` on topics). The normalized record shape comes from services/vtd/HttpVtdClient.
+ * Keep all three in sync.
+ */
 export const VTD_QUERY_SKILL: Skill = {
   id: "vtd-query",
-  name: "VTD query: finding and inspecting records",
+  name: "Finding and inspecting VTD records",
   whenToUse:
-    "Only for finding new VTD recordings; questions about the already-loaded data never need this skill.",
+    "Only for finding new VTD recordings; already-loaded data never needs it.",
   body: `# Finding and inspecting VTD records
 
-VTD is the recording archive. A record is one uploaded MCAP file plus its metadata.
+VTD is the recording archive. A record is one uploaded MCAP file plus its metadata. The
+\`vtd_*\` tools are a whitelisted front for the \`vtd\` command-line tool: \`vtd_search\` runs
+\`vtd list\`, \`vtd_detail\` runs \`vtd detail\`, \`vtd_topics\` runs \`vtd topics --count\`, always
+in JSON mode and against the environment the deployment was configured with (you cannot switch
+between prod and test).
 
 ## vtd_search
 
-Results come back newest first, by trigger time. All filters combine with AND.
+Results come back newest first, by trigger time. All filters combine with AND. \`pageSize\` is
+1–100 (the CLI default is 15) and \`page\` starts at 1.
 
 ### Identity filters
 
 | Parameter | Meaning |
 | --- | --- |
 | \`id\` | Exact record id. Use when the user quotes an id. |
-| \`botSn\` | Bot SN **suffix / alias** match — partial input is fine. |
+| \`botSn\` | Legacy alias / suffix match on the SN **or the bot name** — partial input is fine. |
 | \`botSnExact\` | Full exact Bot SN. Use when you have the complete SN. |
 | \`botName\` | Fuzzy bot-name match. Names may be non-ASCII. |
 
 Prefer \`botSnExact\` when the user gives a complete SN such as \`8010006BHQ26E8A0072\`; use
-\`botSn\` when they give a fragment.
+\`botSn\` when they give a fragment or you are not sure whether it is an SN or a name.
 
 ### Classification filters
 
 | Parameter | Values |
 | --- | --- |
 | \`triggerType\` | Free string, e.g. \`bms\`, \`nav\`, \`crash_report\`, \`wokeup_sound_detected\` |
-| \`dataType\` | \`"1"\` full data, \`"2"\` trigger data, \`"3"\` simulation, \`"4"\` collected |
+| \`dataType\` | \`"1"\` full data, \`"2"\` trigger data, \`"3"\` simulation, \`"4"\` collection |
 | \`inspection\` | \`"0"\` not inspected, \`"1"\` passed, \`"2"\` failed |
-| \`fixData\` | \`"0"\` not repaired, \`"1"\` repaired, \`"2"\` repair failed |
+| \`fixData\` | \`"0"\` not fixed, \`"1"\` fixed, \`"2"\` fix failed |
 
 These are strings, not numbers. Do not guess a \`triggerType\` — if the user describes an event in
 prose, search without it first and read back the trigger types that actually occur.
@@ -69,8 +80,13 @@ Verified counterexample: for bot \`8010006CHQ26FAA0212\` and local window
 coverage overlapped the window: \`wokeup_sound_detected\`, \`app_report_abnormal\`, \`teleop\`,
 \`avatar_teleop\`, \`avatar\`, and \`bms\`.
 
-Accepted time formats: \`"2026-07-27 15:04:05"\`, \`"2026-07-27"\`, \`"2026/07/27 15:04:05"\`,
-RFC 3339, or a bare integer timestamp (unit inferred from digit count).
+### Time formats
+
+Always pass a datetime string: \`"2026-07-27 15:04:05"\` (local time), \`"2026-07-27"\`,
+\`"2026/07/27 15:04:05"\`, or RFC 3339. Raw integers are accepted too, but their unit depends on
+the filter family — the trigger-time filters read milliseconds, the coverage filters read
+nanoseconds, and \`start\`/\`end\`/\`at\` guess the unit from the digit count — so an integer is an
+easy way to get zero results. Use the string form.
 
 For relative dates such as "yesterday", "today", or "last week" (including "昨天", "今天", and
 "上周"), use the current time and browser timezone from the system prompt to resolve an absolute
@@ -78,11 +94,11 @@ local date range first. Pass
 \`YYYY-MM-DD HH:MM:SS\` local-time values to \`start\`, \`end\`, or \`at\`, and derive \`dataDay\` as
 \`YYYYMMDD\` from that local date. Never pass relative-date words directly to a tool.
 
-### Paging and ordering
+### Other filters, paging, ordering
 
-\`page\` from 1, \`pageSize\` up to 100. \`orderBy\` names a field; \`orderDir\` is \`"ASC"\` or
-\`"DESC"\`. Start with a small \`pageSize\` while narrowing, and report the total so the user knows
-how much was matched.
+\`dataTos\` matches an exact TOS path. \`orderBy\` names a record field and \`orderDir\` is
+\`"ASC"\` or \`"DESC"\`; without them the order is trigger time, newest first. Start with a small
+\`pageSize\` while narrowing, and report \`total\` so the user knows how much was matched.
 
 ## Reporting search results
 
@@ -95,20 +111,38 @@ specific record.
 
 ## Reading results
 
-Each record carries \`id\`, \`botName\`, \`botSn\`, \`triggerType\`, \`dataType\`, \`triggerTime\`, and
-\`sizeBytes\`. The full upstream object is under \`raw\`, including fields not surfaced as named
-properties — \`data_day\`, \`data_tos\`, \`is_inspection\`, \`is_fix_data\`, and the data start/end
-timestamps. Read \`raw\` before telling the user something is unavailable.
+Each record carries \`id\`, \`botName\`, \`botSn\`, \`triggerType\`, \`dataType\`, \`triggerTime\`,
+\`dataStartNs\`, \`dataEndNs\` (the coverage bounds, decimal nanoseconds, taken from the upstream
+\`data_st\`/\`data_et\`), and \`sizeBytes\`. The full upstream object is under \`raw\`, including
+\`data_day\`, \`data_tos\`, \`is_inspection\`, \`is_fix_data\`, and \`data_topic_info\`; \`raw\` is
+dropped when a large result has to be compacted, so fall back to \`vtd_detail\` for those fields
+rather than telling the user something is unavailable. \`total\` is the match count across all
+pages.
 
 Sizes matter: records are frequently multiple gigabytes. Check \`sizeBytes\` before opening a whole
-recording, and prefer a slice when the user cares about a short window.
+recording, and prefer a slice when the user cares about a short window (vtd-slice skill).
 
 ## vtd_detail and vtd_topics
 
 - \`vtd_detail\` returns the complete metadata for one record, including its data start and end
-  times — needed to compute a slice window.
-- \`vtd_topics\` returns topic names with message counts. Always call this before proposing a
+  times (\`data_st\`/\`data_et\`, nanoseconds) and the full topic list — needed to compute a slice
+  window when the search record lacks \`dataStartNs\`/\`dataEndNs\`.
+- \`vtd_topics\` returns a map of topic name → message count for every topic in the record,
+  sorted alphabetically. A count of 0 is an empty channel. Always call this before proposing a
   layout or a topic-filtered slice; never assume which topics a recording contains.
+
+## Not available through these tools
+
+The CLI has more commands than the agent can reach: \`vtd sn <SN>\` (device, product, and OTA
+info), \`vtd alog\` (application logs by module around a trigger), \`vtd trigger status\` (issue
+pipeline stage), \`vtd trigger --nearby\`, \`vtd mcapinfo\`, \`vtd slice-list\` / \`slice-source\` /
+\`slice-reslice\`, \`vtd download\`, and \`vtd csv\`. When the user needs one of them, say so and
+name the command to run locally; do not improvise a substitute with \`vtd_search\`.
+
+## Errors
+
+Transient upstream failures and rate limits are retried automatically. A \`timeout\` means the CLI
+took longer than 30 s — narrow the filters or reduce \`pageSize\` and try once more; then report.
 
 ## Working method
 

@@ -7,11 +7,7 @@
 
 import type { Skill } from "../types";
 
-/**
- * The `RawMessages` panel (panels/RawMessages). Config verified against panels/RawMessages:
- * topicPath plus the diff fields diffEnabled/diffMethod/diffTopicPath/showFullMessageForDiff and
- * fontSize. Any topic is accepted — this is the fallback when a path cannot be built.
- */
+/** Config facts come from RawMessagesPanelConfig in panels/RawMessagesCommon/types.ts. */
 export const PANEL_RAW_MESSAGES_SKILL: Skill = {
   id: "panel-raw-messages",
   name: "RawMessages panel: raw message inspection",
@@ -27,9 +23,16 @@ shows the full message tree. This makes it the fallback whenever a path cannot b
 { "lichtblickPanelTitle": "Odometry message", "topicPath": "/nav/odom" }
 \`\`\`
 
-Optional diffing: \`diffEnabled\`, \`diffMethod\` (\`"custom"\` or \`"previous message"\`),
-\`diffTopicPath\` (required when \`diffMethod\` is \`"custom"\`), \`showFullMessageForDiff\`, and
-\`fontSize\` for display size.
+## Config reference
+
+- \`topicPath\`: a topic or a message path (message-path skill), e.g. \`/nav/odom.pose.pose\`.
+  The key is \`topicPath\`; \`topic\` and \`topicName\` do not exist.
+- Diffing: \`diffEnabled\` (boolean), \`diffMethod\` (\`"custom"\` diffs against \`diffTopicPath\`
+  at the same time; \`"previous message"\` — note the space — diffs consecutive messages),
+  \`diffTopicPath\`, \`showFullMessageForDiff\`.
+- \`expansion\`: \`"all"\`, \`"none"\`, or a map of node paths to \`"e"\` (expanded) / \`"c"\`
+  (collapsed). Leave it out for the default.
+- \`fontSize\`: number, optional.
 
 The panel shows the latest message for the configured path; it has no per-message stepping.
 For very large messages prefer the virtualized sibling \`RawMessagesVirtual\` (see

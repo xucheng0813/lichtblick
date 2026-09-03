@@ -8,9 +8,8 @@
 import type { Skill } from "../types";
 
 /**
- * The built-in `3D` panel (panels/ThreeDeeRender). Claims verified against the panel source:
- * topic visibility drives subscription, transforms are always subscribed, and an empty config is
- * a valid but empty scene.
+ * Config facts come from panels/ThreeDeeRender/IRenderer.ts (RendererConfig, FollowMode) and
+ * panels/ThreeDeeRender/camera.ts (CameraState, DEFAULT_CAMERA_STATE). Keep them in sync.
  */
 export const PANEL_3D_SKILL: Skill = {
   id: "panel-3d",
@@ -45,19 +44,52 @@ Renders a 3D scene from many topic kinds at once. Supported schemas, by what the
 
 Transforms are always subscribed: \`foxglove.FrameTransform\`, \`foxglove.FrameTransforms\`,
 \`tf2_msgs/TFMessage\`, \`tf/tfMessage\`, \`geometry_msgs/TransformStamped\`.
+\`sensor_msgs/PointCloud\` (v1) has no renderer.
 
 **Required to show anything:** a topic is only subscribed when it is marked visible. Transforms
 alone never produce geometry — there must also be a renderable topic (marker, point cloud, pose,
 path, ...) with \`visible: true\`.
 
+## Config reference
+
 \`\`\`json
-{ "lichtblickPanelTitle": "Point cloud scene", "topics": { "/points": { "visible": true }, "/tf": { "visible": true } } }
+{
+  "lichtblickPanelTitle": "Point cloud scene",
+  "topics": { "/points": { "visible": true }, "/plan": { "visible": true } },
+  "followTf": "base_link",
+  "followMode": "follow-pose",
+  "cameraState": { "perspective": true, "distance": 20, "phi": 60, "thetaOffset": 45 }
+}
 \`\`\`
 
-An empty config \`{}\` is valid but renders an empty scene. Camera and scene settings can be
-omitted; they have working defaults, and guessed keys are silently ignored — set only what the
-user asked for.
+- \`topics\`: an **object keyed by topic name**, never an array. \`{ "visible": true }\` is the
+  minimum. Other per-topic keys (point size, color mode, decay) depend on the schema and are not
+  documented here; set only \`visible\` unless the user names a setting.
+- \`followTf\`: the frame id the camera tracks. \`followMode\`: \`"follow-pose"\` (position and
+  orientation), \`"follow-position"\` (position only, world-aligned view), \`"follow-none"\` (the
+  camera stays where it is). There is no \`"follow-heading"\`.
+- \`cameraState\` (partial objects are fine, missing keys take the defaults): \`perspective\`
+  (default \`true\`), \`distance\` in meters (default 20), \`phi\` in degrees from top-down (0 looks
+  straight down, 90 along the horizon; default 60), \`thetaOffset\` in degrees, the azimuth around
+  the target (default 45), \`targetOffset\` \`[x, y, z]\`, \`fovy\` (default 45), \`near\`, \`far\`.
+- \`scene\`: \`backgroundColor\`, \`labelScaleFactor\`, \`meshUpAxis\` (\`"y_up"\` or \`"z_up"\`),
+  \`ignoreColladaUpAxis\`, \`enableStats\`, \`syncCamera\`, and a nested \`transforms\` object
+  (\`showLabel\`, \`labelSize\`, \`axisScale\`, \`lineWidth\`, \`lineColor\`, \`editable\`,
+  \`enablePreloading\`) for how frame axes are drawn.
+- Top-level \`transforms\`: per-frame visibility keyed by frame id, \`{ "odom": { "visible": false } }\`;
+  distinct from \`scene.transforms\`.
+- \`layers\`, \`publish\`, \`imageMode\`: leave out unless the user asks. Guessed keys anywhere in
+  this config are silently ignored.
 
-See the panel-catalog skill for how to choose between \`3D\`, the robot panels, and the \`Image\`
-panel (the same renderer in image mode).`,
+## Camera recipes
+
+- Top-down view that travels with the robot: \`"cameraState": { "perspective": false, "phi": 0 }\`,
+  \`followTf\` set to the robot frame, \`"followMode": "follow-position"\`.
+- Chase view: \`"followMode": "follow-pose"\`, \`phi\` between 45 and 70, \`distance\` scaled to the
+  robot (a few meters for a quadruped, tens for a vehicle). \`thetaOffset\` moves the camera around
+  the robot; in this renderer's convention 90 places it behind a +X-forward robot and -90 in front.
+  Nothing here can see the rendered result, so tell the user which side you assumed.
+
+An empty config \`{}\` is valid but renders an empty scene. See the panel-catalog skill for how to
+choose between \`3D\`, the robot panels, and the \`Image\` panel (the same renderer in image mode).`,
 };

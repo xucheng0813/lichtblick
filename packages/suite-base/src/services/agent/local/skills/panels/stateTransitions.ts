@@ -8,10 +8,8 @@
 import type { Skill } from "../types";
 
 /**
- * The `StateTransitions` panel (panels/StateTransitions). Config verified against
- * panels/StateTransitions/index.tsx: defaultConfig is `{ paths: [], isSynced: true }`; the paths
- * shape matches Plot, but accepted values are numbers, strings, bigints and booleans — arrays are
- * invalid.
+ * Config facts come from StateTransitionConfig / StateTransitionPath in
+ * panels/StateTransitions/types.ts. Keep them in sync.
  */
 export const PANEL_STATE_TRANSITIONS_SKILL: Skill = {
   id: "panel-state-transitions",
@@ -21,7 +19,7 @@ export const PANEL_STATE_TRANSITIONS_SKILL: Skill = {
   body: `# The \`StateTransitions\` panel
 
 MessagePath-based panel: shows how a discrete value changes over time. Same \`paths\` shape as
-Plot.
+Plot (message-path skill for the path grammar).
 
 Accepted values: number, string, bigint, boolean. A path that resolves to an array is invalid.
 Best suited to enums, modes, and status flags — for continuous numeric trends use \`Plot\` instead
@@ -31,8 +29,18 @@ Best suited to enums, modes, and status flags — for continuous numeric trends 
 { "lichtblickPanelTitle": "Navigation mode", "paths": [{ "value": "/nav/state.mode", "timestampMethod": "receiveTime" }] }
 \`\`\`
 
-\`enabled\` is optional here; \`timestampMethod\` should still be set. Panel-level \`isSynced\`
-(boolean, default \`true\`) ties the chart to the playback cursor.
+## Config reference
+
+Per path: \`value\`, \`timestampMethod\` (\`"receiveTime"\` or \`"headerStamp"\`), optional
+\`label\`, \`color\`, \`enabled\` (defaults to shown; set \`false\` to keep a path but hide it).
+
+Panel-level: \`isSynced\` (boolean, default \`true\`; ties the chart to the playback cursor),
+\`xAxisRange\` (seconds of sliding window), \`xAxisMinValue\` / \`xAxisMaxValue\` (fixed bounds in
+seconds from the start), \`showPoints\`.
+
+Not supported (ignored if written): \`customStates\`, \`timeWindowMode\`, \`dynamicLabelField\`,
+\`publishTime\` or \`customField\` timestamp methods. Labels and colors per state are derived from
+the values themselves.
 
 On recorded data the panel supports click-to-seek; on live data timeline navigation is
 unavailable.`,

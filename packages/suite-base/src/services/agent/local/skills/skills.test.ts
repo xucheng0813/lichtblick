@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import { mathFunctions } from "@lichtblick/suite-base/panels/Plot/utils/mathFunctions";
 import generateRosLib from "@lichtblick/suite-base/players/UserScriptPlayer/transformerWorker/generateRosLib";
 import { generateTypesLib } from "@lichtblick/suite-base/players/UserScriptPlayer/transformerWorker/generateTypesLib";
 import transform from "@lichtblick/suite-base/players/UserScriptPlayer/transformerWorker/transform";
@@ -16,6 +17,7 @@ import {
   QUADRUPED_VIZ_PANEL_TYPE,
   validateLayoutProposalData,
 } from "@lichtblick/suite-base/services/agent/layoutSchema";
+
 
 import { LOCAL_AGENT_TOOL_DEFINITIONS } from "../toolDefinitions";
 import {
@@ -711,4 +713,31 @@ export default function script(event: Input<"/odom">): Output {
       expect(checkedConfigs).toBeGreaterThan(0);
     });
   });
+
+  it("indexes message-path and data-diagnosis and routes to them from the catalog", () => {
+    const index = buildSkillIndex();
+    for (const id of ["message-path", "data-diagnosis"]) {
+      const skill = SKILL_REGISTRY.get(id);
+      expect(skill).toBeDefined();
+      expect(skill!.indexed).not.toBe(false);
+      expect(index).toContain(`- ${id}: `);
+    }
+    const catalog = SKILL_REGISTRY.get("panel-catalog")!.body;
+    expect(catalog).toContain("message-path");
+    expect(catalog).toContain("data-diagnosis");
+  });
+
+  it("documents exactly the Plot math modifiers the panel implements", () => {
+    // The modifier list is the one place the agent learns what .@fn can do; a function added
+    // to the Plot panel without a skill update, or a Foxglove-only function documented here,
+    // both fail.
+    const body = SKILL_REGISTRY.get("message-path")!.body;
+    for (const fn of Object.keys(mathFunctions)) {
+      expect(body).toContain(`\`${fn}\``);
+    }
+    for (const missing of ["@derivative", "@mul", "@norm", "@rpy"]) {
+      expect(body).not.toContain(missing);
+    }
+  });
+
 });

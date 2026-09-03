@@ -15,7 +15,7 @@ import type { Skill } from "./types";
 export const ROBOT_VIZ_SKILL: Skill = {
   id: "robot-viz",
   name: "Robot visualization panels: choosing between them",
-  whenToUse: "Whenever a layout needs a 3D view of a robot — read this before picking a 3D panel.",
+  whenToUse: "Whenever a layout needs a 3D robot view; read before picking a 3D panel.",
   body: `# Robot visualization panels
 
 Two purpose-built robot panels ship with this application, alongside the generic built-in \`3D\`

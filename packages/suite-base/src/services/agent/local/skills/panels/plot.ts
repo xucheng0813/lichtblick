@@ -8,9 +8,8 @@
 import type { Skill } from "../types";
 
 /**
- * The `Plot` panel (panels/Plot). Config verified against panels/Plot/utils/config.ts: PlotPath
- * requires value/enabled/timestampMethod; the paths array replaces the default wholesale; a
- * numeric `value` becomes a horizontal reference line rather than a series.
+ * Config facts come from PlotConfig / PlotPath in panels/Plot/utils/config.ts, TimestampMethod in
+ * util/time.ts, and the modifier list in panels/Plot/utils/mathFunctions.ts. Keep them in sync.
  */
 export const PANEL_PLOT_SKILL: Skill = {
   id: "panel-plot",
@@ -20,7 +19,8 @@ export const PANEL_PLOT_SKILL: Skill = {
   body: `# The \`Plot\` panel
 
 MessagePath-based panel: configured with message-path strings such as
-\`/imu/data.linear_acceleration.x\`. The path must resolve to a value of the type the panel wants.
+\`/imu/data.linear_acceleration.x\` (message-path skill). The path must resolve to a value of the
+type the panel wants.
 
 Time-series lines from numeric message paths.
 
@@ -34,15 +34,39 @@ merged per-field. A path missing \`enabled\` is falsy and draws nothing.
 {
   "lichtblickPanelTitle": "IMU acceleration",
   "paths": [
-    { "value": "/imu/data.linear_acceleration.x", "enabled": true, "timestampMethod": "receiveTime" }
-  ]
+    { "value": "/imu/data.linear_acceleration.x", "enabled": true, "timestampMethod": "receiveTime", "label": "ax" }
+  ],
+  "minYValue": -20,
+  "maxYValue": 20,
+  "yAxisLabel": "m/s²"
 }
 \`\`\`
 
-Useful optional per-path fields: \`label\`, \`color\`, \`lineSize\`, \`showLine\`. Panel-level:
-\`xAxisVal\` (\`"timestamp"\` default, or \`"index"\`, \`"custom"\`, \`"currentCustom"\`),
-\`showLegend\`, \`legendDisplay\` (\`"floating"\`, \`"top"\`, \`"left"\`, \`"none"\`),
-\`minYValue\`, \`maxYValue\`, \`isSynced\`, \`xAxisPath\`.
+## Config reference
+
+Per path: \`value\`, \`enabled\` (must be \`true\`), \`timestampMethod\` (\`"receiveTime"\` or
+\`"headerStamp"\`; nothing else), \`label\`, \`color\` (CSS color), \`showLine\` (\`false\` for
+points only), \`lineSize\`.
+
+Panel-level: \`xAxisVal\` (\`"timestamp"\` default; \`"index"\` plots the latest message's array by
+index; \`"custom"\` and \`"currentCustom"\` plot y against \`xAxisPath\` \`{ value, enabled }\`),
+\`minXValue\` / \`maxXValue\`, \`minYValue\` / \`maxYValue\` (numbers or numeric strings),
+\`xAxisLabel\` / \`yAxisLabel\`, \`showXAxisLabels\` / \`showYAxisLabels\`, \`showLegend\`,
+\`legendDisplay\` (\`"floating"\`, \`"top"\`, \`"left"\`, \`"none"\`), \`showPlotValuesInLegend\`,
+\`sidebarDimension\` (legend size in px), \`followingViewWidth\` (seconds kept in view while
+playing), \`isSynced\` (share pan and zoom with other synced panels).
+
+Not supported (ignored if written): \`secondaryAxes\` / \`yAxisId\`, \`timeWindowMode\`,
+\`lineStyle\`, \`publishTime\` or \`customField\` timestamp methods, \`dynamicLabelField\`,
+\`xAxisDisplayMethod\`.
+
+## Math modifiers
+
+A path may end in one modifier: \`.@abs\`, \`.@negative\`, \`.@rad2deg\`, \`.@deg2rad\`,
+\`.@round\`, \`.@ceil\`, \`.@trunc\`, \`.@sign\`, \`.@sqrt\`, \`.@sin\`, \`.@cos\`, \`.@tan\`,
+\`.@asin\`, \`.@acos\`, \`.@atan\`, \`.@log\`, \`.@log1p\`, \`.@log2\`, \`.@log10\`. Anything else
+(scaling, derivatives, vector norm, quaternion to Euler) needs a user script. Only \`Plot\`
+honors modifiers.
 
 **Trap:** a \`value\` that parses as a number is treated as a horizontal reference line, not a
 series. Use a real message path.

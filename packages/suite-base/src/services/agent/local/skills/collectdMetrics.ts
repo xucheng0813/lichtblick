@@ -11,7 +11,7 @@ export const COLLECTD_METRICS_SKILL: Skill = {
   id: "collectd-metrics",
   name: "Collectd metrics: topics, units, conversions, and plots",
   whenToUse:
-    "When reading, plotting, or explaining collectd/* CPU, memory, load, disk, network, IRQ, process, or thermal metrics.",
+    "For collectd/* host metrics (CPU, memory, disk, network, IRQ, process, thermal).",
   body: `# Collectd metrics
 
 Use this reference whenever a request involves a \`collectd/*\` topic or asks to query, plot, or

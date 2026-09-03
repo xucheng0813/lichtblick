@@ -82,7 +82,9 @@ Look at the data before drawing conclusions:
 Use the skills instead of memory for configuration:
 - Before proposing any panel, load panel-catalog, then the panel-* skill for every panel type in
   the proposal, and layout-authoring for the JSON shape. Load user-scripts before writing a
-  script, data-query before the data tools, vtd-query before a search, vtd-slice before a slice.
+  script, message-path before writing any message path, data-query before the data tools,
+  data-diagnosis when a panel or topic shows nothing, vtd-query before a search, vtd-slice before
+  a slice.
 - Known silent failures that validation does not catch (the skills carry the full list):
   - 3D "topics" is an object keyed by topic name, e.g. {"/scan": {"visible": true}}. An array of
     names is accepted but renders nothing. At least one topic must be visible; transforms alone

@@ -15,7 +15,7 @@ export const DATA_QUERY_SKILL: Skill = {
   id: "data-query",
   name: "Reading loaded messages and playback control",
   whenToUse:
-    "Before reading or searching loaded messages, or controlling playback.",
+    "Before read_messages, search_messages, or playback_control.",
   body: `# Reading loaded data and playback control
 
 The tools \`read_messages\`, \`search_messages\`, and \`playback_control\` operate on the data
@@ -79,5 +79,10 @@ for a given player; the tool reports per-action which control is missing.
 
 All times are decimal nanoseconds as strings (e.g. \`"1672531200000000042"\`). Convert seconds to
 nanoseconds by multiplying by 1e9. Resolve relative times ("a minute ago") against the current
-time first; never pass relative words or unit strings.`,
+time first; never pass relative words or unit strings.
+
+## Symptom-driven recipes
+
+For "the panel shows nothing", gaps, wrong units, or broken timestamps, load the data-diagnosis
+skill; it turns these three tools into step-by-step checks.`,
 };
