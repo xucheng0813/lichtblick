@@ -25,6 +25,19 @@ A message path selects a value out of a topic's messages. Every path-based panel
 Plot-only math modifiers below: unit scaling, vector magnitude, quaternion to Euler, derivatives,
 and combining topics are all user scripts (user-scripts skill).
 
+## Topic names are copied, not composed
+
+**Copy the topic exactly as the catalog spells it** — from \`get_data_catalog\`,
+\`describe_topic\`, or \`read_messages\` results: leading slash or none, case, punctuation.
+Nothing normalizes a path after it is written into a layout. A topic (or field) name containing
+\`.\` or \`:\` — or any character outside letters, digits, \`_\`, and \`-\` — must be
+double-quoted. When a topic name or its fields are unknown, call \`describe_topic\`; never invent
+or "fix" a name.
+
+A path contains no arithmetic, no numeric constants, and no function calls: \`100 - …idle\`
+does not compute, and nothing evaluates it. The only math anywhere is the Plot-only \`.@\`
+modifiers below.
+
 ## Grammar
 
 \`\`\`text
@@ -37,14 +50,14 @@ collectd/s100/cpu.payload     a topic without a leading slash is written as the 
 
 - Names may contain letters, digits, \`_\` and \`-\`. Anything else must be double-quoted, whether
   it is the topic or a field.
-- Copy the topic exactly as the catalog spells it: leading slash or none, case, punctuation.
-  Nothing normalizes a path after it is written into a layout.
 
 ### Arrays
 
 - \`[0]\` one element by index. Indexes count from 0; there is no negative indexing.
 - \`[1:3]\` a range with both ends inclusive, \`[:]\` every element, \`[:2]\` and \`[2:]\` open ends.
-  A range or \`[:]\` yields an array (Plot draws one series per element).
+  A range or \`[:]\` yields an array. In \`Plot\`, a sliced array draws as **one aggregated
+  legend entry** — to draw each element as its own series, expand the slice into \`[0]\`,
+  \`[1]\`, … \`[N-1]\` paths with their own \`label\`/\`color\` (panel-plot skill).
 - One slice per path. Nested arrays cannot be addressed.
 
 ### Filters
@@ -79,7 +92,7 @@ not evaluate modifiers at all.
 
 | Panel | Terminal value |
 | --- | --- |
-| \`Plot\` | a number, bool, time, duration, or string leaf; a sliced array of leaves draws one series each |
+| \`Plot\` | a number, bool, time, duration, or string leaf; a sliced array of leaves draws one aggregated legend entry — expand to \`[0]\` … \`[N-1]\` to give each element its own series |
 | \`StateTransitions\` | a number, string, bigint, or boolean leaf; never an array |
 | \`Gauge\` | one numeric leaf |
 | \`Indicator\` | one scalar leaf (\`/topic.data\`, not \`/topic\`) |
@@ -106,7 +119,7 @@ A path that ends in a message object or an unsliced array is not plottable.
 /odom.twist.twist.linear.x                             scalar for Plot or Gauge
 /nav/state.mode                                        enum for StateTransitions
 /diagnostics.status[:]{hardware_id=="imu"}.level       filtered element for Indicator
-/scan.ranges[0:9]                                      ten values, one Plot series each
+/scan.ranges[0:9]                                      ten values, one aggregated legend entry in Plot
 collectd/s100/cpu.payload.cores[:]{core_id==0}.user    filter with an integer value
 /imu.orientation.x.@abs                                Plot-only modifier
 \`\`\``,

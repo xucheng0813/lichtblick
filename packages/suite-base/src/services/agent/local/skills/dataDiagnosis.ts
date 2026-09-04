@@ -49,9 +49,18 @@ an error. Report that instead of retrying.
 
 ### "The panel shows nothing"
 
-1. Does the topic exist? Compare the config's topic against the catalog character by character:
-   leading slash, case, namespace (\`/robot1/imu\` vs \`/imu\`), and schema-name variants
-   (\`pkg/Type\`, \`pkg/msg/Type\`, \`ros.pkg.Type\`; \`foxglove.Type\`, \`foxglove_msgs/Type\`).
+1. Does the topic exist? For a Plot with no data this is the first check, and it forks on the
+   workspace summary's \`Source kind\` line:
+   - \`Source kind: recording\`: call \`read_messages\` once with the leading slash and once
+     without (\`/odometry\` vs \`odometry\`) and compare the counts — one spelling returns 0
+     messages and the other has data, and the panel only renders the exact spelling written in
+     its config.
+   - \`Source kind: live\`: messages cannot be read, so verify the spelling with
+     \`get_data_catalog({ query })\` and \`describe_topic\` instead, and check the panel's own
+     state ("Waiting for data…" vs an error) before changing the config.
+   Then compare the config's topic against the catalog character by character: leading slash,
+   case, namespace (\`/robot1/imu\` vs \`/imu\`), and schema-name variants (\`pkg/Type\`,
+   \`pkg/msg/Type\`, \`ros.pkg.Type\`; \`foxglove.Type\`, \`foxglove_msgs/Type\`).
 2. Is the config the right shape? The silent failures, by panel:
    - \`3D\`: \`topics\` must be an object keyed by topic name with \`visible: true\`; an array
      renders nothing, and transforms alone draw no geometry.

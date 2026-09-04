@@ -24,19 +24,27 @@ This is the router for panel selection. It tells you which panel fits a topic's 
 per-panel skill to load before proposing that panel. The complete live panel inventory in the
 system context under "Available panels" is authoritative for which panel types can be proposed —
 including runtime extension panels, whose schemas metadata is the authority for what they accept.
+\`list_panels\` returns the same inventory on demand (each panel's type, title, description, and
+\`skillId\`); for panel types without a \`panel-*\` skill it is your only evidence of what they
+do and accept. Extension panels ship no config documentation — prefer copying the complete config
+of a same-type panel from \`get_current_layout\`; when there is no template, propose \`{}\` and
+tell the user to pick topics in the panel settings. Never guess config keys.
 
 ## Base every choice on current catalog evidence
 
 Your evidence is the per-turn workspace summary and the catalog-ready injection. Prefer them over
-memory of what a robot "usually" publishes. Call \`get_data_catalog\` **only** when:
+memory of what a robot "usually" publishes, and use \`get_data_catalog\` freely — it lists topics
+as \`{ name, schemaName }\` pairs and never truncates into a raw JSON prefix. Before building a
+layout, call \`get_data_catalog({ query })\` with a keyword (\`log\`, \`image\`, \`imu\`, \`bms\`,
+…) to find topics, then \`describe_topic({ topics: [...] })\` to get a datatype's field structure
+— a field chain — for every message path you write.
 
-1. The workspace summary was truncated (it ends with "… truncated"),
-2. The topic you need is absent from the summary, or
-3. You need a datatype's field structure — a field chain — to build a message path.
-
-A large catalog truncates at a fixed byte budget, so fetch it minimally: one call per need, not
-one per panel. When even the full catalog result is truncated, fall back to schema-driven panels
-and \`RawMessages\`, and ask the user rather than guessing paths (see below).
+Never brute-force topic names with \`read_messages\`; the catalog is the lookup table. A large
+catalog truncates at a fixed byte budget, so fetch it minimally: one call per need, not one per
+panel. When a result is marked \`truncated\`, narrow it — a more specific \`query\` or the
+\`schema\` filter — instead of concluding "there is no such topic". Only when no catalog answer
+can be obtained at all do you fall back to schema-driven panels and \`RawMessages\`, and ask the
+user rather than guessing paths (see below).
 
 ## Two more skills to load
 
@@ -50,7 +58,7 @@ and \`RawMessages\`, and ask the user rather than guessing paths (see below).
 
 Panels take data in one of two ways. Confusing the two is the most common layout failure.
 
-- **Topic-based** (\`3D\`, \`Image\`, \`map\`, \`RosOut\`): configured with topic names. The panel decides what to
+- **Topic-based** (\`3D\`, \`Image\`, \`map\`, \`RosOut\`, \`Audio\`): configured with topic names. The panel decides what to
   do with a topic based on its schema.
 - **MessagePath-based** (\`Plot\`, \`StateTransitions\`, \`Gauge\`, \`Indicator\`, \`PieChart\`,
   \`Table\`, \`RawMessages\`, \`RawMessagesVirtual\`): configured with message-path strings such as
@@ -74,7 +82,8 @@ schema name. **RosOut is the exception:** it matches its eight schema names exac
 ## Matching schema and goal to candidate panels
 
 The rows below are **candidates, not hard rules**: the same schema can feed several panels, and
-the user's goal decides between them. "Available panels" always wins when it disagrees.
+the user's goal decides between them. "Available panels" / \`list_panels\` always wins when it
+disagrees.
 
 | Schema / field shape | User goal | Candidate panels |
 | --- | --- | --- |
@@ -90,6 +99,10 @@ the user's goal decides between them. "Available panels" always wins when it dis
 | any topic, no path needed | raw message inspection | \`RawMessages\`, \`RawMessagesVirtual\` |
 | \`NavSatFix\`, \`foxglove.LocationFix\`, \`foxglove.GeoJSON\` | geographic position | \`map\` |
 | one of the eight exact Log schema names | log messages | \`RosOut\` |
+| \`foxglove.RawAudio\` (\`pcm-s16\` encoding) | listen to audio | \`Audio\` |
+| \`diagnostic_msgs/DiagnosticArray\` (also \`diagnostic_msgs/msg/DiagnosticArray\`, \`ros.diagnostic_msgs.DiagnosticArray\`) | robot diagnostics overview | \`DiagnosticSummary\`; detail view of one entry → \`DiagnosticStatusPanel\` |
+| any topic or none (user wants several pages or groups in one tile) | paging / grouping | \`Tab\` |
+| any topic or none (user wants a draggable knob that drives paths or scripts) | interactive global variable | \`GlobalVariableSliderPanel\` |
 | nothing needed | data source context | \`SourceInfo\` |
 
 ## The two robot panels
@@ -120,22 +133,48 @@ config keys, defaults, and the constraints that layout validation cannot enforce
 | \`PieChart\` | \`panel-pie-chart\` |
 | \`SourceInfo\` | \`panel-source-info\` |
 | \`RosOut\` | \`panel-rosout\` |
+| \`Audio\` | \`panel-audio\` |
+| \`DiagnosticSummary\` | \`panel-diagnostic-summary\` |
+| \`DiagnosticStatusPanel\` | \`panel-diagnostic-status\` |
+| \`Tab\` | \`panel-tab\` |
+| \`GlobalVariableSliderPanel\` | \`panel-variable-slider\` |
+| \`Teleop\` | \`panel-teleop\` |
+| \`Publish\` | \`panel-publish\` |
+| \`CallService\` | \`panel-call-service\` |
+| \`Parameters\` | \`panel-parameters\` |
+| \`TopicGraph\` | \`panel-topic-graph\` |
+| \`PlaybackPerformance\` | \`panel-playback-performance\` |
+| \`NodePlayground\` | \`panel-user-script-editor\` |
 
 The two robot panels are covered by the robot-viz skill instead.
 
 ## Never guess fields or paths
 
-Message paths are never validated — an unresolvable path surfaces as an in-panel error at runtime.
-So only build paths from topics and fields actually present in the loaded catalog.
+\`propose_layout\` now checks topic names and message paths against the catalog and rejects
+unknown topics with a \`did you mean\` suggestion — but validation cannot catch every typo, so
+only build paths from topics and fields actually present in the loaded catalog.
 
 - When a datatype's fields are not visible in your evidence (the catalog lists a schema name but
-  not its structure), **never guess a field name or a messagePath**.
+  not its structure), **never guess a field name or a messagePath**; call \`describe_topic\`
+  instead.
 - Instead, choose a schema-driven panel that needs no path — \`Image\`, \`map\`, \`3D\`, \`RosOut\`
   — or \`RawMessages\`/\`RawMessagesVirtual\`, which need only a topic name.
 - Or read one real message with \`read_messages\` and build the path from the fields it actually
   contains (message-path skill).
 - Or ask the user which field to show. A guessed path that renders nothing is worse than one
   clarifying question.
+
+Topic names are guessed just as easily: this applies to topic-based panels too. 3D \`topics\`
+keys, Image \`imageMode.imageTopic\`, map \`followTopic\`, RosOut \`topicToRender\`, and Audio
+\`topicPath\` are all topic names — copy them byte-for-byte from catalog results (leading slash
+or none, case, punctuation) and never invent one.
+
+## Live sources
+
+When the workspace summary line reads \`Source kind: live\`, \`read_messages\` and
+\`search_messages\` cannot be used — do not call them, do not retry, and do not pretend data was
+read. Drive the layout from the schema directly (\`describe_topic\` works on the catalog) and
+tell the user that field-level verification needs a recording file.
 
 ## Making a layout that actually shows data
 
@@ -155,5 +194,11 @@ skill):
   skill for the rule and its Table/RawMessages/RawMessagesVirtual exceptions).
 - \`PieChart\` is only used for a \`float32[]\` field.
 - \`RosOut\` \`topicToRender\` names a topic whose schema is one of the eight exact Log schemas
-  (\`convertibleTo\` does not qualify).`,
+  (\`convertibleTo\` does not qualify).
+
+## Platform conventions
+
+For Vita/aorta recordings, load the \`vita-data-conventions\` skill before writing any topic
+name: that fleet mixes slash-prefixed and slash-less topic spellings in one recording, and has
+specific log, audio, GNSS, joint, collectd, and battery topics with sharp edges.`,
 };

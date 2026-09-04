@@ -65,6 +65,10 @@ path, ...) with \`visible: true\`.
 - \`topics\`: an **object keyed by topic name**, never an array. \`{ "visible": true }\` is the
   minimum. Other per-topic keys (point size, color mode, decay) depend on the schema and are not
   documented here; set only \`visible\` unless the user names a setting.
+- Topic names are copied byte-for-byte from the catalog (\`get_data_catalog\`/\`describe_topic\`
+  results): leading slash or none, case, punctuation — never "fix" a name. \`propose_layout\`
+  validates the \`topics\` keys against the catalog and rejects unknown names with a
+  \`did you mean\` suggestion; correct the proposal and re-submit.
 - \`followTf\`: the frame id the camera tracks. \`followMode\`: \`"follow-pose"\` (position and
   orientation), \`"follow-position"\` (position only, world-aligned view), \`"follow-none"\` (the
   camera stays where it is). There is no \`"follow-heading"\`.

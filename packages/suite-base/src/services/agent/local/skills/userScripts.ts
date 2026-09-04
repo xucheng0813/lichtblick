@@ -177,11 +177,12 @@ but the panel is empty", walk them through: a \`RawMessages\` panel on the outpu
 flowing?), then the return-type rule above (does the renderer know the schema?), then the input
 data itself with \`read_messages\` (is the source what the script expects?).
 
-## Never propose the NodePlayground panel
+## The NodePlayground editor panel
 
-The NodePlayground editor panel is not on the panel allowlist and must never be proposed:
-scripts execute without it, and the user opens NodePlayground themselves when they want to
-edit or debug a script. Propose layouts, not editors.
+The script itself always lives in \`userNodes\` — that part never changes. When the user wants an
+editor panel to view or tweak scripts inside the layout, \`NodePlayground\` may be proposed (load
+the panel-user-script-editor skill for its config), but the script must still be written in
+\`userNodes\` in the same proposal. Propose layouts, not editors alone.
 
 ## Risk note
 

@@ -36,7 +36,10 @@ Schemas:
 
 ## Config reference: everything image-specific lives under \`imageMode\`
 
-- \`imageTopic\`: required to show anything.
+- \`imageTopic\`: required to show anything. Topic names are copied byte-for-byte from the
+  catalog: leading slash or none, case, punctuation. \`propose_layout\` validates
+  \`imageMode.imageTopic\` (and \`calibrationTopic\`) against the catalog and rejects unknown
+  names with a \`did you mean\` suggestion — correct the proposal and re-submit.
 - \`calibrationTopic\`: required for any projected geometry or annotation; **without it the panel
   runs image-only and 3D overlays are not drawn.** Set it whenever calibration exists.
 - \`annotations\`: \`{ "/camera/annotations": { "visible": true } }\`.

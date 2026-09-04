@@ -47,5 +47,9 @@ Operators: \`=\`, \`<\`, \`<=\`, \`>\`, \`>=\`. Rules are evaluated in order and
 if none match, the fallback color and label show. \`style\` is \`"bulb"\` or \`"background"\`.
 
 An empty \`rules\` array shows only the fallback state — for a plain status light without
-comparison rules, still include at least one rule so the panel is informative.`,
+comparison rules, still include at least one rule so the panel is informative.
+
+Enum and status fields (\`network_state\` and similar) belong here or in \`StateTransitions\`,
+never in \`Gauge\` — string values compare naturally against string \`rawValue\` rules (see the
+panel-gauge skill for the numeric-range rule).`,
 };

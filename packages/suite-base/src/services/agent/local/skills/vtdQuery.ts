@@ -144,6 +144,16 @@ name the command to run locally; do not improvise a substitute with \`vtd_search
 Transient upstream failures and rate limits are retried automatically. A \`timeout\` means the CLI
 took longer than 30 s — narrow the filters or reduce \`pageSize\` and try once more; then report.
 
+### \`vtd_search\` 502
+
+A \`vtd_search\` call can fail with HTTP 502. Handle it in this order:
+
+1. Retry the identical call once.
+2. Still 502: switch to \`dataDay\` per-day queries, or drop \`queryStart\`/\`queryEnd\` and
+   search by trigger time instead.
+3. Only when both alternatives fail, report the search as failed — and say which filters you
+   tried.
+
 ## Working method
 
 1. Search broadly, read back what matched, then narrow with the user.

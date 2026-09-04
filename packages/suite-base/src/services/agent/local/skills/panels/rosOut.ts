@@ -42,8 +42,11 @@ exactly.
 { "lichtblickPanelTitle": "Logs", "topicToRender": "/rosout", "minLogLevel": 2, "searchTerms": ["wheel"], "nameFilter": {} }
 \`\`\`
 
-- \`topicToRender\` (optional): the topic to display. When omitted, the first available topic with a
-  supported schema is used; with none, the panel falls back to \`/rosout\`.
+- \`topicToRender\`: **always write it explicitly in a proposal.** It is "optional" only in that
+  the panel tolerates its absence: when omitted, the panel picks the first available topic with a
+  supported schema itself, and with none, falls back to \`/rosout\` — so the panel then displays
+  whatever it picked, not the topic the user meant. Naming the topic is the only way to control
+  what the panel shows.
 - \`minLogLevel\` (default \`1\`): drops messages below this level (DEBUG=1, INFO=2, WARN=3,
   ERROR=4, FATAL=5).
 - \`searchTerms\` (default \`[]\`): case-insensitive substrings matched against node name and
@@ -54,7 +57,8 @@ exactly.
 These four keys are the whole config. \`showLevel\`, \`showDate\`, \`showTime\`, \`fontSize\`, and
 similar keys from other tools are ignored here.
 
-A bare \`{}\` config is valid: it renders the first supported log topic with no filtering. To jump
-to an error, pair the panel with \`search_messages({ topic, level: "error" })\` and seek to the
-hit's \`receiveTimeNs\` (data-query skill).`,
+A bare \`{}\` config is valid but shows whichever topic the panel picks itself — never propose it
+when the user means a specific log topic. To jump to an error, pair the panel with
+\`search_messages({ topic, level: "error" })\` and seek to the hit's \`receiveTimeNs\` (data-query
+skill).`,
 };

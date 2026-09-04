@@ -12,7 +12,6 @@ import {
   AGENT_SAFE_LAYOUT_MAX_GRAPH_NODES,
   AGENT_SAFE_LAYOUT_MAX_MOSAIC_DEPTH,
   AGENT_SAFE_LAYOUT_MAX_STRING_BYTES,
-  ALLOWED_PANEL_TYPES,
 } from "@lichtblick/suite-base/services/agent/layoutSchema";
 
 import type { Skill } from "./types";
@@ -33,7 +32,7 @@ export const ROBOT_DEBUG_LAYOUT = {
       lichtblickPanelTitle: "State signals",
       paths: [
         {
-          value: "/odom.twist.twist.linear.x",
+          value: "/example/odom.twist.twist.linear.x",
           enabled: true,
           timestampMethod: "receiveTime",
           label: "vx",
@@ -42,7 +41,7 @@ export const ROBOT_DEBUG_LAYOUT = {
     },
     "StateTransitions!mode": {
       lichtblickPanelTitle: "Mode",
-      paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
+      paths: [{ value: "/example/nav/state.mode", timestampMethod: "receiveTime" }],
     },
   },
   globalVariables: {},
@@ -66,22 +65,22 @@ export const SENSOR_MONITORING_LAYOUT = {
     "Image!front": {
       lichtblickPanelTitle: "Front camera",
       imageMode: {
-        imageTopic: "/camera/front/image_raw",
-        calibrationTopic: "/camera/front/camera_info",
+        imageTopic: "/example/camera/front/image_raw",
+        calibrationTopic: "/example/camera/front/camera_info",
       },
     },
     "Image!rear": {
       lichtblickPanelTitle: "Rear camera",
       imageMode: {
-        imageTopic: "/camera/rear/image_raw",
-        calibrationTopic: "/camera/rear/camera_info",
+        imageTopic: "/example/camera/rear/image_raw",
+        calibrationTopic: "/example/camera/rear/camera_info",
       },
     },
     "Plot!imu": {
       lichtblickPanelTitle: "IMU acceleration",
       paths: [
         {
-          value: "/imu/data.linear_acceleration.x",
+          value: "/example/imu/data.linear_acceleration.x",
           enabled: true,
           timestampMethod: "receiveTime",
           label: "ax",
@@ -90,7 +89,7 @@ export const SENSOR_MONITORING_LAYOUT = {
     },
     "Gauge!battery": {
       lichtblickPanelTitle: "Battery voltage",
-      path: "/bms_state.voltage",
+      path: "/example/bms_state.voltage",
       minValue: 0,
       maxValue: 60,
       colorMode: "colormap",
@@ -126,13 +125,13 @@ export const LOG_TROUBLESHOOTING_LAYOUT = {
       lichtblickPanelTitle: "Logs",
       searchTerms: [],
       minLogLevel: 1,
-      topicToRender: "/rosout",
+      topicToRender: "/example/rosout",
     },
     "Plot!health": {
       lichtblickPanelTitle: "Battery voltage",
       paths: [
         {
-          value: "/bms_state.voltage",
+          value: "/example/bms_state.voltage",
           enabled: true,
           timestampMethod: "receiveTime",
           label: "voltage",
@@ -141,7 +140,7 @@ export const LOG_TROUBLESHOOTING_LAYOUT = {
     },
     "StateTransitions!mode": {
       lichtblickPanelTitle: "Navigation mode",
-      paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
+      paths: [{ value: "/example/nav/state.mode", timestampMethod: "receiveTime" }],
     },
   },
   globalVariables: {},
@@ -166,7 +165,7 @@ export const REPLAY_ANALYSIS_LAYOUT = {
       lichtblickPanelTitle: "Command velocity",
       paths: [
         {
-          value: "/cmd_vel.linear.x",
+          value: "/example/cmd_vel.linear.x",
           enabled: true,
           timestampMethod: "receiveTime",
           label: "cmd vx",
@@ -175,11 +174,11 @@ export const REPLAY_ANALYSIS_LAYOUT = {
     },
     "StateTransitions!mode": {
       lichtblickPanelTitle: "Navigation mode",
-      paths: [{ value: "/nav/state.mode", timestampMethod: "receiveTime" }],
+      paths: [{ value: "/example/nav/state.mode", timestampMethod: "receiveTime" }],
     },
     "RawMessages!detail": {
       lichtblickPanelTitle: "Command message",
-      topicPath: "/cmd_vel",
+      topicPath: "/example/cmd_vel",
     },
   },
   globalVariables: {},
@@ -210,16 +209,24 @@ proposal is never applied automatically — the user reviews and applies it.
 ## Submit one complete proposal
 
 Build the entire layout internally before showing anything to the user: choose every panel, finish
-each panel's config, and assemble the complete mosaic tree. Call \`propose_layout\` exactly once
-with that finished layout.
+each panel's config, and assemble the complete mosaic tree. Call \`propose_layout\` once with that
+finished layout.
 
 Never submit a skeleton, placeholder, or partial layout first and follow it with a fuller proposal.
 If topic or panel availability is still unknown, inspect \`get_data_catalog\`.
 Use the **Available panels** section of the system context instead of a half-built proposal to probe
 what is available.
 
+\`propose_layout\` validates the proposal against the catalog and may reject it — an unknown
+topic, a field chain that does not exist, or an arithmetic path. Take the rejection's
+\`did you mean\` suggestion, correct the proposal, and re-propose. Re-propose at most 2 times
+within the same request; if the proposal is still rejected, tell the user briefly which parts you
+could not resolve instead of re-submitting endlessly. Never relay the raw rejection text to the
+user.
+
 Only propose again within the same request when the user explicitly asked to revise a layout that
-was already applied. Even then, submit one complete revised version at a time.
+was already applied, or when \`propose_layout\` rejected your proposal as above. Even then,
+submit one complete revised version at a time.
 
 ## Structure
 
@@ -239,10 +246,15 @@ top-level fields are accepted.
 
 ## Panel ids
 
-Every id is \`<type>!<suffix>\`, where type is on the allowlist and suffix is any short unique
-string (\`3D!main\`, \`Plot!imu\`).
+Every id is \`<type>!<suffix>\`, where suffix is any short unique string (\`3D!main\`,
+\`Plot!imu\`).
 
-Allowed types: ${ALLOWED_PANEL_TYPES.join(", ")}.
+Any panel type listed in the **Available panels** section of the system context, or returned by
+\`list_panels\`, may be proposed. Panels without a \`panel-*\` skill: call \`list_panels\` first
+and use its description (and \`skillId\`). Extension panels ship no config documentation — prefer
+copying the complete config of a same-type panel from \`get_current_layout\`; when there is no
+template, propose \`{}\` and tell the user to pick topics in the panel settings. Never guess
+config keys.
 
 Three rules that are enforced and will reject the proposal:
 1. Every id appearing in \`layout\` must have a \`configById\` entry.
@@ -251,10 +263,12 @@ Three rules that are enforced and will reject the proposal:
 
 ## Panel titles
 
-Every panel config in a proposal must include \`lichtblickPanelTitle\`: a short description in the
-user's language of what the panel is for ("Left front wheel speed", not "Plot"). The panel
-toolbar shows this title instead of the panel type, so the user can tell panels apart at a
-glance. Prefer the user's own words; never use a panel type name as the title.
+**Every panel config in a proposal must include \`lichtblickPanelTitle\`**: a short description in
+the user's language of what the panel is for ("Left front wheel speed", not "Plot").
+\`propose_layout\` checks this and returns a warning for every panel without one — write the
+title up front. The panel toolbar shows this title instead of the panel type, so the user can
+tell panels apart at a glance. Prefer the user's own words; never use a panel type name as the
+title.
 
 Exceptions — these panels render a custom toolbar and do not display the title, so it may be
 omitted:
@@ -285,12 +299,15 @@ ${String(AGENT_SAFE_LAYOUT_MAX_MOSAIC_DEPTH)}. Practical layouts use 2–5 panel
 harder to read than it is informative. Keep configs minimal — set what the user asked for and let
 defaults handle the rest.
 
+Every example in this skill uses \`/example/...\` placeholder topics — replace them with real
+names from the catalog before proposing.
+
 ## Example: single 3D scene
 
 \`\`\`json
 {
   "configById": {
-    "3D!main": { "lichtblickPanelTitle": "Scene", "topics": { "/points": { "visible": true }, "/tf": { "visible": true } } }
+    "3D!main": { "lichtblickPanelTitle": "Scene", "topics": { "/example/points": { "visible": true }, "/example/tf": { "visible": true } } }
   },
   "globalVariables": {},
   "userNodes": {},
@@ -304,11 +321,11 @@ defaults handle the rest.
 \`\`\`json
 {
   "configById": {
-    "3D!scene": { "lichtblickPanelTitle": "Scene", "topics": { "/points": { "visible": true } } },
+    "3D!scene": { "lichtblickPanelTitle": "Scene", "topics": { "/example/points": { "visible": true } } },
     "Plot!speed": {
       "lichtblickPanelTitle": "Forward speed",
       "paths": [
-        { "value": "/odom.twist.twist.linear.x", "enabled": true, "timestampMethod": "receiveTime", "label": "vx" }
+        { "value": "/example/odom.twist.twist.linear.x", "enabled": true, "timestampMethod": "receiveTime", "label": "vx" }
       ]
     }
   },
@@ -327,16 +344,16 @@ defaults handle the rest.
     "Plot!battery": {
       "lichtblickPanelTitle": "Battery voltage",
       "paths": [
-        { "value": "/bms_state.voltage", "enabled": true, "timestampMethod": "receiveTime" }
+        { "value": "/example/bms_state.voltage", "enabled": true, "timestampMethod": "receiveTime" }
       ]
     },
     "StateTransitions!mode": {
       "lichtblickPanelTitle": "Navigation mode",
-      "paths": [{ "value": "/nav/state.mode", "timestampMethod": "receiveTime" }]
+      "paths": [{ "value": "/example/nav/state.mode", "timestampMethod": "receiveTime" }]
     },
     "Indicator!health": {
       "lichtblickPanelTitle": "System health",
-      "path": "/system/healthy.data",
+      "path": "/example/system/healthy.data",
       "style": "bulb",
       "fallbackColor": "#a0a0a0",
       "fallbackLabel": "Unknown",
@@ -367,7 +384,8 @@ defaults handle the rest.
 A proven starting point for common requests. Each pattern lists when it fits, a complete layout,
 and suggested proportions. Panel counts and split percentages are **suggestions, not hard
 limits** — the layouts below pass the same validation that \`propose_layout\` applies, and every
-topic or path in them is a placeholder to replace from the loaded catalog.
+topic or path in them is a placeholder (the \`/example/\` prefix) to replace from the loaded
+catalog.
 
 All patterns use 2–4 panels and at most 3 levels of nesting, far inside the budgets listed under
 "Budget boundaries" below. If no pattern fits, use one of the single- or two-panel examples above
@@ -383,6 +401,9 @@ built-in 3D panel — see the robot-viz skill.
 **What**: one dominant scene view with a signal column beside it. 3 panels: robot view, one
 Plot, one StateTransitions. Suggested split: scene 60–70%, signal column 30–40% (Plot above,
 StateTransitions below, 65/35 inside the column).
+
+Topic names below are placeholders — replace every one with a real name from the catalog before
+proposing.
 
 \`\`\`json
 ${JSON.stringify(ROBOT_DEBUG_LAYOUT, null, 2)}
@@ -403,6 +424,9 @@ Suggested split: camera column 60–70% (two Images at 50/50), numeric column 30
 Gauge below). For compressed-video topics, reduce to a single video panel — decoding several
 video streams at once degrades playback.
 
+Topic names below are placeholders — replace every one with a real name from the catalog before
+proposing.
+
 \`\`\`json
 ${JSON.stringify(SENSOR_MONITORING_LAYOUT, null, 2)}
 \`\`\`
@@ -420,6 +444,9 @@ alike.
 **What**: the log list with correlated signals. 3 panels: RosOut, one Plot, one
 StateTransitions. Suggested split: log 55–60% on top, signal row 40–45% below (Plot and
 StateTransitions at 50/50).
+
+Topic names below are placeholders — replace every one with a real name from the catalog before
+proposing.
 
 \`\`\`json
 ${JSON.stringify(LOG_TROUBLESHOOTING_LAYOUT, null, 2)}
@@ -439,6 +466,9 @@ mode) — it has no per-message stepping.
 **What**: a time-series comparison with a detail panel. 3 panels: Plot, StateTransitions,
 RawMessages. Suggested split: Plot 45–50% on top, StateTransitions and RawMessages at 50/50
 below.
+
+Topic names below are placeholders — replace every one with a real name from the catalog before
+proposing.
 
 \`\`\`json
 ${JSON.stringify(REPLAY_ANALYSIS_LAYOUT, null, 2)}
@@ -464,19 +494,70 @@ pattern cannot hit a budget by itself — only the paths and configs added on to
 
 ## Extending the layout the user has open
 
-The workspace summary lists the open layout's panel ids (\`Plot!abc\`, ...) but not their
-configurations, so you cannot reproduce existing panels. Give every panel in your proposal a
-fresh id that does not collide with the listed ones.
+When the user asks to add panels to the layout they have open, extend it in place:
 
-Lichtblick compares the proposal with the open layout when the user applies it: a proposal that
-is exactly the open layout plus new panels is added in place; anything else — and any proposal
-that carries \`userNodes\` — is saved as a new layout. You do not control which happens, so say
-"adds panels" or "new layout" only as the card shows it, and never claim the layout was applied.
+1. Call \`get_current_layout({})\` first and copy it verbatim: every existing panel's
+   \`configById\` entry with its original id, plus all top-level fields — \`globalVariables\`,
+   \`userNodes\`, \`playbackConfig\`, \`savedProps\`, and \`version\`.
+2. Append only the new panels to the **root mosaic**, next to the existing top-level nodes.
+   Panels added inside a Tab are not applied in place — put them at the root instead.
+3. Never rewrite or drop an existing panel config, and never mint fresh ids for panels that
+   already exist. The proposal is applied in place only when it is exactly the open layout plus
+   the appended panels; anything else is saved as a new layout. Say "adds panels" or "new
+   layout" only as the card shows it, and never claim the layout was applied.
+
+When \`get_current_layout\` returns \`tooLarge: true\`, the open layout cannot be extended in
+place — propose a new layout instead, or ask the user which panels to keep.
+
+## Topic verification
+
+\`propose_layout\` now checks every topic the proposal **reads** — subscription topics and
+message paths — against the loaded catalog: unknown topics are rejected with a
+\`did you mean "…"\` suggestion. Pass on the first try:
+
+1. Topic names are opaque strings — copy them **byte for byte** from \`get_data_catalog\`,
+   \`describe_topic\`, or \`read_messages\` results. Never add or remove a leading \`/\`, never
+   change case, never "fix" punctuation: one recording can mix slash-prefixed and slash-less
+   spellings, and they are different names.
+2. Before proposing, list every topic the layout **reads** and confirm each one in this turn's
+   tool results. If \`propose_layout\` rejects a topic, take the \`did you mean\` suggestion,
+   correct the proposal yourself, and call \`propose_layout\` again — do not relay the raw
+   error to the user.
+3. Only fields that appear in this turn's \`describe_topic\` or \`read_messages\` results may be
+   called "confirmed". A result marked \`truncated\` proves nothing about what is absent — never
+   conclude "there is no X topic" from a truncated result; narrow the query instead
+   (\`get_data_catalog({ query })\` or \`describe_topic\`).
+4. Script outputs are another exception: every real **input** topic must come from the catalog,
+   but a \`userNodes\` script in the **same proposal** declares \`export const output =
+   "/studio_script/..."\`, and \`propose_layout\` accepts that virtual topic for the panels of
+   this proposal (it adds legal script outputs to a virtual catalog for validation). A virtual
+   topic is not a catalog topic — it never appears in \`get_data_catalog\` and cannot be read
+   with \`read_messages\`. A \`/studio_script/\` topic that is not declared by a script in this
+   same proposal is rejected like any unknown topic — never reference one.
+5. Output panels are exempt from the existence check: the target names of publishing panels —
+   \`Publish\` \`topicName\`, \`Teleop\` \`topic\`, \`CallService\` \`serviceName\` — may be
+   topics or services that do not exist in the loaded source (the panel advertises them itself).
+   \`Publish\` \`datatype\` is different: it must be a schema name present in the catalog
+   datatypes, spelled exactly as the catalog spells it.
+
+## Plot rules
+
+- A \`[:]\` slice produces **one legend entry**, not one per element. When the user wants one
+  line per array element (one curve per joint, per core, …), expand the slice into \`[0]\`,
+  \`[1]\`, … \`[N-1]\` paths, each with its own \`label\` (e.g. \`joint 0\`) and its own
+  \`color\`; take N from one real message (\`read_messages\`).
+- Every curve in one Plot must have a pairwise **different** \`color\` — assign an explicit
+  \`color\` to each path instead of letting them share a default.
+- Message paths do no arithmetic and no function calls: \`100 - …idle\` is not evaluated. To
+  show CPU usage, plot the raw fields (\`….cpu.payload.cores[…].user\` plus \`.system\`); any
+  computation beyond the Plot \`.@\` modifiers is a user script (user-scripts skill).
 
 ## Before proposing
 
-Load the message-path skill for every path you write. Build paths and topic names only from the loaded catalog — never from memory of what a robot
-"usually" publishes. Load the panel-catalog skill if unsure which panel accepts a given schema, and
-check the per-panel requirements there that validation does not enforce. Say briefly why the chosen
-panels answer the user's question.`,
+Load the message-path skill for every path you write. Build paths and topic names only from the
+loaded catalog — never from memory of what a robot "usually" publishes. Pull field trees with
+\`describe_topic({ topics })\` and verify every topic per "Topic verification" above. Load the
+panel-catalog skill if unsure which panel accepts a given schema, and check the per-panel
+requirements there that validation does not enforce. Say briefly why the chosen panels answer
+the user's question.`,
 };

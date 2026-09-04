@@ -21,8 +21,12 @@ MessagePath-based panel: one numeric value on a dial. Single path (message-path 
 { "lichtblickPanelTitle": "Battery level", "path": "/battery.percentage", "minValue": 0, "maxValue": 100, "colorMode": "colormap", "colorMap": "red-yellow-green" }
 \`\`\`
 
-**Always set \`minValue\` and \`maxValue\` to the signal's real range.** They default to 0 and 1, so
-any signal with a larger range pins the needle.
+**Always set \`minValue\` and \`maxValue\` to the signal's real range — never guess it.** They
+default to 0 and 1, so any signal with a larger range pins the needle. Read actual messages
+(\`read_messages\`) and take the range from the values the field really reaches, minding the unit
+(battery voltage in mV is thousands, not 0–100). Enum or status fields (\`network_state\` and
+similar) are not gauge material even when the user says "仪表盘": explain briefly and use
+\`StateTransitions\` or \`Indicator\` instead.
 
 ## Config reference
 

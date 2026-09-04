@@ -21,6 +21,14 @@ Topic-based panel: geographic positions and GeoJSON overlays. The panel type is 
 
 All eligible topics are drawn unless listed in \`disabledTopics\`.
 
+**Schema gate:** drawn topics must have one of the three schemas above, and \`followTopic\` must
+be a \`sensor_msgs/NavSatFix\` or \`foxglove.LocationFix\` topic — you cannot follow a GeoJSON
+layer. A custom GNSS schema — for example \`gnss.GnssFusion\` — cannot go into \`map\` no matter
+how position-like it looks: the panel will not draw it. Show such topics with \`Plot\` or
+\`RawMessages\` instead. \`propose_layout\` validates \`followTopic\`, \`disabledTopics\`, and
+the \`topicColors\` keys against the catalog and rejects unknown names; copy them byte-for-byte
+from the catalog.
+
 \`\`\`json
 { "lichtblickPanelTitle": "GPS position", "layer": "map", "followTopic": "/gps/fix", "disabledTopics": [], "topicColors": {} }
 \`\`\`

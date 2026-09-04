@@ -73,7 +73,18 @@ series. Use a real message path.
 
 **Multiple curves:** prefer one Plot panel with all series in its \`paths\` array (one entry per
 curve). Split into several Plot panels only when the series have conflicting units, value ranges,
-or axis semantics that cannot share one panel.
+or axis semantics that cannot share one panel. Every curve in one panel must have a pairwise
+**different** \`color\` — assign an explicit \`color\` to each path; a set of curves that all
+default to the same color is unreadable.
+
+**Array slices:** \`[:]\` produces **one legend entry** for the whole array, not one per element.
+When the user wants one line per element (one curve per joint, per core, …), expand the slice
+into \`[0]\`, \`[1]\`, … \`[N-1]\` paths, each with its own \`label\` (e.g. \`joint 0\`) and its
+own \`color\`; take N from one real message (\`read_messages\`).
+
+**No arithmetic:** paths do no arithmetic and no function calls — \`100 - …idle\` is not
+evaluated. To show CPU usage, plot the raw \`.user\` and \`.system\` fields as separate curves;
+any computation beyond the \`.@\` modifiers is a user script.
 
 **Trap:** a path that resolves to a \`string\` draws a line only when the string values are
 plottable as discrete labels; for enums and modes prefer \`StateTransitions\` (see

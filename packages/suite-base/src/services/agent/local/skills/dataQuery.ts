@@ -34,6 +34,11 @@ Read messages of one topic in receive order.
 
 Example: \`read_messages({ topic: "/imu", limit: 20 })\`.
 
+Size the time window from the topic's publish period: never narrower than 10× the period
+(50 ms at minimum) — a 1 ms window just returns 0 messages. Prefer one wide window plus a
+\`limit\` over many narrow windows: do not sweep second by second (68 separate reads); one wide
+read answers faster and costs far fewer calls.
+
 The scan is capped at 50,000 messages and the returned payloads at a byte budget; oversized
 messages are summarized and the result is marked \`truncated\` when the budget runs out. Results
 carry \`scanned\` so you know how much was looked at.
@@ -57,9 +62,14 @@ the message-internal stamp.
 \`playback_control({ action, time? })\` — a single JSON object:
 
 - \`action: "seek"\` requires \`time\` (decimal nanoseconds). The requested time is clamped to the
-  loaded data range; the tool returns the accepted clamped target as \`acceptedTimeNs\`. The player
-  state backfills asynchronously, so the returned value is the accepted request — do not claim the
-  playback head is already there.
+  loaded data range; the tool returns the accepted clamped target as \`acceptedTimeNs\` and
+  **optionally** \`previousTimeNs\` — the playback position before this seek, present only when
+  the player reports a current time. Before seeking, note the current position (from the
+  workspace summary or your last seek result); to undo, check whether the seek result actually
+  contains \`previousTimeNs\` before relying on it — when it is absent, tell the user that the
+  original position cannot be restored automatically. The player state backfills asynchronously,
+  so the returned value is the accepted request — do not claim the playback head is already
+  there.
 - \`action: "play"\` / \`"pause"\`: no time needed.
 
 ## Finding the first error
@@ -71,9 +81,11 @@ To jump to the first error in a log topic:
 
 ## Live sources
 
-Only iterable recordings support \`read_messages\` and \`search_messages\`. A live source returns a
-clear error — do not retry or pretend the data was read. Playback control may also be unavailable
-for a given player; the tool reports per-action which control is missing.
+Only iterable recordings support \`read_messages\` and \`search_messages\`. When the workspace
+summary line reads \`Source kind: live\`, skip read/search entirely — do not call them, do not
+retry, and do not pretend the data was read; drive panels from the schema instead. A live source
+returns a clear error — do not retry or pretend the data was read. Playback control may also be
+unavailable for a given player; the tool reports per-action which control is missing.
 
 ## Time format
 
