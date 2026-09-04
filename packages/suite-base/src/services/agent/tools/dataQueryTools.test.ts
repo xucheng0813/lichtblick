@@ -451,8 +451,12 @@ describe("playback_control", () => {
     const below = (await runPlaybackControlTool(
       { action: "seek", time: "5000000000" },
       makeDeps(context),
-    )) as { acceptedTimeNs: string };
+    )) as { acceptedTimeNs: string; previousTimeNs?: string };
     expect(below.acceptedTimeNs).toBe("10000000000");
+    // No currentTime in the player state: the field is omitted entirely (not null) — per the
+    // tool-definition contract such a seek cannot be automatically undone.
+    expect(below).toEqual({ action: "seek", acceptedTimeNs: "10000000000" });
+    expect(Object.hasOwn(below, "previousTimeNs")).toBe(false);
     expect(seekPlayback).toHaveBeenLastCalledWith({ sec: 10, nsec: 0 });
 
     // Request beyond the end: clamps to endTime.
@@ -468,6 +472,30 @@ describe("playback_control", () => {
       makeDeps(context),
     )) as { acceptedTimeNs: string };
     expect(inside.acceptedTimeNs).toBe("15000000000");
+  });
+
+  it("reports the previous playback position so a seek can be undone", async () => {
+    const seekPlayback = jest.fn();
+    const context = makeContext({
+      seekPlayback,
+      playerState: {
+        activeData: {
+          startTime: { sec: 10, nsec: 0 },
+          endTime: { sec: 20, nsec: 0 },
+          currentTime: { sec: 12, nsec: 500_000_000 },
+        },
+      } as AgentDataQueryContext["playerState"],
+    });
+
+    const result = (await runPlaybackControlTool(
+      { action: "seek", time: "15000000000" },
+      makeDeps(context),
+    )) as { acceptedTimeNs: string; previousTimeNs?: string };
+    expect(result).toEqual({
+      action: "seek",
+      acceptedTimeNs: "15000000000",
+      previousTimeNs: "12500000000",
+    });
   });
 
   it("plays and pauses with per-action gating", async () => {

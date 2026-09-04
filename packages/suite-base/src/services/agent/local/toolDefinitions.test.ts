@@ -19,6 +19,9 @@ describe("LOCAL_AGENT_TOOL_DEFINITIONS", () => {
       "vtd_presign",
       "open_data_source",
       "get_data_catalog",
+      "describe_topic",
+      "list_panels",
+      "get_current_layout",
       "propose_layout",
       "read_messages",
       "search_messages",
@@ -30,6 +33,75 @@ describe("LOCAL_AGENT_TOOL_DEFINITIONS", () => {
       );
       expect(tool.description.length).toBeGreaterThan(0);
     }
+  });
+
+  it("defines the catalog tools with verbatim-name and field-lookup contracts", () => {
+    const byName = new Map(LOCAL_AGENT_TOOL_DEFINITIONS.map((tool) => [tool.name, tool]));
+
+    const catalog = byName.get("get_data_catalog")!;
+    expect(catalog.description).toContain("Names are returned verbatim");
+    expect(catalog.description).toContain("no leading slash");
+    expect(catalog.inputSchema).toEqual(
+      expect.objectContaining({
+        additionalProperties: false,
+        properties: expect.objectContaining({
+          query: expect.any(Object),
+          schema: expect.any(Object),
+          limit: expect.objectContaining({ type: "integer", minimum: 1, maximum: 500 }),
+        }),
+      }),
+    );
+
+    const describe = byName.get("describe_topic")!;
+    expect(describe.description).toContain("flattened field list");
+    expect(describe.description).toContain("Unknown names return suggestions");
+    expect(describe.inputSchema).toEqual(
+      expect.objectContaining({
+        additionalProperties: false,
+        required: ["topics"],
+        properties: expect.objectContaining({
+          topics: expect.objectContaining({
+            type: "array",
+            minItems: 1,
+            maxItems: 10,
+          }),
+          maxDepth: expect.objectContaining({ type: "integer", minimum: 1, maximum: 10 }),
+        }),
+      }),
+    );
+  });
+
+  it("defines the workspace-state tools before propose_layout", () => {
+    const byName = new Map(LOCAL_AGENT_TOOL_DEFINITIONS.map((tool) => [tool.name, tool]));
+    const names = LOCAL_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name);
+    expect(names.indexOf("get_data_catalog")).toBeLessThan(names.indexOf("describe_topic"));
+    expect(names.indexOf("describe_topic")).toBeLessThan(names.indexOf("list_panels"));
+    expect(names.indexOf("list_panels")).toBeLessThan(names.indexOf("get_current_layout"));
+    expect(names.indexOf("get_current_layout")).toBeLessThan(names.indexOf("propose_layout"));
+
+    const listPanels = byName.get("list_panels")!;
+    expect(listPanels.description).toContain("built-ins and installed extensions");
+    expect(listPanels.description).toContain("Use the returned type string verbatim");
+    expect(listPanels.description).toContain("does not include config schemas");
+    expect(listPanels.inputSchema).toEqual(
+      expect.objectContaining({
+        additionalProperties: false,
+        properties: expect.objectContaining({
+          source: expect.objectContaining({ enum: ["builtin", "extension"] }),
+          query: expect.any(Object),
+        }),
+      }),
+    );
+
+    const currentLayout = byName.get("get_current_layout")!;
+    expect(currentLayout.description).toContain("full LayoutData plus id");
+    expect(currentLayout.description).toContain("reproduced verbatim");
+    expect(currentLayout.description).toContain(
+      "a tooLarge result means in-place extension is impossible",
+    );
+    expect(currentLayout.inputSchema).toEqual(
+      expect.objectContaining({ additionalProperties: false, properties: {} }),
+    );
   });
 
   it("defines the data-query tool schemas with their limits and enums", () => {
@@ -75,6 +147,10 @@ describe("LOCAL_AGENT_TOOL_DEFINITIONS", () => {
         }),
       }),
     );
+    // The definition documents the seek result contract implemented by the runtime: an optional
+    // previousTimeNs that is omitted when the player has no current playback time.
+    expect(playback.description).toContain("previousTimeNs");
+    expect(playback.description).toMatch(/omitted.*cannot be\s+automatically undone/s);
   });
 
   it("defines a side-effect-free batch consent plan schema", () => {

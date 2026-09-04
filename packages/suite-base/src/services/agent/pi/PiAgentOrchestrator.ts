@@ -30,14 +30,13 @@ import {
   type AgentPromptCustomization,
 } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
 import { mergeCustomizations } from "@lichtblick/suite-base/services/agent/prompts/remotePromptCustomization";
+import { registerTrustedProposal } from "@lichtblick/suite-base/services/agent/proposalTrust";
+import { renderCatalogReadyMessage } from "@lichtblick/suite-base/services/agent/tools/catalogTools";
 import {
   buildPiTools,
   type ToolConfirmationRequest,
 } from "@lichtblick/suite-base/services/agent/tools/piTools";
-import {
-  boundedToolResult,
-  type ToolRuntimeDeps,
-} from "@lichtblick/suite-base/services/agent/tools/toolRuntime";
+import type { ToolRuntimeDeps } from "@lichtblick/suite-base/services/agent/tools/toolRuntime";
 import type {
   AgentEvent,
   IAgentClient,
@@ -652,29 +651,44 @@ export class PiAgentOrchestrator implements IAgentClient {
     if (this.#toolRuntime == undefined) {
       return [];
     }
+    const getInstalledPanelTypes = (): ReadonlySet<string> =>
+      new Set(this.#getPanelInventory?.().map((panel) => panel.type) ?? []);
     const deps: ToolRuntimeDeps = {
       ...this.#toolRuntime.deps,
       skills,
-      getInstalledPanelTypes: () =>
-        new Set(this.#getPanelInventory?.().map((panel) => panel.type) ?? []),
-      emitLayoutProposal: async (proposal, signal) => {
+      getInstalledPanelTypes,
+      getPanelInventory: this.#getPanelInventory,
+      getCurrentLayout: this.#getCurrentLayout,
+      getCurrentLayoutId: this.#getCurrentLayoutId,
+      emitLayoutProposal: async (proposal, installedPanelTypes, signal) => {
         throwIfAborted(signal);
         const session = this.#requireSession(sessionId);
         const active = this.#requireActiveRequest(session);
+        const proposalEvent = {
+          ...proposal,
+          // Baseline captured when the proposal is generated (over the validate+sanitize
+          // pipeline output): the apply path uses it to detect layout changes since and
+          // apply strictly incremental proposals in place. The same snapshot that validated
+          // the proposal is reused here — the tool runtime never calls the getter twice.
+          ...collectLayoutBaseline(
+            this.#getCurrentLayout,
+            this.#getCurrentLayoutId,
+            this.#toolRuntime?.deps.getCatalog,
+            installedPanelTypes,
+          ),
+        };
+        // Process-local trust side channel, keyed by proposal object identity: the provider
+        // reuses this exact snapshot (and the fact that catalog validation already ran
+        // tool-side) instead of re-querying the host. Remote clients can never forge it —
+        // their payloads are deserialized into fresh objects without an entry.
+        registerTrustedProposal(proposalEvent, {
+          installedPanelTypes,
+          catalogChecked: true,
+        });
         this.#emit(session, {
           type: "layout-proposal",
           messageId: active.messageId,
-          proposal: {
-            ...proposal,
-            // Baseline captured when the proposal is generated (over the validate+sanitize
-            // pipeline output): the apply path uses it to detect layout changes since and
-            // apply strictly incremental proposals in place.
-            ...collectLayoutBaseline(
-              this.#getCurrentLayout,
-              this.#getCurrentLayoutId,
-              this.#toolRuntime?.deps.getCatalog,
-            ),
-          },
+          proposal: proposalEvent,
           requestId: active.requestId,
         });
       },
@@ -731,6 +745,7 @@ export class PiAgentOrchestrator implements IAgentClient {
     if (
       requestsOpenDataSource(context) &&
       (context.toolCall.name === "get_data_catalog" ||
+        context.toolCall.name === "describe_topic" ||
         context.toolCall.name === "propose_layout")
     ) {
       return {
@@ -760,13 +775,9 @@ export class PiAgentOrchestrator implements IAgentClient {
       return;
     }
     const catalog = getCatalog();
-    const normalized = boundedToolResult({
-      topics: catalog.topics,
-      datatypes: Object.fromEntries(catalog.datatypes),
-    });
     await this.sendMessage(
       session.id,
-      `The Lichtblick data catalog is ready for request ${requestId}: ${JSON.stringify(normalized)}`,
+      renderCatalogReadyMessage(catalog, requestId),
       this.#makeId(),
       session.controller.signal,
     );

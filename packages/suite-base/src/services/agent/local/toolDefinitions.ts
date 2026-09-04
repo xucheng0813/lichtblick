@@ -287,7 +287,53 @@ export const LOCAL_AGENT_TOOL_DEFINITIONS: LlmToolDef[] = [
   {
     name: "get_data_catalog",
     description:
-      "Read the topics and datatypes currently loaded in the Lichtblick workspace.",
+      "List topics loaded in the workspace as {name, schemaName}. Filter with query (case-insensitive substring) or schema (exact); page with limit. Names are returned verbatim — use them exactly, including when they have no leading slash.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: nonEmptyString,
+        schema: nonEmptyString,
+        limit: { type: "integer", minimum: 1, maximum: 500 },
+      },
+    },
+  },
+  {
+    name: "describe_topic",
+    description:
+      "Return the flattened field list (path: type; arrays as name[]) of up to 10 topics. Call it before writing any message path, Plot/Gauge/Indicator path, or user-script input. Unknown names return suggestions.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topics"],
+      properties: {
+        topics: {
+          type: "array",
+          minItems: 1,
+          maxItems: 10,
+          items: nonEmptyString,
+        },
+        maxDepth: { type: "integer", minimum: 1, maximum: 10 },
+      },
+    },
+  },
+  {
+    name: "list_panels",
+    description:
+      "List every panel type this Lichtblick instance can render (built-ins and installed extensions) with title, description, supported schemas and the skill to load. Use the returned type string verbatim as the panel id prefix. It does not include config schemas.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        source: { type: "string", enum: ["builtin", "extension"] },
+        query: nonEmptyString,
+      },
+    },
+  },
+  {
+    name: "get_current_layout",
+    description:
+      "Read the layout the user has open (full LayoutData plus id). Call it before an incremental proposal so existing panels and scripts are reproduced verbatim; a tooLarge result means in-place extension is impossible.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -359,7 +405,10 @@ export const LOCAL_AGENT_TOOL_DEFINITIONS: LlmToolDef[] = [
     name: "playback_control",
     description:
       "Control playback of the loaded data source: seek to a time (decimal nanoseconds; clamped to " +
-      "the loaded range and the accepted target is returned), play, or pause.",
+      "the loaded range and the accepted target is returned), play, or pause. A seek result also " +
+      "carries previousTimeNs, the playback position it moved away from, so the seek can be undone; " +
+      "when the player has no current playback time the field is omitted and the seek cannot be " +
+      "automatically undone.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

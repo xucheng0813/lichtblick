@@ -7,6 +7,7 @@ import type { IVtdClient } from "@lichtblick/suite-base/services/vtd/types";
 
 import {
   executeToolRuntime,
+  runDescribeTopicTool,
   runGetDataCatalogTool,
   runLoadSkillTool,
   runMemoryForgetTool,
@@ -70,7 +71,7 @@ function makeVtdClient() {
 
 function validLayoutData(): Record<string, unknown> {
   return {
-    configById: { "Plot!speed": { paths: [{ value: "/speed" }] } },
+    configById: { "Plot!speed": { paths: [{ value: "/speed.data" }] } },
     layout: "Plot!speed",
     globalVariables: {},
     playbackConfig: { speed: 1 },
@@ -106,7 +107,9 @@ function makeDeps() {
     },
     getCatalog: jest.fn().mockReturnValue({
       topics: [{ name: "/speed", schemaName: "std_msgs/msg/Float64" }],
-      datatypes: new Map([["std_msgs/msg/Float64", { definitions: [] }]]),
+      datatypes: new Map([
+        ["std_msgs/msg/Float64", { definitions: [{ name: "data", type: "float64" }] }],
+      ]),
     }),
     getInstalledPanelTypes: jest.fn().mockReturnValue(new Set<string>()),
     emitOpenDataSource: jest.fn(),
@@ -417,19 +420,163 @@ describe("toolRuntime", () => {
     );
   });
 
-  it("normalizes the active catalog and forwards catalog read failures", async () => {
+  it("lists the active catalog with filters and forwards catalog read failures", async () => {
     const deps = makeDeps();
 
     await expect(runGetDataCatalogTool({}, deps)).resolves.toEqual({
+      topicCount: 1,
+      matchedCount: 1,
+      returnedCount: 1,
       topics: [{ name: "/speed", schemaName: "std_msgs/msg/Float64" }],
-      datatypes: { "std_msgs/msg/Float64": { definitions: [] } },
     });
+    await expect(
+      runGetDataCatalogTool({ query: "speed", limit: 5 }, deps),
+    ).resolves.toEqual({
+      topicCount: 1,
+      matchedCount: 1,
+      returnedCount: 1,
+      topics: [{ name: "/speed", schemaName: "std_msgs/msg/Float64" }],
+    });
+    await expect(
+      runGetDataCatalogTool({ schema: "missing/Type" }, deps),
+    ).resolves.toEqual({
+      topicCount: 1,
+      matchedCount: 0,
+      returnedCount: 0,
+      topics: [],
+    });
+    await expect(runGetDataCatalogTool({ limit: 501 }, deps)).rejects.toThrow(
+      "get_data_catalog.limit must be a positive safe integer",
+    );
     jest.mocked(deps.getCatalog).mockImplementationOnce(() => {
       throw new Error("catalog unavailable");
     });
     await expect(runGetDataCatalogTool({}, deps)).rejects.toThrow(
       "catalog unavailable",
     );
+  });
+
+  it("describes topic fields, prefers the ready catalog, and validates input", async () => {
+    const deps = makeDeps();
+
+    await expect(
+      runDescribeTopicTool({ topics: ["/speed"], maxDepth: 3 }, deps),
+    ).resolves.toEqual({
+      topics: [
+        {
+          name: "/speed",
+          schemaName: "std_msgs/msg/Float64",
+          fields: ["data: float64"],
+        },
+      ],
+    });
+    // Unknown names come back with suggestions instead of failing the call.
+    await expect(
+      runDescribeTopicTool({ topics: ["/spped"] }, deps),
+    ).resolves.toEqual({
+      topics: [],
+      unknownTopics: [{ name: "/spped", suggestions: ["/speed"] }],
+    });
+    // The catalog-ready snapshot from the context is used instead of calling the getter.
+    jest.mocked(deps.getCatalog).mockClear();
+    const catalogReady = {
+      topics: [{ name: "/speed", schemaName: "std_msgs/msg/Float64" }],
+      datatypes: new Map([
+        ["std_msgs/msg/Float64", { definitions: [{ name: "data", type: "float64" }] }],
+      ]),
+    };
+    await runDescribeTopicTool({ topics: ["/speed"] }, deps, { catalogReady });
+    expect(deps.getCatalog).not.toHaveBeenCalled();
+
+    await expect(runDescribeTopicTool({}, deps)).rejects.toThrow(
+      "describe_topic.topics is required",
+    );
+    await expect(
+      runDescribeTopicTool({ topics: Array.from({ length: 11 }, (_u, i) => `/t${i}`) }, deps),
+    ).rejects.toThrow("describe_topic.topics supports at most 10 topics per call");
+    await expect(
+      runDescribeTopicTool({ topics: ["/speed"], maxDepth: 11 }, deps),
+    ).rejects.toThrow("describe_topic.maxDepth must be a positive safe integer");
+  });
+
+  it("rejects unknown properties on catalog tools at the runtime boundary", async () => {
+    const deps = makeDeps();
+
+    await expect(
+      executeToolRuntime("get_data_catalog", { query: "speed", bogus: true }, deps),
+    ).rejects.toThrow('get_data_catalog does not support property "bogus"');
+    await expect(
+      executeToolRuntime(
+        "describe_topic",
+        { topics: ["/speed"], includeFields: true },
+        deps,
+      ),
+    ).rejects.toThrow('describe_topic does not support property "includeFields"');
+    expect(deps.getCatalog).not.toHaveBeenCalled();
+  });
+
+  it("rejects proposals referencing unknown topics with did-you-mean suggestions", async () => {
+    const deps = makeDeps();
+    jest.mocked(deps.getCatalog).mockReturnValue({
+      topics: [{ name: "/odometry", schemaName: "nav_msgs/msg/Odometry" }],
+      datatypes: new Map(),
+    });
+    const input = {
+      name: "Unknown topic",
+      data: {
+        ...validLayoutData(),
+        configById: { "Plot!odom": { paths: [{ value: "/odomentry.data" }] } },
+        layout: "Plot!odom",
+      },
+    };
+
+    await expect(runProposeLayoutTool(input, deps)).rejects.toThrow(
+      /unknown topic "\/odomentry"/,
+    );
+    await expect(runProposeLayoutTool(input, deps)).rejects.toThrow(
+      /did you mean "\/odometry"/,
+    );
+    expect(deps.emitLayoutProposal).not.toHaveBeenCalled();
+  });
+
+  it("passes catalog warnings through and accepts the proposal", async () => {
+    const deps = makeDeps();
+    const input = {
+      name: "Log warning",
+      data: {
+        ...validLayoutData(),
+        configById: {
+          "Plot!speed": { paths: [{ value: "/speed.data" }] },
+          "RosOut!log": { topicToRender: "/speed" },
+        },
+        layout: { direction: "row", first: "Plot!speed", second: "RosOut!log" },
+      },
+    };
+
+    await expect(runProposeLayoutTool(input, deps)).resolves.toEqual({
+      accepted: true,
+      name: "Log warning",
+      warnings: [
+        'configById["RosOut!log"].topicToRender: topic "/speed" uses unsupported schema "std_msgs/msg/Float64" (expected one of: foxglove_msgs/Log, foxglove_msgs/msg/Log, foxglove.Log, foxglove::Log, rcl_interfaces/msg/Log, ros.rcl_interfaces.Log, ros.rosgraph_msgs.Log, rosgraph_msgs/Log)',
+      ],
+    });
+  });
+
+  it("accepts proposals when the catalog read fails", async () => {
+    const deps = makeDeps();
+    jest.mocked(deps.getCatalog).mockImplementation(() => {
+      throw new Error("catalog unavailable");
+    });
+    const input = {
+      name: "Speed",
+      data: validLayoutData(),
+    };
+
+    await expect(runProposeLayoutTool(input, deps)).resolves.toEqual({
+      accepted: true,
+      name: "Speed",
+    });
+    expect(deps.emitLayoutProposal).toHaveBeenCalled();
   });
 
   it("validates and emits layout proposals and rejects unsafe layouts", async () => {
@@ -444,20 +591,55 @@ describe("toolRuntime", () => {
       accepted: true,
       name: "Speed",
     });
-    expect(deps.emitLayoutProposal).toHaveBeenCalledWith(input, undefined);
+    // The same (empty) snapshot that validated the proposal is forwarded to the emitter.
+    expect(deps.getInstalledPanelTypes).toHaveBeenCalledTimes(1);
+    expect(deps.emitLayoutProposal).toHaveBeenCalledWith(input, new Set(), undefined);
     await expect(
       runProposeLayoutTool(
         {
           name: "Unsafe",
           data: {
             ...validLayoutData(),
-            configById: { "Publish!bad": {} },
-            layout: "Publish!bad",
+            configById: { "Bogus!bad": {} },
+            layout: "Bogus!bad",
           },
         },
         deps,
       ),
-    ).rejects.toThrow('uses unsupported panel type "Publish"');
+    ).rejects.toThrow('uses unsupported panel type "Bogus"');
+  });
+
+  it("takes a single host snapshot for validation and baseline emission", async () => {
+    const deps = makeDeps();
+    const panelType = "Acme Extension.Custom Panel";
+    const panelId = `${panelType}!main`;
+    // First call returns the extension-admitting set; a second call would return empty.
+    const getInstalledPanelTypes = jest.mocked(deps.getInstalledPanelTypes);
+    getInstalledPanelTypes
+      .mockReturnValueOnce(new Set([panelType]))
+      .mockReturnValue(new Set());
+    const input = {
+      name: "Installed extension",
+      data: {
+        configById: { [panelId]: { customSetting: true } },
+        layout: panelId,
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+
+    await expect(runProposeLayoutTool(input, deps)).resolves.toEqual({
+      accepted: true,
+      name: "Installed extension",
+    });
+    expect(getInstalledPanelTypes).toHaveBeenCalledTimes(1);
+    // Validation and the emitter saw the same first-call snapshot.
+    expect(deps.emitLayoutProposal).toHaveBeenCalledWith(
+      input,
+      new Set([panelType]),
+      undefined,
+    );
   });
 
   it("passes the installed panel type snapshot into layout validation", async () => {
@@ -483,7 +665,11 @@ describe("toolRuntime", () => {
       name: "Installed extension",
     });
     expect(deps.getInstalledPanelTypes).toHaveBeenCalledTimes(1);
-    expect(deps.emitLayoutProposal).toHaveBeenCalledWith(input, undefined);
+    expect(deps.emitLayoutProposal).toHaveBeenCalledWith(
+      input,
+      new Set([panelType]),
+      undefined,
+    );
   });
 
   it("preserves aborts, unsupported-tool errors, and the result byte bound", async () => {
@@ -499,12 +685,11 @@ describe("toolRuntime", () => {
       'Unsupported local agent tool "unknown"',
     );
 
-    jest.mocked(deps.getCatalog).mockReturnValueOnce({
-      topics: ["x".repeat(TOOL_RUNTIME_MAX_RESULT_BYTES + 1)],
-      datatypes: new Map(),
+    jest.mocked(deps.vtdClient.topics).mockResolvedValueOnce({
+      ["/" + "x".repeat(TOOL_RUNTIME_MAX_RESULT_BYTES)]: 1,
     });
     await expect(
-      executeToolRuntime("get_data_catalog", {}, deps),
+      executeToolRuntime("vtd_topics", { id: "record-1" }, deps),
     ).resolves.toMatchObject({
       truncated: true,
     });

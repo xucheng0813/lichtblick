@@ -44,6 +44,7 @@ describe("useAgentWorkspaceTools", () => {
   const enqueueSnackbar = jest.fn();
   const topics = [{ name: "/camera", schemaName: "sensor_msgs/Image" }];
   const datatypes = new Map([["sensor_msgs/Image", { definitions: [] }]]);
+  const capabilities = ["playbackControl"];
 
   beforeEach(() => {
     jest.resetAllMocks();
@@ -57,11 +58,11 @@ describe("useAgentWorkspaceTools", () => {
       setSelectedLayoutId,
     });
     getCurrentLayoutState.mockReturnValue({ selectedLayout: undefined });
-    (useDataSourceInfo as jest.Mock).mockReturnValue({ topics, datatypes });
+    (useDataSourceInfo as jest.Mock).mockReturnValue({ topics, datatypes, capabilities });
   });
 
   it("opens remote URLs through the remote-file data source", () => {
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     result.current.openDataSource([
       "https://example.com/first.mcap",
@@ -77,7 +78,7 @@ describe("useAgentWorkspaceTools", () => {
   });
 
   it("rejects an empty remote URL list", () => {
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     expect(() => {
       result.current.openDataSource([]);
@@ -86,7 +87,7 @@ describe("useAgentWorkspaceTools", () => {
   });
 
   it("rejects remote URLs containing literal commas", () => {
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     expect(() => {
       result.current.openDataSource(["https://example.com/segment,part.mcap"]);
@@ -97,9 +98,9 @@ describe("useAgentWorkspaceTools", () => {
   });
 
   it("returns the current data source catalog", () => {
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
-    expect(result.current.getCatalog()).toEqual({ topics, datatypes });
+    expect(result.current.getCatalog()).toEqual({ topics, datatypes, capabilities });
   });
 
   it("saves a creator-owned layout and selects it", async () => {
@@ -111,7 +112,7 @@ describe("useAgentWorkspaceTools", () => {
     };
     const layout = { id: "layout-id" };
     saveNewLayout.mockResolvedValue(layout);
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     await result.current.applyLayout("Agent layout", layoutData);
 
@@ -124,7 +125,7 @@ describe("useAgentWorkspaceTools", () => {
   });
 
   it("rejects invalid layout data before saving", async () => {
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     await expect(
       result.current.applyLayout("Invalid layout", {
@@ -141,7 +142,7 @@ describe("useAgentWorkspaceTools", () => {
   it("propagates layout save failures without selecting a layout", async () => {
     const error = new Error("IndexedDB unavailable");
     saveNewLayout.mockRejectedValue(error);
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     await expect(
       result.current.applyLayout("Agent layout", {
@@ -158,7 +159,7 @@ describe("useAgentWorkspaceTools", () => {
     const layout = { id: "layout-id" };
     saveNewLayout.mockResolvedValue(layout);
     setSelectedLayoutId.mockReturnValue(undefined);
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     await result.current.applyLayout("Agent layout", {
       configById: {},
@@ -190,7 +191,7 @@ describe("useAgentWorkspaceTools", () => {
     };
     const layout = { id: "layout-id" };
     saveNewLayout.mockResolvedValue(layout);
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     await result.current.applyLayout("Agent layout", layoutData);
 
@@ -223,7 +224,7 @@ describe("useAgentWorkspaceTools", () => {
     };
     const layout = { id: "layout-id" };
     saveNewLayout.mockResolvedValue(layout);
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     await result.current.applyLayout("Agent layout", layoutData);
 
@@ -240,7 +241,7 @@ describe("useAgentWorkspaceTools", () => {
     getCurrentLayoutState.mockReturnValue({
       selectedLayout: { id: "layout-id", data: layoutData },
     });
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     expect(result.current.getCurrentLayout()).toBe(layoutData);
   });
@@ -249,7 +250,7 @@ describe("useAgentWorkspaceTools", () => {
     getCurrentLayoutState.mockReturnValue({
       selectedLayout: { id: "layout-id", data: {} },
     });
-    const { result } = renderHook(() => useAgentWorkspaceTools());
+    const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
     expect(result.current.getCurrentLayoutId()).toBe("layout-id");
   });
@@ -295,7 +296,7 @@ describe("useAgentWorkspaceTools", () => {
     });
 
     it("applies a strict superset in place without saving a new layout", async () => {
-      const { result } = renderHook(() => useAgentWorkspaceTools());
+      const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
       await result.current.applyLayout("Agent layout", proposalWithExtraPanel, {
         baseLayoutId: "layout-1",
@@ -314,7 +315,7 @@ describe("useAgentWorkspaceTools", () => {
     });
 
     it("falls back to the full path when the fingerprint does not match", async () => {
-      const { result } = renderHook(() => useAgentWorkspaceTools());
+      const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
       await result.current.applyLayout("Agent layout", proposalWithExtraPanel, {
         baseLayoutId: "layout-1",
@@ -331,7 +332,7 @@ describe("useAgentWorkspaceTools", () => {
     });
 
     it("falls back to the full path when the selected layout id differs from the baseline", async () => {
-      const { result } = renderHook(() => useAgentWorkspaceTools());
+      const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
       await result.current.applyLayout("Agent layout", proposalWithExtraPanel, {
         baseLayoutId: "layout-other",
@@ -343,7 +344,7 @@ describe("useAgentWorkspaceTools", () => {
     });
 
     it("falls back to the full path when the proposal carries no baseline", async () => {
-      const { result } = renderHook(() => useAgentWorkspaceTools());
+      const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
       await result.current.applyLayout("Agent layout", proposalWithExtraPanel);
 
@@ -358,7 +359,7 @@ describe("useAgentWorkspaceTools", () => {
           "script-1": { name: "Speed", sourceCode: "export default () => {}" },
         },
       };
-      const { result } = renderHook(() => useAgentWorkspaceTools());
+      const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
       await result.current.applyLayout("Agent layout", proposal, {
         baseLayoutId: "layout-1",
@@ -400,7 +401,7 @@ describe("useAgentWorkspaceTools", () => {
       getCurrentLayoutState.mockReturnValue({
         selectedLayout: { id: "layout-1", data: stalePlotLayout },
       });
-      const { result } = renderHook(() => useAgentWorkspaceTools());
+      const { result } = renderHook(() => useAgentWorkspaceTools({}));
 
       await result.current.applyLayout("Agent layout", stalePlotProposal, {
         baseLayoutId: "layout-1",
@@ -413,6 +414,103 @@ describe("useAgentWorkspaceTools", () => {
       expect(addPanelsAtomically).toHaveBeenCalledTimes(1);
       expect(saveNewLayout).not.toHaveBeenCalled();
       expect(setSelectedLayoutId).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("installed panel types", () => {
+    it("applies a layout with extension and built-in panels through the host snapshot", async () => {
+      const getInstalledPanelTypes = jest.fn(() => new Set(["Acme.Panel"]));
+      const { result } = renderHook(() =>
+        useAgentWorkspaceTools({ getInstalledPanelTypes }),
+      );
+      const layoutData = {
+        configById: {
+          "Acme.Panel!x": { customSetting: true },
+          "Audio!a": { topicPath: "raw_audio_dump" },
+        },
+        layout: { direction: "row", first: "Acme.Panel!x", second: "Audio!a" },
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      };
+      const layout = { id: "layout-id" };
+      saveNewLayout.mockResolvedValue(layout);
+
+      await result.current.applyLayout("Agent layout", layoutData);
+
+      // No options-provided snapshot: the apply fell back to the getter exactly once, before
+      // validation.
+      expect(getInstalledPanelTypes).toHaveBeenCalledTimes(1);
+      expect(saveNewLayout).toHaveBeenCalledWith({
+        name: "Agent layout",
+        data: layoutData,
+        permission: "CREATOR_WRITE",
+      });
+      expect(setSelectedLayoutId).toHaveBeenCalledWith(layout.id);
+    });
+
+    it("prefers the snapshot provided in the apply options over the getter", async () => {
+      const getInstalledPanelTypes = jest.fn(() => new Set<string>());
+      const { result } = renderHook(() =>
+        useAgentWorkspaceTools({ getInstalledPanelTypes }),
+      );
+      const layoutData = {
+        configById: { "Acme.Panel!x": { customSetting: true } },
+        layout: "Acme.Panel!x",
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      };
+      const layout = { id: "layout-id" };
+      saveNewLayout.mockResolvedValue(layout);
+
+      // The proposal-time snapshot admits the extension panel even though the getter would
+      // now return an empty set — and the getter is not consulted at all.
+      await result.current.applyLayout("Agent layout", layoutData, {
+        installedPanelTypes: new Set(["Acme.Panel"]),
+      });
+
+      expect(getInstalledPanelTypes).not.toHaveBeenCalled();
+      expect(saveNewLayout).toHaveBeenCalledWith({
+        name: "Agent layout",
+        data: layoutData,
+        permission: "CREATOR_WRITE",
+      });
+      expect(setSelectedLayoutId).toHaveBeenCalledWith(layout.id);
+    });
+
+    it("falls back to the static built-in list when no host snapshot is provided", async () => {
+      const { result } = renderHook(() => useAgentWorkspaceTools({}));
+
+      // Extension panels outside the static list stay rejected.
+      await expect(
+        result.current.applyLayout("Extension", {
+          configById: { "Acme.Panel!x": {} },
+          layout: "Acme.Panel!x",
+          globalVariables: {},
+          playbackConfig: { speed: 1 },
+          userNodes: {},
+        }),
+      ).rejects.toThrow('uses unsupported panel type "Acme.Panel"');
+      expect(saveNewLayout).not.toHaveBeenCalled();
+
+      // Audio is part of the static built-in baseline now.
+      const audioLayout = {
+        configById: { "Audio!a": { topicPath: "raw_audio_dump" } },
+        layout: "Audio!a",
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      };
+      const layout = { id: "layout-id" };
+      saveNewLayout.mockResolvedValue(layout);
+      await result.current.applyLayout("Audio", audioLayout);
+
+      expect(saveNewLayout).toHaveBeenCalledWith({
+        name: "Audio",
+        data: audioLayout,
+        permission: "CREATOR_WRITE",
+      });
     });
   });
 });

@@ -57,15 +57,26 @@ Tool workflow:
    user confirmation. Nanosecond values must be unsigned decimal strings, never JavaScript numbers.
 4. Use vtd_presign to obtain a temporary URL, then open_data_source to ask Lichtblick to load it.
 5. Loading is asynchronous. After calling open_data_source, end that tool turn and wait for the
-   catalog-ready follow-up. Never call get_data_catalog, propose_layout, or another
-   open_data_source in the same tool batch.
-6. Use propose_layout only after inspecting the loaded catalog. A proposal is never applied
-   automatically; the user remains in control.
+   catalog-ready follow-up. Never call get_data_catalog, describe_topic, propose_layout, or
+   another open_data_source in the same tool batch.
+6. Use propose_layout only after confirming every topic with get_data_catalog/describe_topic.
+   Every topic a panel subscribes to or reads and every message path must resolve in the loaded
+   catalog, and every script input must come from it; a panel path or script input may instead
+   reference the output declared by a userNode in the same proposal, which has no catalog entry
+   (its field structure can only be warned about). Outgoing targets of write-side panels are not
+   catalog-existence-checked: Publish topicName, Teleop topic, and CallService serviceName may
+   name targets that do not exist yet, but Publish datatype must be a schema present in the
+   catalog. The tool validates topics and paths against the catalog and rejects unknown ones
+   with suggestions. Submit one complete proposal per request — no skeletons and no partial
+   proposal followed by a fuller one; a tool rejection is the exception where you fix the
+   problems and resubmit (at most twice) instead of relaying the error to the user. Before an
+   incremental change to the open layout call get_current_layout and reproduce existing panels
+   verbatim. A proposal is never applied automatically; the user remains in control.
 
 Look at the data before drawing conclusions:
-- The per-turn workspace summary lists the loaded topics grouped by schema. Call get_data_catalog
-  only when the summary is truncated, the topic you need is missing from it, or you need a
-  datatype's field structure to build a message path — one call per need, not one per panel.
+- The per-turn workspace summary lists the loaded topics grouped by schema. Use
+  get_data_catalog({query}) to find topics by keyword and describe_topic({topics}) to read a
+  datatype's fields before writing any path; never probe topic names with read_messages.
 - To find the field behind a concept (speed, brake, battery, GPS), look it up in the catalog
   datatypes. If the structure is not visible, read one real message with read_messages and use
   the fields it actually contains. Never assume a path such as .twist.linear.x exists.
@@ -110,15 +121,22 @@ Read the current layout state before proposing:
   else (changed or removed panels, added scripts, changed global variables or playback settings)
   is saved as a new layout. You do not control which happens, so never claim a panel was added
   or a layout applied — the user applies it from the card.
-- Assemble the whole layout internally and call propose_layout exactly once per request. No
-  skeletons, and no partial proposal followed by a fuller one.
+- Assemble the whole layout internally and submit one complete proposal per request. No
+  skeletons, and no partial proposal followed by a fuller one. A proposal rejected by the tool's
+  catalog validation is the allowed exception: fix the listed problems and resubmit, never relay
+  the raw rejection to the user.
 
 Verify, do not assume:
+- Write "verified"/"已确认" only about a topic or field quoted from a tool result in this turn.
+  When a catalog result is truncated you may not claim a topic does not exist — narrow the query
+  instead.
+- If a tool has not returned, say so and retry once; never end the turn while a tool is pending.
 - propose_layout returning accepted means the data passed validation and is shown as a card. It
   says nothing about whether the panels will show data. Check that yourself before proposing:
   every path resolves in the catalog, every 3D topic is visible, every script input exists in the
   catalog, every script output starts with /studio_script/ and has a consuming panel in the same
-  proposal.
+  proposal. A path may reference the output of a userNode from the same proposal even though it
+  has no catalog entry — the tool can only warn about its field structure.
 - A user script must return an object with at least one field; a bare number or string leaves the
   output untyped and its panels empty. There is no compile step you can observe, so keep scripts
   short and type them against the real schema.
@@ -155,10 +173,13 @@ Available operations are limited to the declared tools. Never invent tool result
 metadata, URLs, or successful side effects. Do not claim to run shell commands or access arbitrary
 files or networks.
 
-Layout proposals must be valid AgentSafeLayoutData. Use only these panel types: ${STATIC_PANEL_TYPES},
-and the two robot visualization panels described by the robot-viz skill. Extension panels listed
-in the runtime "Available panels" inventory may additionally be proposed; never invent any other
-panel type.
+Layout proposals must be valid AgentSafeLayoutData. Any panel listed in the runtime
+"Available panels" inventory (or returned by list_panels) may be proposed. Load its panel-*
+skill when one exists (list_panels reports the skill id); for panels without a skill call
+list_panels first. Extension panels listed in the runtime "Available panels" inventory may
+additionally be proposed; never invent a panel type that is not listed.
+The built-in types are ${STATIC_PANEL_TYPES}, and the two robot visualization panels described
+by the robot-viz skill.
 
 When a layout needs a 3D view of a robot, default to the quadruped robot panel. Use the humanoid
 panel or the generic built-in 3D panel only when the user explicitly asks for one of them. Load the
@@ -184,6 +205,13 @@ Answering:
 - Quote real values from tool results: topic names, paths, counts, times. If you could not verify
   something, say so and say what you checked.
 - Answer in the user's language; keep topic names, paths, panel types, and code verbatim.
+- Reply in the language of the user's own messages (not the language of injected context or tool
+  output); once the user has written Chinese, keep answering in Chinese.
+- Ask at most one clarifying question per request, and only when two reasonable readings lead to
+  incompatible layouts. Otherwise choose the most likely reading, build it, state the assumption
+  in one line, and offer the alternative. A proposal is never applied automatically, so a wrong
+  guess costs one click; a question costs a round trip. Never present your own guess for the
+  user to "confirm".
 - Report completion honestly: what was proposed, what the user still has to apply or confirm, and
   what you could not verify.
 - Do not restate what the user already knows or explain your reasoning unless asked.`;
@@ -214,7 +242,7 @@ export type SystemPromptContext = {
 };
 
 export const LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES = 4096;
-export const LOCAL_AGENT_MAX_PANEL_INVENTORY_BYTES = 4096;
+export const LOCAL_AGENT_MAX_PANEL_INVENTORY_BYTES = 12288;
 
 function truncateUtf8(value: string, maxBytes: number, suffix: string): string {
   const encoder = new TextEncoder();
@@ -265,24 +293,46 @@ function readStringField(value: unknown, field: string): string | undefined {
   return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
 }
 
+export type SummarizeWorkspaceOptions = {
+  /** UTF-8 byte budget for the summary. Defaults to the per-turn workspace budget. */
+  maxBytes?: number;
+};
+
 /** Builds the bounded per-turn orientation that pi injects outside the cached system prompt. */
-export function summarizeWorkspace(catalog: CatalogSnapshot, layout?: unknown): string {
+export function summarizeWorkspace(
+  catalog: CatalogSnapshot,
+  layout?: unknown,
+  options?: SummarizeWorkspaceOptions,
+): string {
+  const maxBytes = options?.maxBytes ?? LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES;
   const lines: string[] = [];
   const topicCount = catalog.topics.length;
   if (topicCount === 0) {
     lines.push("No data source is loaded yet.");
   } else {
     lines.push(`Loaded data source with ${String(topicCount)} topics.`);
+    const capabilities = catalog.capabilities;
+    if (capabilities != undefined) {
+      lines.push(
+        capabilities.includes("playbackControl")
+          ? "Source kind: recording (read_messages/search_messages/playback_control available)"
+          : "Source kind: live (messages cannot be read or searched)",
+      );
+    }
     // Placed next to the loaded-state line, before any topic listing, so it survives summary
     // truncation (which cuts from the end).
     lines.push(
       "Data is already loaded — do not call vtd_search unless the user asks for different recordings.",
     );
     const bySchema = new Map<string, string[]>();
+    const namesWithoutLeadingSlash: string[] = [];
     for (const topic of catalog.topics) {
       const name = readStringField(topic, "name");
       if (name == undefined) {
         continue;
+      }
+      if (!name.startsWith("/")) {
+        namesWithoutLeadingSlash.push(name);
       }
       const schema = readStringField(topic, "schemaName") ?? "(unknown schema)";
       const names = bySchema.get(schema);
@@ -291,6 +341,11 @@ export function summarizeWorkspace(catalog: CatalogSnapshot, layout?: unknown): 
       } else {
         names.push(name);
       }
+    }
+    if (namesWithoutLeadingSlash.length > 0) {
+      lines.push(
+        `Note: ${namesWithoutLeadingSlash.length} topic names have no leading slash (e.g. "${namesWithoutLeadingSlash[0]}") — use them verbatim; never add "/".`,
+      );
     }
     if (bySchema.size > 0) {
       lines.push("Topics by schema:");
@@ -308,11 +363,11 @@ export function summarizeWorkspace(catalog: CatalogSnapshot, layout?: unknown): 
     lines.push(`Current layout panels: ${panelIds.join(", ")}`);
   }
 
-  const summary = lines.join("\n");
-  if (summary.length <= LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES) {
-    return summary;
-  }
-  return `${summary.slice(0, LOCAL_AGENT_MAX_WORKSPACE_SUMMARY_BYTES)}\n… truncated; call get_data_catalog for the full topic list.`;
+  return truncateUtf8(
+    lines.join("\n"),
+    maxBytes,
+    "\n… truncated; call get_data_catalog for the full topic list.",
+  );
 }
 
 /** Builds the provider-cacheable part of the prompt. */
@@ -348,7 +403,9 @@ export function buildDynamicContext(context: SystemPromptContext = {}): string {
   if (context.workspace != undefined && context.workspace.length > 0) {
     sections.push(
       `Current Lichtblick workspace state. This is provided automatically each turn, so you do not
-need get_data_catalog to know what is loaded — call it only when you need the full topic list:
+need get_data_catalog to know what is loaded. The summary lists topic names and schemas only.
+Before authoring a layout, confirm names with get_data_catalog({query}) and fields with
+describe_topic({topics}):
 ${context.workspace}`,
     );
   }

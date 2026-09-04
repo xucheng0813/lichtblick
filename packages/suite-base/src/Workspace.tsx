@@ -904,7 +904,11 @@ function ConfiguredAgentWorkspaceIntegration({
     panelInventoryRef.current = panelInventory;
   }, [panelInventory]);
   const getPanelInventory = useCallback(() => panelInventoryRef.current, []);
-  const workspaceTools = useAgentWorkspaceTools();
+  const getInstalledPanelTypes = useCallback(
+    () => new Set(panelInventoryRef.current.map((panel) => panel.type)),
+    [],
+  );
+  const workspaceTools = useAgentWorkspaceTools({ getInstalledPanelTypes });
   const workspaceToolsRef = useRef(workspaceTools);
   useLayoutEffect(() => {
     workspaceToolsRef.current = workspaceTools;
@@ -948,12 +952,22 @@ function ConfiguredAgentWorkspaceIntegration({
       catalogChangeListenersRef.current.delete(listener);
     };
   }, []);
-  const onApplyProposal = useCallback(async (proposal: LayoutProposal) => {
-    await workspaceToolsRef.current.applyLayout(proposal.name, proposal.data, {
-      baseLayoutId: proposal.baseLayoutId,
-      baseFingerprint: proposal.baseFingerprint,
-    });
-  }, []);
+  const onApplyProposal = useCallback(
+    async (
+      proposal: LayoutProposal,
+      _signal: AbortSignal,
+      options: { installedPanelTypes?: ReadonlySet<string> },
+    ) => {
+      await workspaceToolsRef.current.applyLayout(proposal.name, proposal.data, {
+        baseLayoutId: proposal.baseLayoutId,
+        baseFingerprint: proposal.baseFingerprint,
+        // The snapshot captured when the proposal was generated: the apply re-validates against
+        // exactly the panel inventory the proposal was accepted with.
+        installedPanelTypes: options.installedPanelTypes,
+      });
+    },
+    [],
+  );
   const onOpenDataSource = useCallback((urls: string[]) => {
     workspaceToolsRef.current.openDataSource(urls);
   }, []);
@@ -1164,6 +1178,7 @@ function ConfiguredAgentWorkspaceIntegration({
       onLoadVtdRecord={onLoadVtdRecord}
       onOpenDataSource={onOpenDataSource}
       onSliceVtdRecord={onSliceVtdRecord}
+      getInstalledPanelTypes={getInstalledPanelTypes}
       subscribeToCatalogChanges={subscribeToCatalogChanges}
       subscribeToLayoutChanges={subscribeToLayoutChanges}
       onSelectProfile={setSelectedProfileId}

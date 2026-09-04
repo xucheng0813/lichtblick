@@ -738,10 +738,20 @@ export async function runPlaybackControlTool(
       }
       const requested = requireTime(input, toolName);
       const accepted = clampTime(requested, startTime, endTime);
+      // Capture the position the seek moves away from so the agent can undo the seek. The
+      // contract with the tool definition: previousTimeNs is omitted (not null) when the player
+      // state carries no currentTime — such a seek cannot be automatically undone.
+      const previousTime = activeData?.currentTime;
       context.seekPlayback(accepted);
       // seekPlayback returns void and the player state backfills asynchronously: report the
       // accepted clamped target time, not a claimed currentTime.
-      return { action: "seek", acceptedTimeNs: toNanoSec(accepted).toString() };
+      const previousTimeNs =
+        previousTime == undefined ? undefined : toNanoSec(previousTime).toString();
+      return {
+        action: "seek",
+        acceptedTimeNs: toNanoSec(accepted).toString(),
+        ...(previousTimeNs == undefined ? {} : { previousTimeNs }),
+      };
     }
     case "play": {
       if (context.startPlayback == undefined) {

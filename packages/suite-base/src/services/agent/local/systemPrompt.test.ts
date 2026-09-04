@@ -49,7 +49,7 @@ describe("LOCAL_AGENT_SYSTEM_PROMPT", () => {
     expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain("data-query");
   });
 
-  it("derives the static panel list from ALLOWED_PANEL_TYPES", () => {
+  it("derives the built-in panel list from ALLOWED_PANEL_TYPES", () => {
     const robotVizTypes = new Set([
       QUADRUPED_VIZ_PANEL_TYPE,
       HUMANOID_VIZ_PANEL_TYPE,
@@ -58,19 +58,99 @@ describe("LOCAL_AGENT_SYSTEM_PROMPT", () => {
       (panelType) => !robotVizTypes.has(panelType),
     );
 
-    // The whole allowlist line must equal exactly the derived list: an extra, missing, or renamed
+    // The whole built-in line must equal exactly the derived list: an extra, missing, or renamed
     // panel type — or a reordering — all fail this assertion. A plain toContain would let trailing
     // content after the list slip through.
-    const allowlistLine = LOCAL_AGENT_SYSTEM_PROMPT.split("\n").find((line) =>
-      line.includes("Use only these panel types:"),
+    const builtinLine = LOCAL_AGENT_SYSTEM_PROMPT.split("\n").find((line) =>
+      line.startsWith("The built-in types are"),
     );
-    expect(allowlistLine).toBe(
-      `Layout proposals must be valid AgentSafeLayoutData. Use only these panel types: ${staticTypes.join(", ")},`,
+    expect(builtinLine).toBe(
+      `The built-in types are ${staticTypes.join(", ")}, and the two robot visualization panels described`,
     );
   });
 
-  it("lets the runtime Available panels inventory extend the static panel list", () => {
-    expect(LOCAL_AGENT_SYSTEM_PROMPT).toMatch(/Available panels.*may additionally be proposed/);
+  it("lets the runtime Available panels inventory and list_panels extend the built-in list", () => {
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toMatch(
+      /Available panels[\s\S]*may\s+additionally be proposed/,
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "Any panel listed in the runtime",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "never invent a panel type that is not listed",
+    );
+  });
+
+  it("routes proposal validation and incremental extension through the new tools", () => {
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "Use propose_layout only after confirming every topic with get_data_catalog/describe_topic.",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "a tool rejection is the exception where you fix the\n   problems and resubmit (at most twice) instead of relaying the error to the user",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "relaying the error to the user. Before an\n   incremental change to the open layout call get_current_layout and reproduce existing panels\n   verbatim.",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "Use\n  get_data_catalog({query}) to find topics by keyword and describe_topic({topics}) to read a\n  datatype's fields before writing any path; never probe topic names with read_messages.",
+    );
+  });
+
+  it("permits userNodes virtual outputs and one complete proposal with rejection resubmission", () => {
+    // Script inputs and real panel topics must come from the catalog; a panel may instead
+    // reference the output of a userNode from the same proposal, which has no catalog entry.
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "Every topic a panel subscribes to or reads and every message path must resolve in the loaded\n   catalog, and every script input must come from it",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "reference the output declared by a userNode in the same proposal, which has no catalog entry\n   (its field structure can only be warned about)",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "reference the output of a userNode from the same proposal even though it\n  has no catalog entry — the tool can only warn about its field structure",
+    );
+    // One complete proposal per request; a tool rejection is the allowed exception to resubmit.
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "Submit one complete proposal per request — no skeletons and no partial\n   proposal followed by a fuller one",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "catalog validation is the allowed exception: fix the listed problems and resubmit, never relay\n  the raw rejection to the user",
+    );
+  });
+
+  it("exempts write-side panel targets from catalog existence checks", () => {
+    // Outgoing targets are not catalog-existence-checked: Publish topicName, Teleop topic, and
+    // CallService serviceName may name targets that do not exist yet.
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "Outgoing targets of write-side panels are not\n   catalog-existence-checked: Publish topicName, Teleop topic, and CallService serviceName may\n   name targets that do not exist yet",
+    );
+    // Publish datatype, however, must be a schema present in the catalog.
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "but Publish datatype must be a schema present in the\n   catalog",
+    );
+  });
+
+  it("caps clarifying questions, claims, and pending tools", () => {
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "Ask at most one clarifying question per request",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "a wrong\n  guess costs one click; a question costs a round trip",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      'Write "verified"/"已确认" only about a topic or field quoted from a tool result in this turn.',
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "If a tool has not returned, say so and retry once",
+    );
+  });
+
+  it("answers in the language of the user's own messages", () => {
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "Reply in the language of the user's own messages",
+    );
+    expect(LOCAL_AGENT_SYSTEM_PROMPT).toContain(
+      "once the user has written Chinese, keep answering in Chinese",
+    );
   });
 });
 
@@ -254,6 +334,64 @@ describe("summarizeWorkspace", () => {
     expect(summary.indexOf("do not call vtd_search")).toBeLessThan(
       summary.indexOf("Topics by schema"),
     );
+  });
+
+  it("reports the source kind from the runtime capabilities", () => {
+    const recording = summarizeWorkspace({
+      topics: [{ name: "/a", schemaName: "pkg/Type" }],
+      datatypes: new Map(),
+      capabilities: ["playbackControl", "setSpeed"],
+    });
+    expect(recording).toContain(
+      "Source kind: recording (read_messages/search_messages/playback_control available)",
+    );
+    expect(recording).not.toContain("Source kind: live");
+
+    const live = summarizeWorkspace({
+      topics: [{ name: "/a", schemaName: "pkg/Type" }],
+      datatypes: new Map(),
+      capabilities: ["setSpeed"],
+    });
+    expect(live).toContain("Source kind: live (messages cannot be read or searched)");
+    expect(live).not.toContain("Source kind: recording");
+
+    // Capabilities absent (older workspace tools) produce no Source kind line at all.
+    const legacy = summarizeWorkspace({
+      topics: [{ name: "/a", schemaName: "pkg/Type" }],
+      datatypes: new Map(),
+    });
+    expect(legacy).not.toContain("Source kind:");
+  });
+
+  it("warns about slash-less topic names before the schema listing", () => {
+    const summary = summarizeWorkspace({
+      topics: [
+        { name: "odometry", schemaName: "pkg/Odometry" },
+        { name: "lowlevel/low_state", schemaName: "pkg/LowState" },
+        { name: "/bms_state", schemaName: "pkg/Bms" },
+      ],
+      datatypes: new Map(),
+    });
+    expect(summary).toContain(
+      'Note: 2 topic names have no leading slash (e.g. "odometry") — use them verbatim; never add "/".',
+    );
+    expect(summary.indexOf("Note: 2 topic names")).toBeLessThan(
+      summary.indexOf("Topics by schema:"),
+    );
+  });
+
+  it("honors an explicit byte budget for the summary", () => {
+    const topics = Array.from({ length: 200 }, (_unused, index) => ({
+      name: `/topic/${String(index)}`,
+      schemaName: "pkg/Type",
+    }));
+    const summary = summarizeWorkspace({ topics, datatypes: new Map() }, undefined, {
+      maxBytes: 256,
+    });
+    expect(new TextEncoder().encode(summary).byteLength).toBeLessThanOrEqual(300);
+    expect(summary).toContain("… truncated; call get_data_catalog");
+    // The early loaded-state line survives end-truncation even under a small budget.
+    expect(summary).toContain("Data is already loaded — do not call vtd_search");
   });
 
   it("keeps the no-vtd_search instruction when the summary is truncated (B5)", () => {

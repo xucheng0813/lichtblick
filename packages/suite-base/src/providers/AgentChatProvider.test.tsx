@@ -26,6 +26,7 @@ import {
 import { computeLayoutFingerprint } from "@lichtblick/suite-base/services/agent/layoutDiff";
 import { useLocalAgentClient } from "@lichtblick/suite-base/services/agent/localAgentClient";
 import type { AgentConversationPersistence } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
+import { registerTrustedProposal } from "@lichtblick/suite-base/services/agent/proposalTrust";
 import type {
   AgentEvent,
   IAgentClient,
@@ -267,11 +268,16 @@ async function populateMessagesThroughOrchestrator(
 function makeWrapper(
   client: IAgentClient,
   options: {
-    onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
+    onApplyProposal?: (
+      proposal: LayoutProposal,
+      signal: AbortSignal,
+      options: { installedPanelTypes?: ReadonlySet<string> },
+    ) => Promise<void>;
     onGetVtdTopics?: (id: string) => Promise<Record<string, number>>;
     onLoadVtdRecord?: (id: string) => Promise<void>;
     onSliceVtdRecord?: AgentChatState["actions"]["sliceVtdRecord"];
     onOpenDataSource?: (urls: string[], sessionId?: string) => void;
+    getInstalledPanelTypes?: () => ReadonlySet<string>;
     getCurrentLayoutState?: () => { id?: string; data?: unknown } | undefined;
     getCatalog?: () => { topics: readonly unknown[]; datatypes: ReadonlyMap<string, unknown> };
     subscribeToLayoutChanges?: (listener: () => void) => () => void;
@@ -289,6 +295,7 @@ function makeWrapper(
         enabled={options.enabled}
         getCatalog={options.getCatalog}
         getCurrentLayoutState={options.getCurrentLayoutState}
+        getInstalledPanelTypes={options.getInstalledPanelTypes}
         onApplyProposal={options.onApplyProposal}
         onGetVtdTopics={options.onGetVtdTopics}
         onLoadVtdRecord={options.onLoadVtdRecord}
@@ -2310,7 +2317,9 @@ describe("AgentChatProvider", () => {
     await act(async () => {
       await result.current.actions.applyProposal();
     });
-    expect(onApplyProposal).toHaveBeenCalledWith(secondProposal, expect.any(AbortSignal));
+    expect(onApplyProposal).toHaveBeenCalledWith(secondProposal, expect.any(AbortSignal), {
+      installedPanelTypes: undefined,
+    });
     expect(result.current.pendingProposal).toBeUndefined();
 
     act(() => {
@@ -2367,7 +2376,9 @@ describe("AgentChatProvider", () => {
     await act(async () => {
       await Promise.all([firstApply, secondApply]);
     });
-    expect(onApplyProposal).toHaveBeenCalledWith(proposal, expect.any(AbortSignal));
+    expect(onApplyProposal).toHaveBeenCalledWith(proposal, expect.any(AbortSignal), {
+      installedPanelTypes: undefined,
+    });
     expect(result.current.pendingProposal).toBeUndefined();
   });
 
@@ -2450,5 +2461,1041 @@ describe("AgentChatProvider", () => {
       await expect(send).rejects.toThrow("Invalid layout proposal");
     });
     expect(result.current.pendingProposal).toBeUndefined();
+  });
+
+  it("fails the open tool card of a request whose proposal is invalid", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("propose");
+      void send.catch(() => {});
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    act(() => {
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-1",
+        requestId,
+        seq: 2,
+        toolRun: { id: "tool-propose", name: "propose_layout", status: "running" },
+      });
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-1",
+        requestId,
+        seq: 3,
+        proposal: { name: "bad", data: { layout: "Unknown!panel" } },
+      });
+    });
+    await act(async () => {
+      await expect(send).rejects.toThrow("propose_layout: Invalid layout proposal");
+    });
+    expect(result.current.status).toBe("error");
+    expect(result.current.error).toContain("propose_layout: Invalid layout proposal");
+
+    // Late events for the failed request are dropped: the terminal tool-update must not
+    // resurrect the running card.
+    act(() => {
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-1",
+        requestId,
+        seq: 4,
+        toolRun: { id: "tool-propose", name: "propose_layout", status: "succeeded" },
+      });
+      harness.emit({ type: "done", requestId, seq: 5 });
+    });
+    const message = result.current.messages.find((m) => m.id === "assistant-1");
+    expect(message?.toolRuns?.[0]).toMatchObject({
+      id: "tool-propose",
+      status: "failed",
+      error: expect.stringContaining("Invalid layout proposal"),
+    });
+  });
+
+  it("fails only the tool runs of the failed request, leaving concurrent requests untouched", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.actions.sendMessage("first");
+      second = result.current.actions.sendMessage("second");
+      void first.catch(() => {});
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(2);
+    });
+    const firstRequestId = requestIdAt(harness.client, 0);
+    const secondRequestId = requestIdAt(harness.client, 1);
+
+    act(() => {
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-first",
+        requestId: firstRequestId,
+        seq: 1,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-first",
+        requestId: firstRequestId,
+        seq: 2,
+        toolRun: { id: "tool-first", name: "propose_layout", status: "running" },
+      });
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-second",
+        requestId: secondRequestId,
+        seq: 3,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-second",
+        requestId: secondRequestId,
+        seq: 4,
+        toolRun: { id: "tool-second", name: "search", status: "running" },
+      });
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-first",
+        requestId: firstRequestId,
+        seq: 5,
+        proposal: { name: "bad", data: { layout: "Unknown!panel" } },
+      });
+    });
+    await act(async () => {
+      await expect(first).rejects.toThrow("propose_layout: Invalid layout proposal");
+    });
+
+    const firstMessage = result.current.messages.find((m) => m.id === "assistant-first");
+    const secondMessage = result.current.messages.find((m) => m.id === "assistant-second");
+    expect(firstMessage?.toolRuns?.[0]).toMatchObject({
+      id: "tool-first",
+      status: "failed",
+    });
+    expect(secondMessage?.toolRuns?.[0]).toMatchObject({
+      id: "tool-second",
+      status: "running",
+    });
+
+    // The concurrent request completes normally.
+    act(() => {
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-second",
+        requestId: secondRequestId,
+        seq: 6,
+        toolRun: { id: "tool-second", name: "search", status: "succeeded" },
+      });
+      harness.emit({ type: "done", requestId: secondRequestId, seq: 7 });
+    });
+    await act(async () => {
+      await second;
+    });
+    expect(
+      result.current.messages.find((m) => m.id === "assistant-second")?.toolRuns?.[0],
+    ).toMatchObject({ id: "tool-second", status: "succeeded" });
+  });
+
+  it("accepts an extension panel proposal through the host panel-type snapshot", async () => {
+    const harness = createClientHarness();
+    const getInstalledPanelTypes = jest.fn(() => new Set(["Acme.Panel"]));
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, { getInstalledPanelTypes }),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("extension");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    const proposal: LayoutProposal = {
+      name: "Extension",
+      data: {
+        configById: { "Acme.Panel!x": {} },
+        globalVariables: {},
+        layout: "Acme.Panel!x",
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-1",
+        proposal,
+        requestId,
+        seq: 1,
+      });
+    });
+    expect(result.current.pendingProposal).toEqual(proposal);
+    expect(getInstalledPanelTypes).toHaveBeenCalled();
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 2 });
+    });
+    await act(async () => {
+      await send;
+    });
+  });
+
+  it("rejects an extension panel proposal without the host panel-type snapshot", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("extension");
+      void send.catch(() => {});
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+        proposal: {
+          name: "Extension",
+          data: {
+            configById: { "Acme.Panel!x": {} },
+            globalVariables: {},
+            layout: "Acme.Panel!x",
+            playbackConfig: { speed: 1 },
+            userNodes: {},
+          },
+        },
+      });
+    });
+    await act(async () => {
+      await expect(send).rejects.toThrow("propose_layout: Invalid layout proposal");
+    });
+    expect(result.current.pendingProposal).toBeUndefined();
+  });
+
+  it("fails every non-terminal tool run of the failed request's message", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("multi-tool");
+      void send.catch(() => {});
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    act(() => {
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-1",
+        requestId,
+        seq: 2,
+        toolRun: { id: "tool-a", name: "propose_layout", status: "running" },
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-1",
+        requestId,
+        seq: 3,
+        toolRun: { id: "tool-b", name: "search", status: "queued" },
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-1",
+        requestId,
+        seq: 4,
+        toolRun: { id: "tool-c", name: "load_skill", status: "succeeded" },
+      });
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-1",
+        requestId,
+        seq: 5,
+        proposal: { name: "bad", data: { layout: "Unknown!panel" } },
+      });
+    });
+    await act(async () => {
+      await expect(send).rejects.toThrow("propose_layout: Invalid layout proposal");
+    });
+
+    const message = result.current.messages.find((m) => m.id === "assistant-1");
+    expect(message?.toolRuns).toEqual([
+      expect.objectContaining({ id: "tool-a", status: "failed" }),
+      expect.objectContaining({ id: "tool-b", status: "failed" }),
+      expect.objectContaining({ id: "tool-c", status: "succeeded" }),
+    ]);
+  });
+
+  it("fails the queued proposal message's tools when its request fails", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.actions.sendMessage("first");
+      second = result.current.actions.sendMessage("second");
+      void second.catch(() => {});
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(2);
+    });
+    const firstRequestId = requestIdAt(harness.client, 0);
+    const secondRequestId = requestIdAt(harness.client, 1);
+
+    act(() => {
+      // The first request's accepted proposal occupies the pending slot.
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-first",
+        requestId: firstRequestId,
+        seq: 1,
+        proposal: validProposal("First"),
+      });
+      // The second request's proposal gets queued behind it.
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-second",
+        requestId: secondRequestId,
+        seq: 2,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-second",
+        requestId: secondRequestId,
+        seq: 3,
+        toolRun: { id: "tool-second", name: "propose_layout", status: "running" },
+      });
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-second",
+        requestId: secondRequestId,
+        seq: 4,
+        proposal: validProposal("Second"),
+      });
+    });
+    expect(result.current.pendingProposal?.name).toBe("First");
+
+    act(() => {
+      harness.emit({ type: "error", error: "second failed", requestId: secondRequestId, seq: 5 });
+    });
+    await act(async () => {
+      await expect(second).rejects.toThrow("second failed");
+    });
+
+    const secondMessage = result.current.messages.find((m) => m.id === "assistant-second");
+    expect(secondMessage?.toolRuns?.[0]).toMatchObject({
+      id: "tool-second",
+      status: "failed",
+    });
+    // The first request is unaffected: its proposal stays pending.
+    expect(result.current.pendingProposal?.name).toBe("First");
+
+    act(() => {
+      harness.emit({ type: "done", requestId: firstRequestId, seq: 6 });
+    });
+    await act(async () => {
+      await first;
+    });
+  });
+
+  it("drops late events after a cancelled request without attribution or crashes", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("cancelled");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    act(() => {
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-1",
+        requestId,
+        seq: 2,
+        toolRun: { id: "tool-1", name: "search", status: "running" },
+      });
+      // Enter the waiting-for-catalog state so cancelWaiting targets this request.
+      harness.emit({
+        type: "open-data-source",
+        messageId: "assistant-1",
+        requestId,
+        seq: 3,
+        urls: ["https://example.test/cancel"],
+      });
+    });
+    act(() => {
+      result.current.actions.cancelWaiting();
+    });
+    await act(async () => {
+      await send;
+    });
+    const messagesBefore = result.current.messages;
+
+    act(() => {
+      // Late events for the cancelled request must be dropped: no crash, no attribution, no
+      // message resurrection.
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-late",
+        requestId,
+        seq: 4,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-late",
+        requestId,
+        seq: 5,
+        toolRun: { id: "tool-late", name: "search", status: "running" },
+      });
+      harness.emit({
+        type: "token",
+        messageId: "assistant-late",
+        requestId,
+        seq: 6,
+        delta: "late",
+      });
+      harness.emit({ type: "done", requestId, seq: 7 });
+    });
+    expect(result.current.messages).toEqual(messagesBefore);
+    expect(result.current.status).toBe("idle");
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it("cleans up the request ownership mapping across rounds", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+
+    // Several completed rounds: every round attributes a message to its request and ends with
+    // done, which must release the ownership mapping. The subscription seq is shared across
+    // rounds, so the sequence keeps increasing.
+    let seq = 0;
+    for (let round = 0; round < 3; round++) {
+      let send!: Promise<void>;
+      act(() => {
+        send = result.current.actions.sendMessage(`round ${round}`);
+      });
+      await waitFor(() => {
+        expect(harness.client.sendMessage).toHaveBeenCalledTimes(round + 1);
+      });
+      const requestId = requestIdAt(harness.client, round);
+      const roundEvents: AgentEvent[] = [
+        { type: "message-start", messageId: `assistant-${round}`, requestId, seq: ++seq },
+        {
+          type: "tool-update",
+          messageId: `assistant-${round}`,
+          requestId,
+          seq: ++seq,
+          toolRun: { id: `tool-${round}`, name: "search", status: "running" },
+        },
+        {
+          type: "tool-update",
+          messageId: `assistant-${round}`,
+          requestId,
+          seq: ++seq,
+          toolRun: { id: `tool-${round}`, name: "search", status: "succeeded" },
+        },
+        { type: "done", requestId, seq: ++seq },
+      ];
+      act(() => {
+        for (const event of roundEvents) {
+          harness.emit(event);
+        }
+      });
+      await act(async () => {
+        await send;
+      });
+    }
+
+    // A later failing request must only fail its own message's tools: stale ownership entries
+    // from the completed rounds would break this isolation.
+    let failing!: Promise<void>;
+    act(() => {
+      failing = result.current.actions.sendMessage("failing");
+      void failing.catch(() => {});
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(4);
+    });
+    const failingRequestId = requestIdAt(harness.client, 3);
+    act(() => {
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-failing",
+        requestId: failingRequestId,
+        seq: ++seq,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-failing",
+        requestId: failingRequestId,
+        seq: ++seq,
+        toolRun: { id: "tool-failing", name: "propose_layout", status: "running" },
+      });
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-failing",
+        requestId: failingRequestId,
+        seq: ++seq,
+        proposal: { name: "bad", data: { layout: "Unknown!panel" } },
+      });
+    });
+    await act(async () => {
+      await expect(failing).rejects.toThrow("propose_layout: Invalid layout proposal");
+    });
+    expect(
+      result.current.messages.find((m) => m.id === "assistant-failing")?.toolRuns?.[0],
+    ).toMatchObject({ id: "tool-failing", status: "failed" });
+    // Earlier rounds' tool cards keep their terminal succeeded status.
+    for (let round = 0; round < 3; round++) {
+      expect(
+        result.current.messages.find((m) => m.id === `assistant-${round}`)?.toolRuns?.[0],
+      ).toMatchObject({ id: `tool-${round}`, status: "succeeded" });
+    }
+  });
+
+  it("fails the tool runs of every assistant message of the failed request", async () => {
+    const harness = createClientHarness();
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("multi-message");
+      void send.catch(() => {});
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    act(() => {
+      // One request emitting into two assistant messages, each with a running tool.
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-1",
+        requestId,
+        seq: 2,
+        toolRun: { id: "tool-a", name: "search", status: "running" },
+      });
+      harness.emit({
+        type: "message-start",
+        messageId: "assistant-2",
+        requestId,
+        seq: 3,
+      });
+      harness.emit({
+        type: "tool-update",
+        messageId: "assistant-2",
+        requestId,
+        seq: 4,
+        toolRun: { id: "tool-b", name: "propose_layout", status: "running" },
+      });
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-2",
+        requestId,
+        seq: 5,
+        proposal: { name: "bad", data: { layout: "Unknown!panel" } },
+      });
+    });
+    await act(async () => {
+      await expect(send).rejects.toThrow("propose_layout: Invalid layout proposal");
+    });
+
+    expect(
+      result.current.messages.find((m) => m.id === "assistant-1")?.toolRuns?.[0],
+    ).toMatchObject({ id: "tool-a", status: "failed" });
+    expect(
+      result.current.messages.find((m) => m.id === "assistant-2")?.toolRuns?.[0],
+    ).toMatchObject({ id: "tool-b", status: "failed" });
+  });
+
+  it("takes one host snapshot per proposal event and reuses it for mode recompute and apply", async () => {
+    const harness = createClientHarness();
+    const getInstalledPanelTypes = jest
+      .fn<ReadonlySet<string>, []>()
+      .mockReturnValueOnce(new Set(["Acme.Panel"]))
+      .mockReturnValue(new Set());
+    const onApplyProposal = jest.fn().mockResolvedValue(undefined);
+    const currentLayoutData = {
+      configById: { "Acme.Panel!x": { customSetting: true } },
+      globalVariables: {},
+      layout: "Acme.Panel!x",
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    let layoutChangeListener: (() => void) | undefined;
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, {
+        getInstalledPanelTypes,
+        onApplyProposal,
+        getCurrentLayoutState: () => ({ id: "layout-1", data: currentLayoutData }),
+        getCatalog: () => ({ topics: [], datatypes: new Map() }),
+        subscribeToLayoutChanges: (listener) => {
+          layoutChangeListener = listener;
+          return () => {
+            layoutChangeListener = undefined;
+          };
+        },
+      }),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("snapshot");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    const proposal: LayoutProposal = {
+      name: "Extension",
+      baseLayoutId: "layout-1",
+      baseFingerprint: computeLayoutFingerprint(currentLayoutData),
+      data: {
+        configById: {
+          "Acme.Panel!x": { customSetting: true },
+          "Gauge!battery": { path: "/battery" },
+        },
+        globalVariables: {},
+        layout: {
+          direction: "column",
+          first: "Acme.Panel!x",
+          second: "Gauge!battery",
+        },
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+        proposal,
+      });
+    });
+    // Validation and the initial mode computation used the single snapshot: the extension
+    // panel was accepted and the proposal shows incremental mode.
+    expect(result.current.pendingProposal).toEqual(proposal);
+    expect(result.current.pendingProposalMode).toEqual({ kind: "incremental", newPanelCount: 1 });
+    expect(getInstalledPanelTypes).toHaveBeenCalledTimes(1);
+
+    // A layout change recomputes the mode: still the stored snapshot, not a new getter call
+    // (the getter's next return value would be the empty set).
+    act(() => {
+      layoutChangeListener?.();
+    });
+    expect(result.current.pendingProposalMode).toEqual({ kind: "incremental", newPanelCount: 1 });
+    expect(getInstalledPanelTypes).toHaveBeenCalledTimes(1);
+
+    // Apply reuses the stored snapshot: the extension panel passes validation even though the
+    // getter would now return an empty set.
+    let applying!: Promise<void>;
+    act(() => {
+      applying = result.current.actions.applyProposal();
+    });
+    await act(async () => {
+      await applying;
+    });
+    expect(onApplyProposal).toHaveBeenCalledWith(
+      proposal,
+      expect.any(AbortSignal),
+      { installedPanelTypes: new Set(["Acme.Panel"]) },
+    );
+    expect(getInstalledPanelTypes).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 2 });
+    });
+    await act(async () => {
+      await send;
+    });
+  });
+
+  it("re-snapshots per proposal event: an emptied inventory rejects a later proposal", async () => {
+    const harness = createClientHarness();
+    const getInstalledPanelTypes = jest
+      .fn<ReadonlySet<string>, []>()
+      .mockReturnValueOnce(new Set(["Acme.Panel"]))
+      .mockReturnValue(new Set());
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, { getInstalledPanelTypes }),
+    });
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.actions.sendMessage("first");
+      second = result.current.actions.sendMessage("second");
+      void second.catch(() => {});
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(2);
+    });
+    const firstRequestId = requestIdAt(harness.client, 0);
+    const secondRequestId = requestIdAt(harness.client, 1);
+    const extensionProposal: LayoutProposal = {
+      name: "Extension",
+      data: {
+        configById: { "Acme.Panel!x": {} },
+        globalVariables: {},
+        layout: "Acme.Panel!x",
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-first",
+        requestId: firstRequestId,
+        seq: 1,
+        proposal: extensionProposal,
+      });
+    });
+    expect(result.current.pendingProposal).toEqual(extensionProposal);
+    expect(getInstalledPanelTypes).toHaveBeenCalledTimes(1);
+
+    // The second proposal event snapshots again and gets the empty set: rejected.
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-second",
+        requestId: secondRequestId,
+        seq: 2,
+        proposal: extensionProposal,
+      });
+    });
+    await act(async () => {
+      await expect(second).rejects.toThrow("propose_layout: Invalid layout proposal");
+    });
+    expect(getInstalledPanelTypes).toHaveBeenCalledTimes(2);
+    // The first request is unaffected.
+    expect(result.current.pendingProposal).toEqual(extensionProposal);
+
+    act(() => {
+      harness.emit({ type: "done", requestId: firstRequestId, seq: 3 });
+    });
+    await act(async () => {
+      await first;
+    });
+  });
+
+  it("reuses the trusted local snapshot for a registered proposal without calling the host", async () => {
+    const harness = createClientHarness();
+    const getInstalledPanelTypes = jest.fn(() => new Set<string>());
+    const getCatalog = jest.fn(() => ({
+      topics: [{ name: "/camera", schemaName: "sensor_msgs/Image" }],
+      datatypes: new Map([["sensor_msgs/Image", { definitions: [] }]]),
+    }));
+    const onApplyProposal = jest.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, { getInstalledPanelTypes, getCatalog, onApplyProposal }),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("trusted");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    const proposal: LayoutProposal = {
+      name: "Extension",
+      data: {
+        configById: { "Acme.Panel!x": {} },
+        globalVariables: {},
+        layout: "Acme.Panel!x",
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    // The local orchestrator registered this exact object before emitting it.
+    registerTrustedProposal(proposal, {
+      installedPanelTypes: new Set(["Acme.Panel"]),
+      catalogChecked: true,
+    });
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+        proposal,
+      });
+    });
+    expect(result.current.pendingProposal).toEqual(proposal);
+    // Trusted proposals never re-query the host snapshot or the catalog.
+    expect(getInstalledPanelTypes).not.toHaveBeenCalled();
+    expect(getCatalog).not.toHaveBeenCalled();
+
+    let applying!: Promise<void>;
+    act(() => {
+      applying = result.current.actions.applyProposal();
+    });
+    await act(async () => {
+      await applying;
+    });
+    expect(onApplyProposal).toHaveBeenCalledWith(
+      proposal,
+      expect.any(AbortSignal),
+      { installedPanelTypes: new Set(["Acme.Panel"]) },
+    );
+    expect(getInstalledPanelTypes).not.toHaveBeenCalled();
+
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 2 });
+    });
+    await act(async () => {
+      await send;
+    });
+  });
+
+  it("catalog-checks an unregistered remote proposal with one host snapshot", async () => {
+    const harness = createClientHarness();
+    const getInstalledPanelTypes = jest.fn(() => new Set<string>());
+    const getCatalog = jest.fn(() => ({
+      topics: [{ name: "/camera", schemaName: "sensor_msgs/Image" }],
+      datatypes: new Map([["sensor_msgs/Image", { definitions: [] }]]),
+    }));
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, { getInstalledPanelTypes, getCatalog }),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("remote");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    const proposal: LayoutProposal = {
+      name: "Camera",
+      data: {
+        configById: { "Image!cam": { imageMode: { imageTopic: "/camera" } } },
+        globalVariables: {},
+        layout: "Image!cam",
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+        proposal,
+      });
+    });
+    expect(result.current.pendingProposal).toEqual(proposal);
+    // Remote proposals take exactly one host snapshot and run the provider-boundary catalog
+    // check once.
+    expect(getInstalledPanelTypes).toHaveBeenCalledTimes(1);
+    expect(getCatalog).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 2 });
+    });
+    await act(async () => {
+      await send;
+    });
+  });
+
+  it.each([
+    [
+      "unknown Image imageTopic",
+      {
+        configById: { "Image!cam": { imageMode: { imageTopic: "/nope" } } },
+        layout: "Image!cam",
+      },
+      'references unknown topic "/nope"',
+    ],
+    [
+      "unknown 3D topics key",
+      {
+        configById: { "3D!scene": { topics: { nope: {} } } },
+        layout: "3D!scene",
+      },
+      'topics["nope"] references unknown topic "nope"',
+    ],
+    [
+      "nonexistent Plot field",
+      {
+        configById: { "Plot!p": { paths: [{ value: "/camera.nope" }] } },
+        layout: "Plot!p",
+      },
+      'field "nope" does not exist',
+    ],
+  ])(
+    "rejects a remote proposal with %s and fails its open tool card",
+    async (_label, configAndLayout, errorFragment) => {
+      const harness = createClientHarness();
+      const getCatalog = jest.fn(() => ({
+        topics: [{ name: "/camera", schemaName: "sensor_msgs/Image" }],
+        datatypes: new Map([
+          ["sensor_msgs/Image", { definitions: [{ name: "data", type: "uint8" }] }],
+        ]),
+      }));
+      const { result } = renderHook(() => useAgentChat(selectState), {
+        wrapper: makeWrapper(harness.client, { getCatalog }),
+      });
+      let send!: Promise<void>;
+      act(() => {
+        send = result.current.actions.sendMessage("remote invalid");
+        void send.catch(() => {});
+      });
+      await waitFor(() => {
+        expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+      });
+      const requestId = requestIdAt(harness.client, 0);
+      act(() => {
+        harness.emit({
+          type: "message-start",
+          messageId: "assistant-1",
+          requestId,
+          seq: 1,
+        });
+        harness.emit({
+          type: "tool-update",
+          messageId: "assistant-1",
+          requestId,
+          seq: 2,
+          toolRun: { id: "tool-propose", name: "propose_layout", status: "running" },
+        });
+        harness.emit({
+          type: "layout-proposal",
+          messageId: "assistant-1",
+          requestId,
+          seq: 3,
+          proposal: {
+            name: "Remote",
+            data: {
+              ...configAndLayout,
+              globalVariables: {},
+              playbackConfig: { speed: 1 },
+              userNodes: {},
+            },
+          },
+        });
+      });
+      await act(async () => {
+        await expect(send).rejects.toThrow("propose_layout: propose_layout rejected");
+      });
+      expect(result.current.pendingProposal).toBeUndefined();
+      const message = result.current.messages.find((m) => m.id === "assistant-1");
+      expect(message?.toolRuns?.[0]).toMatchObject({
+        id: "tool-propose",
+        status: "failed",
+        error: expect.stringContaining(errorFragment),
+      });
+    },
+  );
+
+  it("accepts a remote proposal whose script output forms a valid virtual topic", async () => {
+    const harness = createClientHarness();
+    const getCatalog = jest.fn(() => ({
+      topics: [{ name: "/camera", schemaName: "sensor_msgs/Image" }],
+      datatypes: new Map([
+        ["sensor_msgs/Image", { definitions: [{ name: "data", type: "uint8" }] }],
+      ]),
+    }));
+    const { result } = renderHook(() => useAgentChat(selectState), {
+      wrapper: makeWrapper(harness.client, { getCatalog }),
+    });
+    let send!: Promise<void>;
+    act(() => {
+      send = result.current.actions.sendMessage("remote script");
+    });
+    await waitFor(() => {
+      expect(harness.client.sendMessage).toHaveBeenCalledTimes(1);
+    });
+    const requestId = requestIdAt(harness.client, 0);
+    const proposal: LayoutProposal = {
+      name: "Script",
+      data: {
+        configById: {
+          "Plot!p": { paths: [{ value: "/studio_script/calc.data" }] },
+        },
+        layout: "Plot!p",
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {
+          script1: {
+            name: "calc",
+            sourceCode:
+              'export const inputs = ["/camera"];\nexport const output = "/studio_script/calc";',
+          },
+        },
+      },
+    };
+    act(() => {
+      harness.emit({
+        type: "layout-proposal",
+        messageId: "assistant-1",
+        requestId,
+        seq: 1,
+        proposal,
+      });
+    });
+    expect(result.current.pendingProposal).toEqual(proposal);
+    expect(result.current.error).toBeUndefined();
+
+    act(() => {
+      harness.emit({ type: "done", requestId, seq: 2 });
+    });
+    await act(async () => {
+      await send;
+    });
   });
 });

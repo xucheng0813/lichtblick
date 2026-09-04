@@ -13,6 +13,7 @@ import type { LayoutData } from "@lichtblick/suite-base/context/CurrentLayoutCon
 import type { Topic } from "@lichtblick/suite-base/players/types";
 import {
   type AgentSafeLayoutData,
+  type ValidateLayoutProposalOptions,
   validateLayoutProposalData,
 } from "@lichtblick/suite-base/services/agent/layoutSchema";
 import type { CatalogSnapshot } from "@lichtblick/suite-base/services/agent/local/types";
@@ -119,7 +120,8 @@ function canonicalSerialize(value: unknown, ancestors: Set<object>): string {
  * Validates and sanitizes layout data the same way the apply path does (validate + Plot-path
  * sanitization against the loaded catalog). Returns undefined when the data is not a valid
  * AgentSafeLayoutData (e.g. a runtime layout containing extension panels outside the static
- * allowlist) — callers then treat the layout as non-incrementable.
+ * allowlist and the runtime `installedPanelTypes`) — callers then treat the layout as
+ * non-incrementable.
  *
  * CatalogSnapshot carries the same runtime shapes as the sanitizer inputs: the workspace tools
  * type the catalog as `unknown[]`/`ReadonlyMap` while the real values are `Topic[]`/`RosDatatypes`.
@@ -127,9 +129,10 @@ function canonicalSerialize(value: unknown, ancestors: Set<object>): string {
 export function sanitizeLayoutData(
   data: unknown,
   catalog: CatalogSnapshot,
+  options?: ValidateLayoutProposalOptions,
 ): AgentSafeLayoutData | undefined {
   try {
-    const validated = validateLayoutProposalData(data);
+    const validated = validateLayoutProposalData(data, options);
     return sanitizePlotPaths(
       validated,
       catalog.topics as readonly Topic[],
@@ -297,12 +300,16 @@ export function planIncrementalApply(
 /**
  * Captures the layout baseline at proposal-generation time (orchestrator side). Any failure —
  * no current layout, no catalog, or data that cannot be validated+sanitized — yields no
- * baseline, which makes the apply take the full path.
+ * baseline, which makes the apply take the full path. `installedPanelTypes` is the same host
+ * PanelCatalog snapshot the proposal validation used (one snapshot per propose_layout
+ * operation): a current layout containing runtime extension panels is only incrementable when
+ * that snapshot admits them.
  */
 export function collectLayoutBaseline(
   getCurrentLayout: (() => unknown) | undefined,
   getCurrentLayoutId: (() => string | undefined) | undefined,
   getCatalog: (() => CatalogSnapshot) | undefined,
+  installedPanelTypes?: ReadonlySet<string>,
 ): { baseLayoutId?: string; baseFingerprint?: string } {
   try {
     const data = getCurrentLayout?.();
@@ -311,7 +318,7 @@ export function collectLayoutBaseline(
     if (data == undefined || id == undefined || catalog == undefined) {
       return {};
     }
-    const sanitized = sanitizeLayoutData(data, catalog);
+    const sanitized = sanitizeLayoutData(data, catalog, { installedPanelTypes });
     if (sanitized == undefined) {
       return {};
     }
@@ -326,12 +333,14 @@ export function collectLayoutBaseline(
  * the apply path (`planIncrementalApply` — baseline id + fingerprint + structural diff incl.
  * userNodes and non-panel top-level data), so the label can never disagree with what applying
  * will do: a proposal that would fall back to a new layout (scripts added, layout edited since
- * the baseline, catalog changed) is displayed as "create a new layout".
+ * the baseline, catalog changed) is displayed as "create a new layout". `options` carries the
+ * same runtime installed-panel snapshot the apply path validates with.
  */
 export function computeProposalMode(
   proposal: LayoutProposal,
   currentLayoutState: { id?: string; data?: unknown } | undefined,
   catalog: CatalogSnapshot | undefined,
+  options?: ValidateLayoutProposalOptions,
 ): LayoutProposalMode {
   if (proposal.baseLayoutId == undefined || proposal.baseFingerprint == undefined) {
     return { kind: "new" };
@@ -340,7 +349,7 @@ export function computeProposalMode(
     // Without the current layout and catalog the apply would fall back too.
     return { kind: "new" };
   }
-  const proposalData = sanitizeLayoutData(proposal.data, catalog);
+  const proposalData = sanitizeLayoutData(proposal.data, catalog, options);
   if (proposalData == undefined) {
     return { kind: "new" };
   }
@@ -348,7 +357,7 @@ export function computeProposalMode(
     baseLayoutId: proposal.baseLayoutId,
     baseFingerprint: proposal.baseFingerprint,
     currentLayoutId: currentLayoutState.id,
-    currentLayoutData: sanitizeLayoutData(currentLayoutState.data, catalog),
+    currentLayoutData: sanitizeLayoutData(currentLayoutState.data, catalog, options),
     proposalData,
   });
   if (plan == undefined) {

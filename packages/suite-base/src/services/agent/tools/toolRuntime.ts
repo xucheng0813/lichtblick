@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (C) 2023-2026 Bayerische Motoren Werke Aktiengesellschaft (BMW AG)<lichtblick@bmwgroup.com>
 // SPDX-License-Identifier: MPL-2.0
 
+import type { Immutable } from "@lichtblick/suite";
 import type { MessagePipelineContext } from "@lichtblick/suite-base/components/MessagePipeline/types";
+import {
+  checkLayoutAgainstCatalog,
+  formatLayoutCatalogErrors,
+} from "@lichtblick/suite-base/services/agent/layoutCatalogCheck";
 import {
   validateLayoutProposal,
   type ValidatedLayoutProposal,
@@ -12,11 +17,25 @@ import {
 } from "@lichtblick/suite-base/services/agent/local/skills";
 import type { CatalogSnapshot } from "@lichtblick/suite-base/services/agent/local/types";
 import type { AgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import type { PanelInventoryEntry } from "@lichtblick/suite-base/services/agent/panelInventory";
+import {
+  buildCatalogListing,
+  CATALOG_TOOL_MAX_DESCRIBE_TOPICS,
+  CATALOG_TOOL_MAX_TOPIC_LIMIT,
+  describeTopics,
+  normalizeCatalogTopics,
+  type DescribeTopicResult,
+  type GetDataCatalogResult,
+} from "@lichtblick/suite-base/services/agent/tools/catalogTools";
 import {
   runPlaybackControlTool,
   runReadMessagesTool,
   runSearchMessagesTool,
 } from "@lichtblick/suite-base/services/agent/tools/dataQueryTools";
+import {
+  runGetCurrentLayoutTool,
+  runListPanelsTool,
+} from "@lichtblick/suite-base/services/agent/tools/workspaceStateTools";
 import type {
   LayoutProposal,
   ToolConfirmationDecision,
@@ -27,6 +46,7 @@ import type {
   VtdSearchParams,
   VtdSliceParams,
 } from "@lichtblick/suite-base/services/vtd/types";
+import type { RosDatatypes } from "@lichtblick/suite-base/types/RosDatatypes";
 
 export const TOOL_RUNTIME_MAX_RESULT_BYTES = 256 * 1024;
 
@@ -41,12 +61,19 @@ export type ToolRuntimeDeps = {
   memoryStore?: AgentMemoryStore;
   getCatalog: () => CatalogSnapshot;
   getInstalledPanelTypes: () => ReadonlySet<string>;
+  /** Runtime panel inventory for list_panels. Absent when the host does not provide one. */
+  getPanelInventory?: () => readonly PanelInventoryEntry[];
+  /** Current layout data for get_current_layout. Absent when layout access is not configured. */
+  getCurrentLayout?: () => unknown;
+  /** Id of the currently selected layout, echoed by get_current_layout. */
+  getCurrentLayoutId?: () => string | undefined;
   emitOpenDataSource: (
     request: OpenDataSourceRequest,
     signal?: AbortSignal,
   ) => Promise<void> | void;
   emitLayoutProposal: (
     proposal: ValidatedLayoutProposal,
+    installedPanelTypes: ReadonlySet<string>,
     signal?: AbortSignal,
   ) => Promise<void> | void;
   /**
@@ -194,6 +221,18 @@ function requirePositiveInteger(
   return value;
 }
 
+export function requireNoUnknownProperties(
+  input: Record<string, unknown>,
+  allowed: readonly string[],
+  toolName: string,
+): void {
+  for (const key of Object.keys(input)) {
+    if (!allowed.includes(key)) {
+      throw new Error(`${toolName} does not support property "${key}"`);
+    }
+  }
+}
+
 function optionalStringArray(
   input: Record<string, unknown>,
   property: string,
@@ -258,16 +297,6 @@ function requireUrls(
     }
   }
   return urls;
-}
-
-function normalizeCatalog(catalog: CatalogSnapshot): {
-  topics: readonly unknown[];
-  datatypes: Record<string, unknown>;
-} {
-  return {
-    topics: catalog.topics,
-    datatypes: Object.fromEntries(catalog.datatypes),
-  };
 }
 
 export function abortReason(signal: AbortSignal): Error {
@@ -652,21 +681,51 @@ export async function runGetDataCatalogTool(
   value: unknown,
   deps: ToolRuntimeDeps,
   context: ToolRuntimeContext = {},
-): Promise<{ topics: readonly unknown[]; datatypes: Record<string, unknown> }> {
+): Promise<GetDataCatalogResult> {
   const toolName = "get_data_catalog";
-  requireRecord(value, toolName);
+  const input = requireRecord(value, toolName);
+  requireNoUnknownProperties(input, ["query", "schema", "limit"], toolName);
   const catalog =
     context.catalogReady ??
     (await runDependency(() => deps.getCatalog(), context.signal));
   context.signal?.throwIfAborted();
-  return normalizeCatalog(catalog);
+  return buildCatalogListing(catalog, {
+    query: optionalString(input, "query", toolName),
+    schema: optionalString(input, "schema", toolName),
+    limit: optionalPositiveInteger(input, "limit", toolName, CATALOG_TOOL_MAX_TOPIC_LIMIT),
+  });
+}
+
+export async function runDescribeTopicTool(
+  value: unknown,
+  deps: ToolRuntimeDeps,
+  context: ToolRuntimeContext = {},
+): Promise<DescribeTopicResult> {
+  const toolName = "describe_topic";
+  const input = requireRecord(value, toolName);
+  requireNoUnknownProperties(input, ["topics", "maxDepth"], toolName);
+  const topics = optionalStringArray(input, "topics", toolName);
+  if (topics == undefined) {
+    throw new Error(`${toolName}.topics is required`);
+  }
+  if (topics.length > CATALOG_TOOL_MAX_DESCRIBE_TOPICS) {
+    throw new Error(
+      `${toolName}.topics supports at most ${CATALOG_TOOL_MAX_DESCRIBE_TOPICS} topics per call`,
+    );
+  }
+  const maxDepth = optionalPositiveInteger(input, "maxDepth", toolName, 10);
+  const catalog =
+    context.catalogReady ??
+    (await runDependency(() => deps.getCatalog(), context.signal));
+  context.signal?.throwIfAborted();
+  return describeTopics(catalog, topics, maxDepth);
 }
 
 export async function runProposeLayoutTool(
   value: unknown,
   deps: ToolRuntimeDeps,
   context: ToolRuntimeContext = {},
-): Promise<{ accepted: true; name: string }> {
+): Promise<{ accepted: true; name: string; warnings?: string[] }> {
   const toolName = "propose_layout";
   const input = requireRecord(value, toolName);
   const proposal: LayoutProposal = {
@@ -674,13 +733,50 @@ export async function runProposeLayoutTool(
     data: input.data,
     summary: optionalString(input, "summary", toolName),
   };
-  const validated = validateLayoutProposal(proposal, {
-    installedPanelTypes: deps.getInstalledPanelTypes(),
-  });
+  // One snapshot per propose_layout operation: the same Set validates the proposal and feeds
+  // the baseline the emitter captures (collectLayoutBaseline), so proposal-time decisions can
+  // never disagree with a second getter call.
+  const installedPanelTypes = deps.getInstalledPanelTypes();
+  const validated = validateLayoutProposal(proposal, { installedPanelTypes });
+
+  // Catalog check: reject proposals whose topics/paths do not resolve against the loaded data
+  // before the user ever sees a card. A catalog read failure (or an empty catalog, which
+  // checkLayoutAgainstCatalog skips) must not reject an otherwise valid proposal.
+  let catalog: CatalogSnapshot | undefined;
+  try {
+    catalog =
+      context.catalogReady ??
+      (await runDependency(() => deps.getCatalog(), context.signal));
+  } catch (error) {
+    if (context.signal?.aborted === true) {
+      throw error;
+    }
+    catalog = undefined;
+  }
+  let warnings: string[] | undefined;
+  if (catalog != undefined) {
+    const check = checkLayoutAgainstCatalog(
+      validated.data,
+      normalizeCatalogTopics(catalog.topics).map((summary) => ({
+        name: summary.name,
+        schemaName: summary.schemaName ?? undefined,
+      })),
+      catalog.datatypes as unknown as Immutable<RosDatatypes>,
+    );
+    if (check.errors.length > 0) {
+      throw new Error(formatLayoutCatalogErrors(check));
+    }
+    warnings = check.warnings.length > 0 ? check.warnings : undefined;
+  }
+
   await runDependency(async () => {
-    await deps.emitLayoutProposal(validated, context.signal);
+    await deps.emitLayoutProposal(validated, installedPanelTypes, context.signal);
   }, context.signal);
-  return { accepted: true, name: validated.name };
+  return {
+    accepted: true,
+    name: validated.name,
+    ...(warnings == undefined ? {} : { warnings }),
+  };
 }
 
 type ToolRuntimeFunction = (
@@ -705,6 +801,9 @@ export const TOOL_RUNTIME_FUNCTIONS: Readonly<
   vtd_presign: runVtdPresignTool,
   open_data_source: runOpenDataSourceTool,
   get_data_catalog: runGetDataCatalogTool,
+  describe_topic: runDescribeTopicTool,
+  list_panels: runListPanelsTool,
+  get_current_layout: runGetCurrentLayoutTool,
   propose_layout: runProposeLayoutTool,
   read_messages: runReadMessagesTool,
   search_messages: runSearchMessagesTool,

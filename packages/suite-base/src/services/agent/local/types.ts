@@ -75,6 +75,8 @@ export interface ILlmProvider {
 export type CatalogSnapshot = {
   topics: readonly unknown[];
   datatypes: ReadonlyMap<string, unknown>;
+  /** Runtime player capabilities (e.g. "playbackControl"), reported by the workspace tools. */
+  capabilities?: readonly string[];
 };
 
 export type LlmProviderName = "anthropic" | "openai-compatible";

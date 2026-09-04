@@ -28,6 +28,21 @@ export type ApplyLayoutOptions = {
    */
   baseLayoutId?: string;
   baseFingerprint?: string;
+  /**
+   * Host panel-type snapshot captured when the proposal was generated. The Agent apply path
+   * always provides it so validation uses exactly the set the proposal was accepted against;
+   * only callers without one (e.g. other UI flows) fall back to the hook's getter.
+   */
+  installedPanelTypes?: ReadonlySet<string>;
+};
+
+export type AgentWorkspaceToolsOptions = {
+  /**
+   * Host snapshot of the panel types installed in the current PanelCatalog. Callers take one
+   * snapshot per proposal/apply (the workspace integration derives this single getter from its
+   * panel inventory ref); the hook deliberately does not read the panel catalog itself.
+   */
+  getInstalledPanelTypes?: () => ReadonlySet<string>;
 };
 
 export type AgentWorkspaceTools = {
@@ -35,18 +50,21 @@ export type AgentWorkspaceTools = {
   getCatalog(): {
     topics: readonly unknown[];
     datatypes: ReadonlyMap<string, unknown>;
+    capabilities: readonly string[];
   };
   applyLayout(name: string, data: unknown, options?: ApplyLayoutOptions): Promise<void>;
   getCurrentLayout(): unknown;
   getCurrentLayoutId(): string | undefined;
 };
 
-export function useAgentWorkspaceTools(): AgentWorkspaceTools {
+export function useAgentWorkspaceTools({
+  getInstalledPanelTypes,
+}: AgentWorkspaceToolsOptions): AgentWorkspaceTools {
   const { selectSource } = usePlayerSelection();
   const layoutManager = useLayoutManager();
   const { addPanelsAtomically, getCurrentLayoutState, setSelectedLayoutId } =
     useCurrentLayoutActions();
-  const { datatypes, topics } = useDataSourceInfo();
+  const { capabilities, datatypes, topics } = useDataSourceInfo();
   const { enqueueSnackbar } = useSnackbar();
 
   const openDataSource = useCallback(
@@ -74,12 +92,16 @@ export function useAgentWorkspaceTools(): AgentWorkspaceTools {
 
   const getCatalog = useCallback(() => {
     // Reserved for protocol-v1 catalog reporting after the backend accepts the catalog payload.
-    return { topics, datatypes };
-  }, [datatypes, topics]);
+    return { capabilities, topics, datatypes };
+  }, [capabilities, datatypes, topics]);
 
   const applyLayout = useCallback(
     async (name: string, data: unknown, options?: ApplyLayoutOptions) => {
-      const validatedData = validateLayoutProposalData(data);
+      // One snapshot per apply. The Agent apply path passes the proposal-time snapshot in
+      // options; the getter fallback covers callers that have no stored snapshot.
+      const installedPanelTypes =
+        options?.installedPanelTypes ?? getInstalledPanelTypes?.();
+      const validatedData = validateLayoutProposalData(data, { installedPanelTypes });
       // 结构校验后、保存前，按已加载数据过滤 Plot paths（topic/字段链/终止类型存在性）。
       // 数据源未加载或结构构建异常时不过滤；丢弃时向用户给出摘要提示。
       const { data: sanitizedData, droppedCount } = sanitizePlotPaths(
@@ -106,7 +128,7 @@ export function useAgentWorkspaceTools(): AgentWorkspaceTools {
         currentLayoutData:
           current?.data == undefined
             ? undefined
-            : sanitizeLayoutData(current.data, { topics, datatypes }),
+            : sanitizeLayoutData(current.data, { topics, datatypes }, { installedPanelTypes }),
         proposalData: sanitizedData,
       });
       if (plan != undefined) {
@@ -130,6 +152,7 @@ export function useAgentWorkspaceTools(): AgentWorkspaceTools {
       datatypes,
       enqueueSnackbar,
       getCurrentLayoutState,
+      getInstalledPanelTypes,
       layoutManager,
       setSelectedLayoutId,
       topics,

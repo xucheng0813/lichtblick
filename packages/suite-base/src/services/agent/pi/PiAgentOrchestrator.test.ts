@@ -14,7 +14,13 @@ import {
 import type { AgentConfiguration } from "@lichtblick/suite-base/services/agent/agentSettings";
 import { computeLayoutFingerprint } from "@lichtblick/suite-base/services/agent/layoutDiff";
 import type { AgentMemoryStore } from "@lichtblick/suite-base/services/agent/memory/agentMemory";
+import type { PanelInventoryEntry } from "@lichtblick/suite-base/services/agent/panelInventory";
 import type { AgentPromptCustomization } from "@lichtblick/suite-base/services/agent/prompts/agentPrompts";
+import { takeTrustedProposal } from "@lichtblick/suite-base/services/agent/proposalTrust";
+import {
+  CATALOG_READY_MESSAGE_MAX_BYTES,
+  renderCatalogReadyMessage,
+} from "@lichtblick/suite-base/services/agent/tools/catalogTools";
 import type { AgentEvent } from "@lichtblick/suite-base/services/agent/types";
 import type { IVtdClient } from "@lichtblick/suite-base/services/vtd/types";
 
@@ -221,6 +227,33 @@ function toolStatuses(events: readonly AgentEvent[], toolRunId: string): string[
 describe("PiAgentOrchestrator", () => {
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it("keeps the catalog-ready message within its byte budget with the pinned prefix intact", () => {
+    const catalog = {
+      topics: Array.from({ length: 300 }, (_unused, index) => ({
+        name: `速度/odometry/曲线${String(index)}`,
+        schemaName: "pkg/测量数据类型",
+      })),
+      datatypes: new Map(),
+    };
+    const requestId = "request-中文-0123456789";
+
+    const message = renderCatalogReadyMessage(catalog, requestId);
+    const bytes = new TextEncoder().encode(message).byteLength;
+    expect(bytes).toBeLessThanOrEqual(CATALOG_READY_MESSAGE_MAX_BYTES);
+    // The pinned prefix survives verbatim — the byte budget only compresses the summary body.
+    expect(message.startsWith(
+      `The Lichtblick data catalog is ready for request ${requestId}: `,
+    )).toBe(true);
+    expect(message).toContain(
+      "… truncated; call get_data_catalog for the full topic list.",
+    );
+
+    // A requestId whose fixed prefix alone exceeds the budget is rejected explicitly.
+    expect(() =>
+      renderCatalogReadyMessage(catalog, "x".repeat(CATALOG_READY_MESSAGE_MAX_BYTES)),
+    ).toThrow(/catalog-ready requestId is too long/);
   });
 
   it("adapts a normal pi response and preserves text token order", async () => {
@@ -705,7 +738,7 @@ describe("PiAgentOrchestrator", () => {
       name: "Speed layout",
       summary: "Show speed",
       data: {
-        configById: { "Plot!speed": { paths: [{ value: "/speed" }] } },
+        configById: { "Plot!speed": { paths: [{ value: "/speed.data" }] } },
         layout: "Plot!speed",
         globalVariables: {},
         playbackConfig: { speed: 1 },
@@ -730,7 +763,9 @@ describe("PiAgentOrchestrator", () => {
       deps: {
         getCatalog: jest.fn().mockReturnValue({
           topics: [{ name: "/speed", schemaName: "std_msgs/msg/Float64" }],
-          datatypes: new Map([["std_msgs/msg/Float64", { definitions: [] }]]),
+          datatypes: new Map([
+            ["std_msgs/msg/Float64", { definitions: [{ name: "data", type: "float64" }] }],
+          ]),
         }),
         vtdClient: makeVtdClient(),
       },
@@ -766,6 +801,62 @@ describe("PiAgentOrchestrator", () => {
     );
     await harness.client.notifyCatalogReady(harness.sessionId, "request-open");
     expect(call).toBe(3);
+
+    await stopSubscription(harness.abortSubscription, harness.subscription);
+    harness.client.dispose();
+  });
+
+  it("blocks describe_topic in the same tool batch as open_data_source", async () => {
+    const contexts: Context[] = [];
+    let call = 0;
+    const streamFn: StreamFn = async (model, context, options) => {
+      contexts.push(context);
+      const next = [
+        toolCallsStream([
+          {
+            id: "describe-1",
+            name: "describe_topic",
+            arguments: { topics: ["/speed"] },
+          },
+          {
+            id: "open-1",
+            name: "open_data_source",
+            arguments: { urls: ["https://data.example/record-1.mcap"] },
+          },
+        ]),
+        successfulStream(["catalog loaded"]),
+        successfulStream(["done"]),
+      ][call++];
+      if (next == undefined) {
+        throw new Error("Unexpected extra pi provider round");
+      }
+      return await next(model, context, options);
+    };
+    const getCatalog = jest.fn().mockReturnValue({
+      topics: [{ name: "/speed", schemaName: "std_msgs/msg/Float64" }],
+      datatypes: new Map(),
+    });
+    const harness = await setup(streamFn, {
+      toolRuntime: makeToolRuntime({ deps: { getCatalog, vtdClient: makeVtdClient() } }),
+    });
+
+    await harness.client.sendMessage(harness.sessionId, "load and describe", "request-batch-block");
+    await harness.client.notifyCatalogReady(harness.sessionId, "request-batch-block");
+
+    // The blocked describe_topic never reached the runtime: the only getCatalog call is the
+    // catalog-ready continuation itself.
+    expect(getCatalog).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(contexts[1]?.messages)).toContain(
+      "describe_topic cannot run in the same tool batch as open_data_source; wait for catalog-ready",
+    );
+    expect(harness.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "open-data-source",
+          requestId: "request-batch-block",
+        }),
+      ]),
+    );
 
     await stopSubscription(harness.abortSubscription, harness.subscription);
     harness.client.dispose();
@@ -827,6 +918,88 @@ describe("PiAgentOrchestrator", () => {
         }),
       }),
     );
+
+    await stopSubscription(harness.abortSubscription, harness.subscription);
+    harness.client.dispose();
+  });
+
+  it("registers the tool snapshot on the emitted proposal so the provider can reuse it", async () => {
+    const extensionType = "Acme Extension.Custom Panel";
+    const panelId = `${extensionType}!main`;
+    const proposal = {
+      name: "Extension layout",
+      data: {
+        configById: { [panelId]: { customSetting: true } },
+        layout: panelId,
+        globalVariables: {},
+        playbackConfig: { speed: 1 },
+        userNodes: {},
+      },
+    };
+    const currentLayoutData = {
+      configById: { [panelId]: { customSetting: true } },
+      layout: panelId,
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    let call = 0;
+    const streamFn: StreamFn = async (model, context, options) => {
+      const next = [
+        toolCallStream("layout-1", "propose_layout", proposal),
+        successfulStream(["The layout is ready."]),
+      ][call++];
+      if (next == undefined) {
+        throw new Error("Unexpected extra pi provider round");
+      }
+      return await next(model, context, options);
+    };
+    // The inventory changes around the emit: only the snapshot taken by the single tool-side
+    // getter call is authoritative; later calls return the emptied inventory.
+    const getPanelInventory = jest
+      .fn<readonly PanelInventoryEntry[], []>()
+      .mockReturnValueOnce([
+        { type: extensionType, title: "Custom", description: "Ext", source: "extension" },
+      ])
+      .mockReturnValueOnce([
+        { type: extensionType, title: "Custom", description: "Ext", source: "extension" },
+      ])
+      .mockReturnValue([]);
+    const harness = await setup(streamFn, {
+      getCurrentLayout: () => currentLayoutData,
+      getCurrentLayoutId: () => "layout-1",
+      getPanelInventory,
+      toolRuntime: makeToolRuntime({
+        deps: {
+          getCatalog: jest.fn().mockReturnValue({
+            topics: [],
+            datatypes: new Map(),
+          }),
+          vtdClient: makeVtdClient(),
+        },
+      }),
+    });
+
+    await harness.client.sendMessage(harness.sessionId, "add extension", "request-trust");
+
+    const layoutEvent = harness.events.find((event) => event.type === "layout-proposal");
+    expect(layoutEvent).toBeDefined();
+    // The baseline only exists when the proposal-time snapshot admitted the extension panel in
+    // the current layout: a second getter call (empty inventory) would have produced neither.
+    expect(layoutEvent).toEqual(
+      expect.objectContaining({
+        type: "layout-proposal",
+        proposal: expect.objectContaining({
+          baseLayoutId: "layout-1",
+          baseFingerprint: computeLayoutFingerprint(currentLayoutData),
+        }),
+      }),
+    );
+    // The exact emitted proposal object carries the trust entry the provider will consume.
+    expect(takeTrustedProposal(layoutEvent!.proposal)).toEqual({
+      installedPanelTypes: new Set([extensionType]),
+      catalogChecked: true,
+    });
 
     await stopSubscription(harness.abortSubscription, harness.subscription);
     harness.client.dispose();

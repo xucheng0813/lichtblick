@@ -17,6 +17,7 @@ import { v4 as uuidv4 } from "uuid";
 import { createStore, type StoreApi } from "zustand";
 
 import Logger from "@lichtblick/log";
+import type { Immutable } from "@lichtblick/suite";
 import {
   AgentChatContext,
   type AgentChatProfileOption,
@@ -24,13 +25,19 @@ import {
   type VtdSliceProgress,
   type VtdSliceRequest,
 } from "@lichtblick/suite-base/context/AgentChatContext";
+import type { Topic } from "@lichtblick/suite-base/players/types";
 import {
   AgentStreamProtocolError,
   AgentStreamSizeLimitError,
 } from "@lichtblick/suite-base/services/agent/AgentClient";
+import {
+  checkLayoutAgainstCatalog,
+  formatLayoutCatalogErrors,
+} from "@lichtblick/suite-base/services/agent/layoutCatalogCheck";
 import { computeProposalMode } from "@lichtblick/suite-base/services/agent/layoutDiff";
 import { validateLayoutProposal } from "@lichtblick/suite-base/services/agent/layoutSchema";
 import type { AgentConversationPersistence } from "@lichtblick/suite-base/services/agent/memory/agentConversationPersistence";
+import { takeTrustedProposal } from "@lichtblick/suite-base/services/agent/proposalTrust";
 import type {
   AgentEvent,
   ChatMessage,
@@ -40,6 +47,7 @@ import type {
   ToolRun,
   ToolRunStatus,
 } from "@lichtblick/suite-base/services/agent/types";
+import type { RosDatatypes } from "@lichtblick/suite-base/types/RosDatatypes";
 
 const log = Logger.getLogger(__filename);
 
@@ -59,7 +67,11 @@ type AgentChatProviderProps = PropsWithChildren<{
   selectedProfileName?: string;
   onSelectProfile?: (profileId: string) => void;
   persistence?: AgentConversationPersistence;
-  onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
+  onApplyProposal?: (
+    proposal: LayoutProposal,
+    signal: AbortSignal,
+    options: { installedPanelTypes?: ReadonlySet<string> },
+  ) => Promise<void>;
   onGetVtdTopics?: (id: string) => Promise<Record<string, number>>;
   onLoadVtdRecord?: (id: string) => Promise<void>;
   onSliceVtdRecord?: (
@@ -67,6 +79,11 @@ type AgentChatProviderProps = PropsWithChildren<{
     onProgress?: (progress: VtdSliceProgress) => void,
   ) => Promise<void>;
   onOpenDataSource?: (urls: string[], sessionId?: string) => void;
+  /**
+   * Host snapshot of the panel types installed in the current PanelCatalog. Extends the static
+   * allowlist when validating layout proposals and when computing the proposal display mode.
+   */
+  getInstalledPanelTypes?: () => ReadonlySet<string>;
   /**
    * Current layout snapshot (id + data) used to compute the proposal card display mode with the
    * same strict incremental decision as the apply path.
@@ -89,7 +106,11 @@ type AgentChatProviderProps = PropsWithChildren<{
 
 type CallbackRefs = {
   selectedProfileName?: string;
-  onApplyProposal?: (proposal: LayoutProposal, signal: AbortSignal) => Promise<void>;
+  onApplyProposal?: (
+    proposal: LayoutProposal,
+    signal: AbortSignal,
+    options: { installedPanelTypes?: ReadonlySet<string> },
+  ) => Promise<void>;
   onGetVtdTopics?: (id: string) => Promise<Record<string, number>>;
   onLoadVtdRecord?: (id: string) => Promise<void>;
   onSliceVtdRecord?: (
@@ -97,6 +118,7 @@ type CallbackRefs = {
     onProgress?: (progress: VtdSliceProgress) => void,
   ) => Promise<void>;
   onOpenDataSource?: (urls: string[], sessionId?: string) => void;
+  getInstalledPanelTypes?: () => ReadonlySet<string>;
   getCurrentLayoutState?: () => { id?: string; data?: unknown } | undefined;
   getCatalog?: () => { topics: readonly unknown[]; datatypes: ReadonlyMap<string, unknown> };
   subscribeToLayoutChanges?: (listener: () => void) => () => void;
@@ -107,6 +129,13 @@ type ProposalRecord = {
   messageId: string;
   proposal: LayoutProposal;
   requestId: string;
+  /**
+   * Host panel-type snapshot captured when this proposal event was received. One proposal =
+   * one snapshot: mode computation (initial and every recompute) and apply all reuse this Set
+   * instead of calling the host getter again. Always originates from the host getter, never
+   * from the (untrusted) proposal payload.
+   */
+  installedPanelTypes: ReadonlySet<string> | undefined;
 };
 
 type Deferred<T> = {
@@ -132,6 +161,12 @@ type SendWaiter = {
   resolve: () => void;
   settled: boolean;
   failure?: Error;
+  /**
+   * Every assistant messageId seen for this request. Shared by reference with the
+   * messageIdsByRequest ownership map so request failures can address exactly those messages'
+   * still-running tool cards.
+   */
+  messageIds: Set<string>;
   watchdog?: ReturnType<typeof setTimeout>;
 };
 
@@ -156,6 +191,8 @@ type AgentChatRuntime = {
     persistence?: AgentConversationPersistence,
     options?: { clearConversation?: boolean },
   ) => () => void;
+  /** Host panel-type snapshot stored with the currently pending proposal (undefined when none). */
+  getPendingProposalSnapshot: () => ReadonlySet<string> | undefined;
   store: StoreApi<AgentChatState>;
 };
 
@@ -252,6 +289,38 @@ function upsertToolRun(toolRuns: ToolRun[] | undefined, nextToolRun: ToolRun): T
   return runs.map((run, index) => (index === runIndex ? reduceToolRun(run, nextToolRun) : run));
 }
 
+/**
+ * Marks every non-terminal tool run of the addressed assistant messages as failed. Used by
+ * failRequest so a request that fails validation cannot leave a tool card stuck in running
+ * forever: late terminal events for that request are dropped by the terminal-request gate, so
+ * the card has no other chance to settle. Concurrent requests are untouched (only failSession
+ * fails everything). Returns the original messages array reference when nothing changed.
+ */
+function failOpenToolRuns(
+  messages: ChatMessage[],
+  messageIds: ReadonlySet<string>,
+  error: Error,
+): ChatMessage[] {
+  let next = messages;
+  for (const message of next) {
+    if (!messageIds.has(message.id) || message.toolRuns == undefined) {
+      continue;
+    }
+    if (!message.toolRuns.some((run) => !TERMINAL_TOOL_STATUSES.has(run.status))) {
+      continue;
+    }
+    const toolRuns = message.toolRuns.map((run) =>
+      TERMINAL_TOOL_STATUSES.has(run.status)
+        ? run
+        : { ...run, status: "failed" as const, error: error.message },
+    );
+    next = next.map((candidate) =>
+      candidate === message ? { ...candidate, toolRuns } : candidate,
+    );
+  }
+  return next;
+}
+
 function reduceAgentEventState(
   state: AgentChatState,
   event: AgentEvent,
@@ -338,6 +407,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
   let conversationRefreshGeneration = 0;
   let nextGeneration = 0;
   let queuedProposal: ProposalRecord | undefined;
+  let pendingProposalSnapshot: ReadonlySet<string> | undefined;
   let sessionPromise: SessionPromise | undefined;
   let suspendUiPersistence = false;
   let subscription: Subscription | undefined;
@@ -346,6 +416,10 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
   const endedMessageIds = new Set<string>();
   const lastSeqByToolRun = new Map<string, number>();
   const sendWaiters = new Map<string, SendWaiter>();
+  // requestId → assistant messageIds attributed to it. Entries share their Set instance with the
+  // matching SendWaiter and outlive it, so failRequest can still look up the ownership after the
+  // waiter was settled/removed. Cleared uniformly when a request terminates.
+  const messageIdsByRequest = new Map<string, Set<string>>();
   const terminalRequestIds = new Set<string>();
   const waitingRequests = new Map<string, WaitingInfo>();
 
@@ -487,8 +561,12 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       const operation = (async () => {
         clearRecoverableError();
         try {
-          const validatedProposal = validateLayoutProposal(proposal);
-          await callbackRefs.current.onApplyProposal?.(validatedProposal, active.controller.signal);
+          const validatedProposal = validateLayoutProposal(proposal, {
+            installedPanelTypes: pendingProposalSnapshot,
+          });
+          await callbackRefs.current.onApplyProposal?.(validatedProposal, active.controller.signal, {
+            installedPanelTypes: pendingProposalSnapshot,
+          });
           if (!isActive(active)) {
             return;
           }
@@ -924,8 +1002,10 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       requestId,
       resolve: resolvePromise,
       settled: false,
+      messageIds: new Set<string>(),
     };
     sendWaiters.set(requestId, waiter);
+    messageIdsByRequest.set(requestId, waiter.messageIds);
     resetRequestWatchdog(waiter, expected);
     return waiter;
   }
@@ -1098,6 +1178,17 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
     if (waiter != undefined) {
       resetRequestWatchdog(waiter, expected);
     }
+    if (
+      requestId != undefined &&
+      event.type !== "done" &&
+      event.type !== "error"
+    ) {
+      // Attribute every assistant message a request emits into (message-start/token/
+      // message-end/tool-update/layout-proposal/open-data-source) so a later request failure can
+      // fail exactly those messages' still-running tool cards. Unknown requests are not
+      // attributed: without ownership information nothing may be failed (conservative).
+      messageIdsByRequest.get(requestId)?.add(event.messageId);
+    }
 
     store.setState((state) =>
       reduceAgentEventState(state, event, endedMessageIds, lastSeqByToolRun),
@@ -1109,19 +1200,53 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       case "message-end":
       case "tool-update":
         return;
-      case "layout-proposal":
+      case "layout-proposal": {
+        // In-process trust side channel, keyed by proposal object identity: the local
+        // orchestrator registered the snapshot it already validated with (and that catalog
+        // validation already ran tool-side). Remote clients have no entry and their payloads
+        // never carry these fields — for them, one host getter call supplies the snapshot and
+        // catalog validation runs here at the provider boundary.
+        const trusted = takeTrustedProposal(event.proposal);
+        const installedPanelTypes =
+          trusted?.installedPanelTypes ?? callbackRefs.current.getInstalledPanelTypes?.();
         try {
-          const proposal = validateLayoutProposal(event.proposal);
+          const proposal = validateLayoutProposal(event.proposal, { installedPanelTypes });
+          if (trusted?.catalogChecked !== true) {
+            // An empty or unavailable catalog skips the check per checkLayoutAgainstCatalog's
+            // contract; errors reject the request before a card can appear.
+            const catalog = callbackRefs.current.getCatalog?.();
+            if (catalog != undefined) {
+              const check = checkLayoutAgainstCatalog(
+                proposal.data,
+                catalog.topics as readonly Topic[],
+                catalog.datatypes as Immutable<RosDatatypes>,
+              );
+              if (check.errors.length > 0) {
+                failRequest(
+                  event.requestId,
+                  new Error(`propose_layout: ${formatLayoutCatalogErrors(check)}`),
+                );
+                return;
+              }
+              if (check.warnings.length > 0) {
+                log.debug(`propose_layout warnings: ${check.warnings.join(" | ")}`);
+              }
+            }
+          }
           enqueueProposal({
             messageId: event.messageId,
             proposal,
             requestId: event.requestId,
+            installedPanelTypes,
           });
         } catch (error) {
-          const validationError = new Error(`Invalid layout proposal: ${errorMessage(error)}`);
+          const validationError = new Error(
+            `propose_layout: Invalid layout proposal: ${errorMessage(error)}`,
+          );
           failRequest(event.requestId, validationError);
         }
         return;
+      }
       case "open-data-source":
         enterWaitingForCatalog(event.requestId, event.urls, expected);
         try {
@@ -1154,14 +1279,30 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
     }
   }
 
+  /**
+   * computeProposalMode only reads the catalog for baseline-bearing proposals (its early return
+   * ignores it otherwise). Avoid the eager host call when it would be ignored, which also keeps
+   * the trusted-proposal path free of any catalog access.
+   */
+  function getCatalogForMode(
+    proposal: LayoutProposal,
+  ): { topics: readonly unknown[]; datatypes: ReadonlyMap<string, unknown> } | undefined {
+    if (proposal.baseLayoutId == undefined || proposal.baseFingerprint == undefined) {
+      return undefined;
+    }
+    return callbackRefs.current.getCatalog?.();
+  }
+
   function enqueueProposal(record: ProposalRecord): void {
     const state = store.getState();
     const proposalMode = computeProposalMode(
       record.proposal,
       callbackRefs.current.getCurrentLayoutState?.(),
-      callbackRefs.current.getCatalog?.(),
+      getCatalogForMode(record.proposal),
+      { installedPanelTypes: record.installedPanelTypes },
     );
     if (state.pendingProposal == undefined) {
+      pendingProposalSnapshot = record.installedPanelTypes;
       store.setState({
         pendingProposal: record.proposal,
         pendingProposalMessageId: record.messageId,
@@ -1177,6 +1318,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
       if (queuedProposal?.requestId === record.requestId) {
         queuedProposal = undefined;
       }
+      pendingProposalSnapshot = record.installedPanelTypes;
       store.setState({
         pendingProposal: record.proposal,
         pendingProposalMessageId: record.messageId,
@@ -1191,6 +1333,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
   function promoteQueuedProposal(): void {
     const next = queuedProposal;
     queuedProposal = undefined;
+    pendingProposalSnapshot = next?.installedPanelTypes;
     store.setState({
       pendingProposal: next?.proposal,
       pendingProposalMessageId: next?.messageId,
@@ -1201,7 +1344,8 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
           : computeProposalMode(
               next.proposal,
               callbackRefs.current.getCurrentLayoutState?.(),
-              callbackRefs.current.getCatalog?.(),
+              getCatalogForMode(next.proposal),
+              { installedPanelTypes: next.installedPanelTypes },
             ),
     });
   }
@@ -1263,17 +1407,34 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
 
   function failRequest(requestId: string, error: unknown): void {
     const requestError = error instanceof Error ? error : new Error(String(error));
+    // Fail the open tool runs of exactly the messages attributed to this request (the
+    // event-driven messageIdsByRequest ownership map) plus the pending/queued proposal
+    // messages this provider can still trace to the request. Runs without ownership
+    // information stay untouched (conservative); concurrent requests are unaffected (only
+    // failSession fails everything).
+    const messageIds = new Set<string>(messageIdsByRequest.get(requestId) ?? []);
+    const state = store.getState();
+    if (
+      state.pendingProposalRequestId === requestId &&
+      state.pendingProposalMessageId != undefined
+    ) {
+      messageIds.add(state.pendingProposalMessageId);
+    }
+    if (queuedProposal?.requestId === requestId) {
+      messageIds.add(queuedProposal.messageId);
+    }
     markRequestTerminal(requestId);
     removeWaitingRequest(requestId);
     settleWaiter(sendWaiters.get(requestId), { result: "reject", error: requestError });
     const message = requestError.message;
     const latest = getLatestWaitingRequest();
-    store.setState({
+    store.setState((current) => ({
+      messages: failOpenToolRuns(current.messages, messageIds, requestError),
       error: message,
       status: latest != undefined ? "waiting-for-catalog" : getOperationalStatus(message),
       waitingRequest:
         latest == undefined ? undefined : { requestId: latest.requestId, urls: latest.urls },
-    });
+    }));
   }
 
   function failSession(record: Subscription, error: Error): void {
@@ -1285,20 +1446,30 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
     active.fatal = true;
     clearAllWaitingRequests();
     rejectAllWaiters(error);
+    messageIdsByRequest.clear();
     record.controller.abort(error);
     active.controller.abort(error);
     sessionPromise = undefined;
-    store.setState({
+    store.setState((current) => ({
+      // A session failure aborts every request, so every still-running tool card may fail.
+      messages: failOpenToolRuns(
+        current.messages,
+        new Set(current.messages.map((message) => message.id)),
+        error,
+      ),
       error: error.message,
       sessionId: undefined,
       status: "error",
       waitingRequest: undefined,
-    });
+    }));
   }
 
   function markRequestTerminal(requestId: string): void {
     terminalRequestIds.delete(requestId);
     terminalRequestIds.add(requestId);
+    // Terminal requests can no longer fail tool runs, so drop their ownership attribution;
+    // late events for them are discarded by the terminalRequestIds gate before attribution.
+    messageIdsByRequest.delete(requestId);
     while (terminalRequestIds.size > MAX_TERMINAL_REQUEST_IDS) {
       const oldest = terminalRequestIds.values().next().value;
       if (oldest == undefined) {
@@ -1313,6 +1484,8 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
     confirmingToolRuns.clear();
     endedMessageIds.clear();
     lastSeqByToolRun.clear();
+    messageIdsByRequest.clear();
+    pendingProposalSnapshot = undefined;
     queuedProposal = undefined;
     sessionPromise = undefined;
     subscription = undefined;
@@ -1434,6 +1607,7 @@ function createAgentChatRuntime(callbackRefs: MutableRefObject<CallbackRefs>): A
         stopLifecycle();
       };
     },
+    getPendingProposalSnapshot: () => pendingProposalSnapshot,
     store,
   };
 }
@@ -1451,6 +1625,7 @@ export default function AgentChatProvider({
   onLoadVtdRecord,
   onSliceVtdRecord,
   onOpenDataSource,
+  getInstalledPanelTypes,
   getCurrentLayoutState,
   getCatalog,
   subscribeToLayoutChanges,
@@ -1468,6 +1643,7 @@ export default function AgentChatProvider({
       onLoadVtdRecord,
       onSliceVtdRecord,
       onOpenDataSource,
+      getInstalledPanelTypes,
       getCurrentLayoutState,
       getCatalog,
     };
@@ -1481,6 +1657,7 @@ export default function AgentChatProvider({
     onOpenDataSource,
     onSliceVtdRecord,
     selectedProfileName,
+    getInstalledPanelTypes,
     getCurrentLayoutState,
     getCatalog,
   ]);
@@ -1498,7 +1675,15 @@ export default function AgentChatProvider({
         pendingProposalMode: computeProposalMode(
           state.pendingProposal,
           callbackRefs.current.getCurrentLayoutState?.(),
-          callbackRefs.current.getCatalog?.(),
+          // Same laziness as enqueueProposal: computeProposalMode only reads the catalog for
+          // baseline-bearing proposals.
+          state.pendingProposal.baseLayoutId == undefined ||
+            state.pendingProposal.baseFingerprint == undefined
+            ? undefined
+            : callbackRefs.current.getCatalog?.(),
+          // The snapshot stored with the pending proposal: recomputes must not re-query the
+          // host inventory, or a changed inventory would disagree with the captured proposal.
+          { installedPanelTypes: runtime.getPendingProposalSnapshot() },
         ),
       });
     };

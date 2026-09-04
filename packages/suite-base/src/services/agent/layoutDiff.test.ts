@@ -7,6 +7,7 @@
 
 import type { LayoutData } from "@lichtblick/suite-base/context/CurrentLayoutContext/actions";
 import type { CatalogSnapshot } from "@lichtblick/suite-base/services/agent/local/types";
+import type { LayoutProposal } from "@lichtblick/suite-base/services/agent/types";
 
 import {
   collectLayoutBaseline,
@@ -111,6 +112,25 @@ describe("sanitizeLayoutData", () => {
     expect(sanitized?.configById["Plot!speed"]).toEqual(
       expect.objectContaining({ autoSeeded: true, paths: [] }),
     );
+  });
+
+  it("returns undefined for extension panels without the runtime snapshot and sanitizes with it", () => {
+    const panelType = "Acme Extension.Custom Panel";
+    const panelId = `${panelType}!main`;
+    const data = {
+      configById: { [panelId]: { customSetting: true } },
+      layout: panelId,
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+
+    expect(sanitizeLayoutData(data, emptyCatalog)).toBeUndefined();
+    expect(
+      sanitizeLayoutData(data, emptyCatalog, {
+        installedPanelTypes: new Set([panelType]),
+      }),
+    ).toEqual(data);
   });
 });
 
@@ -452,6 +472,99 @@ describe("collectLayoutBaseline", () => {
       ),
     ).toEqual({});
   });
+
+  it("passes the host panel-type snapshot into sanitization", () => {
+    const panelType = "Acme Extension.Custom Panel";
+    const panelId = `${panelType}!main`;
+    const data: LayoutData = {
+      configById: { [panelId]: { customSetting: true } },
+      layout: panelId,
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+
+    // Without the snapshot the extension layout cannot be sanitized → no baseline.
+    expect(
+      collectLayoutBaseline(
+        () => data,
+        () => "layout-1",
+        () => emptyCatalog,
+      ),
+    ).toEqual({});
+    expect(
+      collectLayoutBaseline(
+        () => data,
+        () => "layout-1",
+        () => emptyCatalog,
+        new Set([panelType]),
+      ),
+    ).toEqual({
+      baseLayoutId: "layout-1",
+      baseFingerprint: computeLayoutFingerprint(data),
+    });
+  });
+
+  it("keeps fingerprint, mode, and apply consistent when the same snapshot is reused", () => {
+    const panelType = "Acme Extension.Custom Panel";
+    const panelId = `${panelType}!main`;
+    const data: LayoutData = {
+      configById: { [panelId]: { customSetting: true } },
+      layout: panelId,
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    // The snapshot captured when the proposal was generated admits the extension panel; a
+    // second, later snapshot (empty) would no longer admit it.
+    const proposalSnapshot = new Set([panelType]);
+    const laterSnapshot = new Set<string>();
+    const baseline = collectLayoutBaseline(
+      () => data,
+      () => "layout-1",
+      () => emptyCatalog,
+      proposalSnapshot,
+    );
+    expect(baseline.baseFingerprint).toBeDefined();
+
+    const proposal: LayoutProposal = {
+      name: "n",
+      data: addGaugeTo(data),
+      baseLayoutId: baseline.baseLayoutId,
+      baseFingerprint: baseline.baseFingerprint,
+    };
+
+    // Fingerprint: the sanitized current layout under the stored snapshot matches the baseline.
+    expect(
+      computeLayoutFingerprint(
+        sanitizeLayoutData(data, emptyCatalog, {
+          installedPanelTypes: proposalSnapshot,
+        })!,
+      ),
+    ).toBe(baseline.baseFingerprint);
+    // Under the later empty snapshot the current layout cannot even be sanitized.
+    expect(
+      sanitizeLayoutData(data, emptyCatalog, { installedPanelTypes: laterSnapshot }),
+    ).toBeUndefined();
+
+    // Mode: the stored snapshot yields incremental; the later empty snapshot would fall back.
+    expect(
+      computeProposalMode(
+        proposal,
+        { id: "layout-1", data },
+        emptyCatalog,
+        { installedPanelTypes: proposalSnapshot },
+      ),
+    ).toEqual({ kind: "incremental", newPanelCount: 1 });
+    expect(
+      computeProposalMode(
+        proposal,
+        { id: "layout-1", data },
+        emptyCatalog,
+        { installedPanelTypes: laterSnapshot },
+      ),
+    ).toEqual({ kind: "new" });
+  });
 });
 
 describe("computeProposalMode", () => {
@@ -577,6 +690,37 @@ describe("computeProposalMode", () => {
     // be incremental too.
     expect(
       computeProposalMode(proposal, { id: "layout-1", data: withInvalidPlotPath }, emptyCatalog),
+    ).toEqual({ kind: "incremental", newPanelCount: 1 });
+  });
+
+  it("passes the runtime panel-type options into both sanitization passes", () => {
+    const panelType = "Acme Extension.Custom Panel";
+    const panelId = `${panelType}!main`;
+    const base: LayoutData = {
+      configById: { [panelId]: { customSetting: true } },
+      layout: panelId,
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+    const proposal: LayoutProposal = {
+      name: "n",
+      data: addGaugeTo(base),
+      baseLayoutId: "layout-1",
+      baseFingerprint: computeLayoutFingerprint(base),
+    };
+
+    // The extension panel fails validation without the runtime snapshot → new layout.
+    expect(
+      computeProposalMode(proposal, { id: "layout-1", data: base }, emptyCatalog),
+    ).toEqual({ kind: "new" });
+    expect(
+      computeProposalMode(
+        proposal,
+        { id: "layout-1", data: base },
+        emptyCatalog,
+        { installedPanelTypes: new Set([panelType]) },
+      ),
     ).toEqual({ kind: "incremental", newPanelCount: 1 });
   });
 });

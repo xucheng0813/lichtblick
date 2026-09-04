@@ -4,16 +4,19 @@
 import type { MosaicNode } from "react-mosaic-component";
 
 import type { LayoutData } from "@lichtblick/suite-base/context/CurrentLayoutContext/actions";
+import { BUILTIN_PANEL_TYPES } from "@lichtblick/suite-base/panels/builtinPanelTypes";
+import { TAB_PANEL_TYPE } from "@lichtblick/suite-base/util/constants";
 
 import type { LayoutProposal } from "./types";
 
 /**
- * Static baseline of panel types the Agent may propose even when no runtime inventory is available.
+ * Static baseline of panel types the Agent may propose even when no runtime inventory is
+ * available: every built-in panel (see panels/builtinPanelTypes.ts) plus the two robot
+ * visualization extensions.
  *
- * An extension panel's type is `<qualifiedName>.<registeredName>`, where qualifiedName is the
- * extension's displayName. validateLayoutProposal may additionally accept types from a runtime
- * installed-panel set derived from PanelCatalog. That trusted host-provided set is the second layer
- * of the security boundary; it must never be populated from model output.
+ * The runtime `installedPanelTypes` option extends this baseline with panel types provided by
+ * the host from its PanelCatalog. That trusted host-provided set is the second layer of the
+ * security boundary; it must never be populated from model output.
  */
 export const QUADRUPED_VIZ_PANEL_TYPE = "Quadruped Visualization.Quadruped Visualization";
 export const HUMANOID_VIZ_PANEL_TYPE = "Humanoid Visualization.Humanoid Visualization";
@@ -21,19 +24,7 @@ export const HUMANOID_VIZ_PANEL_TYPE = "Humanoid Visualization.Humanoid Visualiz
 export const ALLOWED_PANEL_TYPES = [
   QUADRUPED_VIZ_PANEL_TYPE,
   HUMANOID_VIZ_PANEL_TYPE,
-  "3D",
-  "Plot",
-  "Image",
-  "RawMessages",
-  "RawMessagesVirtual",
-  "Table",
-  "Gauge",
-  "map",
-  "StateTransitions",
-  "Indicator",
-  "PieChart",
-  "SourceInfo",
-  "RosOut",
+  ...BUILTIN_PANEL_TYPES,
 ] as const;
 
 export type AllowedPanelType = (typeof ALLOWED_PANEL_TYPES)[number];
@@ -153,11 +144,12 @@ function validatePanelConfig(
   config: Record<string, unknown>,
 ): void {
   const panelType = getPanelType(panelId);
-  if (panelType == undefined || !allowedPanelTypes.has(panelType)) {
-    // Runtime-installed extension panels have no per-type schema here. Their configs have already
-    // crossed the generic plain-object and JSON graph validation boundary.
+  if (panelType == undefined) {
     return;
   }
+  // Runtime-installed extension panels have no per-type schema here. Their configs have already
+  // crossed the generic plain-object and JSON graph validation boundary; the per-type checks
+  // below are all no-ops for types outside the built-in map.
   const requiredArrayFields: Partial<Record<AllowedPanelType, readonly string[]>> = {
     Plot: ["paths"],
     StateTransitions: ["paths"],
@@ -219,6 +211,10 @@ function validateJsonGraph(
     | { type: "exit"; value: object };
 
   const ancestors = new Set<object>();
+  // Every visited container must be unique: cycles are caught by ancestors, and non-cyclic
+  // shared references (JSON cannot produce them) are rejected here so crafted in-memory inputs
+  // cannot alias subtrees across the graph.
+  const seen = new Set<object>();
   const stack: StackEntry[] = [{ type: "enter", value, location, depth: 0 }];
   while (stack.length > 0) {
     const entry = stack.pop();
@@ -251,6 +247,9 @@ function validateJsonGraph(
       if (ancestors.has(entry.value)) {
         throw new Error(`${entry.location} contains a cyclic value`);
       }
+      if (seen.has(entry.value)) {
+        throw new Error(`${entry.location} contains a shared object reference`);
+      }
       const childEntries = Array.isArray(entry.value)
         ? entry.value.map((child, index) => [String(index), child] as const)
         : Object.entries(entry.value);
@@ -260,6 +259,7 @@ function validateJsonGraph(
 
       budget.nodes++;
       ancestors.add(entry.value);
+      seen.add(entry.value);
       stack.push({ type: "exit", value: entry.value });
       for (let index = childEntries.length - 1; index >= 0; index--) {
         const childEntry = childEntries[index];
@@ -293,8 +293,9 @@ function validateMosaicNode(
   panelIds: Set<string>,
   ancestors: Set<object>,
   location: string,
-  installedPanelTypes?: ReadonlySet<string>,
+  installedPanelTypes: ReadonlySet<string> | undefined,
   depth = 0,
+  tabQueue: Array<{ panelId: string; depth: number }> = [],
 ): asserts node is MosaicNode<string> {
   if (typeof node === "string") {
     validatePanelId(node, location, installedPanelTypes);
@@ -305,6 +306,12 @@ function validateMosaicNode(
       throw new Error(`layout panel "${node}" is missing a configById entry`);
     }
     panelIds.add(node);
+    if (getPanelType(node) === TAB_PANEL_TYPE) {
+      // Tab leaves carry nested mosaics in their config; they are validated afterwards by the
+      // caller's queue with the depth at which this leaf sits, sharing the depth budget instead
+      // of resetting it.
+      tabQueue.push({ panelId: node, depth });
+    }
     return;
   }
 
@@ -349,6 +356,7 @@ function validateMosaicNode(
     `${location}.first`,
     installedPanelTypes,
     depth + 1,
+    tabQueue,
   );
   validateMosaicNode(
     node.second,
@@ -358,8 +366,60 @@ function validateMosaicNode(
     `${location}.second`,
     installedPanelTypes,
     depth + 1,
+    tabQueue,
   );
   ancestors.delete(node);
+}
+
+/**
+ * Validates the config of a Tab panel leaf: `tabs` must hold entries with exactly `title` and
+ * optional `layout` keys (unknown keys rejected, layout must be a Mosaic node — null rejected)
+ * and `activeTabIdx` must be an integer within -1 and tabs.length - 1 — the same semantics as
+ * `validateTabPanelConfig` in util/layout.ts, where -1 denotes that no tab has been created yet
+ * (an empty tabs array is therefore only valid with activeTabIdx === -1). This is the Agent
+ * proposal validation semantics. Each nested layout is validated by the caller with the
+ * panelIds set shared across the whole layout tree so tab-nested panels count as referenced
+ * (not orphan) and their ids stay globally unique.
+ */
+function validateTabPanelConfig(
+  panelId: string,
+  config: Record<string, unknown>,
+): void {
+  if (!Array.isArray(config.tabs)) {
+    throw new Error(`configById["${panelId}"].tabs must be an array`);
+  }
+  if (
+    typeof config.activeTabIdx !== "number" ||
+    !Number.isInteger(config.activeTabIdx)
+  ) {
+    throw new Error(`configById["${panelId}"].activeTabIdx must be an integer`);
+  }
+  if (config.activeTabIdx < -1 || config.activeTabIdx >= config.tabs.length) {
+    throw new Error(
+      `configById["${panelId}"].activeTabIdx must be between -1 and tabs.length - 1 (tabs.length = ${config.tabs.length})`,
+    );
+  }
+  for (const [tabIndex, tab] of config.tabs.entries()) {
+    if (!isPlainObject(tab) || typeof tab.title !== "string") {
+      throw new Error(
+        `configById["${panelId}"].tabs[${tabIndex}] must be an object with a string title`,
+      );
+    }
+    for (const key of Object.keys(tab)) {
+      if (key !== "title" && key !== "layout") {
+        throw new Error(
+          `configById["${panelId}"].tabs[${tabIndex}] contains unknown field "${key}"`,
+        );
+      }
+    }
+    // Only the JSON value null must be rejected; undefined (no layout) is valid.
+    // eslint-disable-next-line @lichtblick/strict-equality
+    if (tab.layout === null) {
+      throw new Error(
+        `configById["${panelId}"].tabs[${tabIndex}].layout must be a panel id or Mosaic branch`,
+      );
+    }
+  }
 }
 
 /**
@@ -427,6 +487,10 @@ function validateLayoutProposalDataWithOptions(
   }
 
   const panelIds = new Set<string>();
+  // Tab leaves queue up their nested layouts; the queue keeps growing while Tab-in-Tab nesting
+  // is discovered. Each nested layout shares the panelIds set (global id uniqueness, no orphan
+  // configs) and the Mosaic depth budget (the current depth is carried in, never reset to 0).
+  const tabQueue: Array<{ panelId: string; depth: number }> = [];
   if (typeof data.layout !== "undefined") {
     validateMosaicNode(
       data.layout,
@@ -435,7 +499,28 @@ function validateLayoutProposalDataWithOptions(
       new Set(),
       "layout",
       options?.installedPanelTypes,
+      0,
+      tabQueue,
     );
+  }
+  for (const { panelId, depth } of tabQueue) {
+    const config = configById[panelId] as Record<string, unknown>;
+    validateTabPanelConfig(panelId, config);
+    for (const [tabIndex, tab] of (config.tabs as unknown[]).entries()) {
+      if (!isPlainObject(tab) || tab.layout == undefined) {
+        continue;
+      }
+      validateMosaicNode(
+        tab.layout,
+        configById,
+        panelIds,
+        new Set(),
+        `configById["${panelId}"].tabs[${tabIndex}].layout`,
+        options?.installedPanelTypes,
+        depth,
+        tabQueue,
+      );
+    }
   }
   for (const [panelId] of configEntries) {
     if (!panelIds.has(panelId)) {
@@ -446,13 +531,19 @@ function validateLayoutProposalDataWithOptions(
   return data as AgentSafeLayoutData;
 }
 
-export function validateLayoutProposalData(data: unknown): AgentSafeLayoutData {
-  return validateLayoutProposalDataWithOptions(data);
+export function validateLayoutProposalData(
+  data: unknown,
+  options?: ValidateLayoutProposalOptions,
+): AgentSafeLayoutData {
+  return validateLayoutProposalDataWithOptions(data, options);
 }
 
-export function isValidLayoutProposalData(data: unknown): data is AgentSafeLayoutData {
+export function isValidLayoutProposalData(
+  data: unknown,
+  options?: ValidateLayoutProposalOptions,
+): data is AgentSafeLayoutData {
   try {
-    validateLayoutProposalData(data);
+    validateLayoutProposalData(data, options);
     return true;
   } catch {
     return false;

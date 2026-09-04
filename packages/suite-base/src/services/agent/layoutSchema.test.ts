@@ -205,11 +205,11 @@ describe("layoutSchema", () => {
 
   it("rejects a panel type outside the allowlist", () => {
     const data = validLayoutData();
-    data.configById = { "Publish!publisher": {} };
-    data.layout = "Publish!publisher";
+    data.configById = { "Bogus!publisher": {} };
+    data.layout = "Bogus!publisher";
 
     expect(() => validateLayoutProposalData(data)).toThrow(
-      'uses unsupported panel type "Publish"',
+      'uses unsupported panel type "Bogus"',
     );
     expect(isValidLayoutProposalData(data)).toBe(false);
   });
@@ -226,6 +226,344 @@ describe("layoutSchema", () => {
       );
     },
   );
+
+  it.each(["Audio", "DiagnosticSummary", "Teleop"])(
+    "accepts the built-in %s panel without a runtime inventory",
+    (panelType) => {
+      const panelId = `${panelType}!main`;
+      const data = validLayoutData();
+      data.configById = { [panelId]: {} };
+      data.layout = panelId;
+
+      expect(() => validateLayoutProposalData(data)).not.toThrow();
+      expect(isValidLayoutProposalData(data)).toBe(true);
+    },
+  );
+
+  it("accepts a Tab panel without a runtime inventory", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": { activeTabIdx: 0, tabs: [{ title: "Main" }] },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).not.toThrow();
+    expect(isValidLayoutProposalData(data)).toBe(true);
+  });
+
+  it("accepts panels nested inside Tab layouts and shares the panel id namespace", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!outer": {
+        activeTabIdx: 0,
+        tabs: [
+          {
+            title: "Main",
+            layout: {
+              direction: "row",
+              first: "Plot!speed",
+              second: "Tab!inner",
+            },
+          },
+        ],
+      },
+      "Tab!inner": {
+        activeTabIdx: 1,
+        tabs: [
+          { title: "First", layout: "Image!camera" },
+          { title: "Second" },
+        ],
+      },
+      "Plot!speed": {},
+      "Image!camera": {},
+    };
+    data.layout = "Tab!outer";
+
+    expect(validateLayoutProposalData(data)).toBe(data);
+  });
+
+  it("rejects a panel id reused across tabs", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": {
+        activeTabIdx: 0,
+        tabs: [
+          { title: "A", layout: "Plot!same" },
+          { title: "B", layout: "Plot!same" },
+        ],
+      },
+      "Plot!same": {},
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'duplicate panel id "Plot!same" in layout',
+    );
+  });
+
+  it("rejects a Tab config whose tabs field is not an array", () => {
+    const data = validLayoutData();
+    data.configById = { "Tab!tabs": { activeTabIdx: 0, tabs: "not-an-array" } };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'configById["Tab!tabs"].tabs must be an array',
+    );
+  });
+
+  it("rejects a Tab entry without a string title", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": { activeTabIdx: 0, tabs: [{ layout: "Plot!speed" }] },
+      "Plot!speed": {},
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'configById["Tab!tabs"].tabs[0] must be an object with a string title',
+    );
+  });
+
+  it("rejects a non-object Tab entry", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": { activeTabIdx: 0, tabs: ["not-an-object"] },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'configById["Tab!tabs"].tabs[0] must be an object with a string title',
+    );
+  });
+
+  it("rejects a Tab entry with an unknown field", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": { activeTabIdx: 0, tabs: [{ title: "A", extra: true }] },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'configById["Tab!tabs"].tabs[0] contains unknown field "extra"',
+    );
+  });
+
+  it("rejects a Tab layout of null", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": { activeTabIdx: 0, tabs: [{ title: "A", layout: null }] },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'configById["Tab!tabs"].tabs[0].layout must be a panel id or Mosaic branch',
+    );
+  });
+
+  it("rejects a Tab layout that is not a panel id or Mosaic branch", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": { activeTabIdx: 0, tabs: [{ title: "A", layout: 42 }] },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'configById["Tab!tabs"].tabs[0].layout must be a panel id or Mosaic branch',
+    );
+  });
+
+  it("rejects a Tab layout with an invalid Mosaic branch", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": {
+        activeTabIdx: 0,
+        tabs: [
+          {
+            title: "A",
+            layout: {
+              direction: "diagonal",
+              first: "Plot!speed",
+              second: "Image!camera",
+            },
+          },
+        ],
+      },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'direction must be "row" or "column"',
+    );
+  });
+
+  it("rejects a Tab layout referencing a missing configById entry", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": {
+        activeTabIdx: 0,
+        tabs: [{ title: "A", layout: "Plot!missing" }],
+      },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      'layout panel "Plot!missing" is missing a configById entry',
+    );
+  });
+
+  it.each([
+    [
+      { tabs: [{ title: "A" }] },
+      'configById["Tab!tabs"].activeTabIdx must be an integer',
+    ],
+    [
+      { activeTabIdx: 0.5, tabs: [{ title: "A" }] },
+      'configById["Tab!tabs"].activeTabIdx must be an integer',
+    ],
+  ])("rejects a non-integer Tab activeTabIdx %p", (config, error) => {
+    const data = validLayoutData();
+    data.configById = { "Tab!tabs": config };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(error);
+  });
+
+  it.each([
+    [
+      { activeTabIdx: -2, tabs: [{ title: "A" }] },
+      "must be between -1 and tabs.length - 1 (tabs.length = 1)",
+    ],
+    [
+      { activeTabIdx: 1, tabs: [{ title: "A" }] },
+      "must be between -1 and tabs.length - 1 (tabs.length = 1)",
+    ],
+    [
+      { activeTabIdx: 0, tabs: [] },
+      "must be between -1 and tabs.length - 1 (tabs.length = 0)",
+    ],
+  ])("rejects an out-of-range Tab activeTabIdx %p", (config, error) => {
+    const data = validLayoutData();
+    data.configById = { "Tab!tabs": config };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      `configById["Tab!tabs"].activeTabIdx ${error}`,
+    );
+  });
+
+  it("accepts activeTabIdx -1 for a Tab with no tab created yet", () => {
+    const data = validLayoutData();
+    data.configById = { "Tab!tabs": { activeTabIdx: -1, tabs: [] } };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).not.toThrow();
+    expect(isValidLayoutProposalData(data)).toBe(true);
+  });
+
+  it("accepts activeTabIdx -1 alongside existing tabs", () => {
+    const data = validLayoutData();
+    data.configById = {
+      "Tab!tabs": {
+        activeTabIdx: -1,
+        tabs: [{ title: "A", layout: "Plot!speed" }],
+      },
+      "Plot!speed": {},
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).not.toThrow();
+    expect(isValidLayoutProposalData(data)).toBe(true);
+  });
+
+  it("applies the shared Mosaic depth budget to Tab layouts instead of resetting it", () => {
+    const configById: Record<string, unknown> = { "Plot!leaf": {} };
+    let inner: unknown = "Plot!leaf";
+    for (let index = 0; index < 65; index++) {
+      const tabId = `Tab!tab-${index}`;
+      const siblingId = `Plot!sibling-${index}`;
+      configById[siblingId] = {};
+      configById[tabId] = {
+        activeTabIdx: 0,
+        tabs: [
+          {
+            title: `tab ${index}`,
+            layout: { direction: "row", first: inner, second: siblingId },
+          },
+        ],
+      };
+      inner = tabId;
+    }
+    const data = {
+      configById,
+      layout: "Tab!tab-64",
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      "exceeds the maximum Mosaic depth",
+    );
+  });
+
+  it("rejects a wide Tab tree exceeding the graph node budget with a stable reason", () => {
+    // Two Tab panels with 4096 tabs each: below the per-collection (4096) and config-entry
+    // (256) limits, but far above the 10,000-node JSON graph budget. The rejection happens
+    // during the JSON graph validation, before any Mosaic traversal.
+    const configById: Record<string, unknown> = {};
+    for (const tabId of ["Tab!a", "Tab!b"]) {
+      configById[tabId] = {
+        activeTabIdx: -1,
+        tabs: Array.from({ length: 4096 }, (_, index) => ({ title: `tab ${index}` })),
+      };
+    }
+    const data = {
+      configById,
+      layout: { direction: "row", first: "Tab!a", second: "Tab!b" },
+      globalVariables: {},
+      playbackConfig: { speed: 1 },
+      userNodes: {},
+    };
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      "LayoutProposal.data contains too many values",
+    );
+  });
+
+  it("rejects shared object references in Tab configs without overflowing", () => {
+    const data = validLayoutData();
+    const sharedLayout = {
+      direction: "row",
+      first: "Plot!speed",
+      second: "Image!camera",
+    };
+    data.configById = {
+      "Tab!tabs": {
+        activeTabIdx: 0,
+        tabs: [
+          { title: "A", layout: sharedLayout },
+          { title: "B", layout: sharedLayout },
+        ],
+      },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow(
+      "contains a shared object reference",
+    );
+  });
+
+  it("rejects cyclic references inside Tab configs without overflowing", () => {
+    const data = validLayoutData();
+    const tabEntry: Record<string, unknown> = { title: "A" };
+    tabEntry.layout = tabEntry;
+    data.configById = {
+      "Tab!tabs": { activeTabIdx: 0, tabs: [tabEntry] },
+    };
+    data.layout = "Tab!tabs";
+
+    expect(() => validateLayoutProposalData(data)).toThrow("contains a cyclic value");
+  });
 
   it.each([QUADRUPED_VIZ_PANEL_TYPE, HUMANOID_VIZ_PANEL_TYPE])(
     "accepts the extension panel type %s, whose name contains spaces and dots",
