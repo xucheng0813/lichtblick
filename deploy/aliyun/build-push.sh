@@ -56,6 +56,13 @@ fi
 if [ -n "${DEFAULT_WORKSPACE:-}" ]; then
   BUILD_ARGS+=(--build-arg "DEFAULT_WORKSPACE=$DEFAULT_WORKSPACE")
 fi
+# npm 源覆盖：不传则用 Dockerfile 默认（registry.npmjs.org）。
+if [ -n "${COREPACK_NPM_REGISTRY:-}" ]; then
+  BUILD_ARGS+=(--build-arg "COREPACK_NPM_REGISTRY=$COREPACK_NPM_REGISTRY")
+fi
+if [ -n "${YARN_NPM_REGISTRY_SERVER:-}" ]; then
+  BUILD_ARGS+=(--build-arg "YARN_NPM_REGISTRY_SERVER=$YARN_NPM_REGISTRY_SERVER")
+fi
 docker build "${BUILD_ARGS[@]}" -t "$PUSH_IMAGE_REF" "$REPO_ROOT"
 
 echo "==> 构建自检：vtd 版本"

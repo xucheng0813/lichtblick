@@ -8,9 +8,16 @@ FROM --platform=$BUILDPLATFORM node:22 AS build
 # 可选构建参数（不传则 ENV 为空字符串，行为与未定义一致——消费方均为 falsy 检查）：
 #   API_URL            viz-server 客户端 API 基础地址，必须带 /lichtblick 前缀
 #   DEFAULT_WORKSPACE  构建期默认 workspace（URL > 设置 > 此默认值）
+#   COREPACK_NPM_REGISTRY / YARN_NPM_REGISTRY_SERVER
+#                      corepack 下载 yarn 与 yarn 拉包所用的 npm 源；默认 registry.npmjs.org
+#                      （repo.yarnpkg.com / registry.yarnpkg.com 在部分网络下不可达）
 ARG API_URL
 ARG DEFAULT_WORKSPACE
-ENV API_URL=$API_URL DEFAULT_WORKSPACE=$DEFAULT_WORKSPACE
+ARG COREPACK_NPM_REGISTRY=https://registry.npmjs.org
+ARG YARN_NPM_REGISTRY_SERVER=https://registry.npmjs.org
+ENV API_URL=$API_URL DEFAULT_WORKSPACE=$DEFAULT_WORKSPACE \
+    COREPACK_NPM_REGISTRY=$COREPACK_NPM_REGISTRY \
+    YARN_NPM_REGISTRY_SERVER=$YARN_NPM_REGISTRY_SERVER
 WORKDIR /src
 COPY . ./
 
